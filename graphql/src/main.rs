@@ -5,8 +5,8 @@ use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::Html;
 use axum::response::Response;
+use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::Json;
 use axum::Router;
@@ -58,6 +58,7 @@ struct GraphQLState {
 }
 
 const INGRESS_HEADER: &str = "x-internal-ingress-token";
+const MAX_MULTIPART_OPERATIONS_SIZE: usize = 1024 * 1024;
 
 #[derive(Clone)]
 struct IngressSecret(String);
@@ -137,10 +138,14 @@ async fn maintenance_multipart_barrier(
     let body = std::mem::replace(request.body_mut(), Body::empty());
     let mut stream = body.into_data_stream();
     let mut prefix = Vec::new();
-    if multipart_operation_is_mutation(&mut stream, &mut prefix, &boundary).await {
-        let response: GraphQLResponse =
-            async_graphql::Response::from_errors(vec![maintenance_mode_error()]).into();
-        return axum::response::IntoResponse::into_response(response);
+    match multipart_operation_is_mutation(&mut stream, &mut prefix, &boundary).await {
+        Some(true) => {
+            let response: GraphQLResponse =
+                async_graphql::Response::from_errors(vec![maintenance_mode_error()]).into();
+            return axum::response::IntoResponse::into_response(response);
+        }
+        None => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+        Some(false) => {}
     }
 
     *request.body_mut() = Body::from_stream(
@@ -170,15 +175,17 @@ async fn multipart_operation_is_mutation(
     stream: &mut (impl Stream<Item = Result<Bytes, axum::Error>> + Unpin),
     prefix: &mut Vec<u8>,
     boundary: &str,
-) -> bool {
+) -> Option<bool> {
     let first_boundary = format!("--{boundary}\r\n");
     while prefix.len() < first_boundary.len() {
-        if !read_multipart_chunk(stream, prefix).await {
-            return true;
+        match read_multipart_chunk(stream, prefix).await {
+            Ok(true) => {}
+            Ok(false) => return Some(true),
+            Err(()) => return None,
         }
     }
     if !prefix.starts_with(first_boundary.as_bytes()) {
-        return true;
+        return Some(true);
     }
 
     let header_start = first_boundary.len();
@@ -186,13 +193,18 @@ async fn multipart_operation_is_mutation(
         if let Some(position) = find_subslice(&prefix[header_start..], b"\r\n\r\n") {
             break header_start + position;
         }
-        if prefix.len() > 16 * 1024 || !read_multipart_chunk(stream, prefix).await {
-            return true;
+        if prefix.len() > 16 * 1024 {
+            return Some(true);
+        }
+        match read_multipart_chunk(stream, prefix).await {
+            Ok(true) => {}
+            Ok(false) => return Some(true),
+            Err(()) => return None,
         }
     };
     let headers = String::from_utf8_lossy(&prefix[header_start..header_end]).to_ascii_lowercase();
     if !headers.contains("content-disposition: form-data; name=\"operations\"") {
-        return true;
+        return Some(true);
     }
 
     let operations_start = header_end + 4;
@@ -208,25 +220,32 @@ async fn multipart_operation_is_mutation(
                 break end;
             }
         }
-        if !read_multipart_chunk(stream, prefix).await {
-            return true;
+        match read_multipart_chunk(stream, prefix).await {
+            Ok(true) => {}
+            Ok(false) => return Some(true),
+            Err(()) => return None,
         }
     };
 
-    serde_json::from_slice::<serde_json::Value>(&prefix[operations_start..operations_end])
-        .is_ok_and(|operations| json_operations_contain_mutation(&operations))
+    Some(
+        serde_json::from_slice::<serde_json::Value>(&prefix[operations_start..operations_end])
+            .is_ok_and(|operations| json_operations_contain_mutation(&operations)),
+    )
 }
 
 async fn read_multipart_chunk(
     stream: &mut (impl Stream<Item = Result<Bytes, axum::Error>> + Unpin),
     prefix: &mut Vec<u8>,
-) -> bool {
+) -> Result<bool, ()> {
     match stream.next().await {
         Some(Ok(chunk)) => {
+            if prefix.len().saturating_add(chunk.len()) > MAX_MULTIPART_OPERATIONS_SIZE {
+                return Err(());
+            }
             prefix.extend_from_slice(&chunk);
-            true
+            Ok(true)
         }
-        Some(Err(_)) | None => false,
+        Some(Err(_)) | None => Ok(false),
     }
 }
 
@@ -757,7 +776,32 @@ mod ingress_tests {
             });
         let mut prefix = Vec::new();
 
-        assert!(super::multipart_operation_is_mutation(&mut stream, &mut prefix, "boundary").await);
+        assert_eq!(
+            super::multipart_operation_is_mutation(&mut stream, &mut prefix, "boundary").await,
+            Some(true)
+        );
+        assert_eq!(chunks_read.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn multipart_mutation_inspection_caps_buffered_operations() {
+        let chunks = [
+            Bytes::from(vec![b'x'; super::MAX_MULTIPART_OPERATIONS_SIZE + 1]),
+            Bytes::from_static(b"later chunk"),
+        ];
+        let chunks_read = Arc::new(AtomicUsize::new(0));
+        let chunks_read_by_stream = chunks_read.clone();
+        let mut stream = futures::stream::iter(chunks.into_iter().map(Ok::<_, axum::Error>))
+            .inspect(move |_| {
+                chunks_read_by_stream.fetch_add(1, Ordering::SeqCst);
+            });
+        let mut prefix = Vec::new();
+
+        assert_eq!(
+            super::multipart_operation_is_mutation(&mut stream, &mut prefix, "boundary").await,
+            None
+        );
+        assert!(prefix.is_empty());
         assert_eq!(chunks_read.load(Ordering::SeqCst), 1);
     }
 
@@ -953,6 +997,28 @@ mod ingress_tests {
             .unwrap();
         let result: serde_json::Value = response.json().await.unwrap();
         assert_eq!(result["data"]["maintenance"], true);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        let oversized_multipart_body = format!(
+            concat!(
+                "--maintenance-boundary\r\n",
+                "Content-Disposition: form-data; name=\"operations\"\r\n",
+                "Content-Type: application/json\r\n\r\n",
+                "{}"
+            ),
+            "x".repeat(super::MAX_MULTIPART_OPERATIONS_SIZE + 1)
+        );
+        let response = reqwest::Client::new()
+            .post(format!("http://{graphql_address}/graphql"))
+            .header(
+                "content-type",
+                "multipart/form-data; boundary=maintenance-boundary",
+            )
+            .body(oversized_multipart_body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
 
         let publisher_status = serde_json::to_value(publisher.status()).unwrap();
