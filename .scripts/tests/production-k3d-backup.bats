@@ -986,13 +986,13 @@ EOF
 @test "migration planning deterministically reports complete adjacent paths without writing state" {
   export MOCK_MIGRATIONS=true MOCK_MULTI_MIGRATIONS=true
   prepare_candidate_release
-  local before order registry_fetches
+  local before order inventory_fetches
   before=$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)
-  registry_fetches=$(grep -c '^oras ' "$MOCK_LOG")
+  inventory_fetches=$(grep -c '^oras blob fetch ' "$MOCK_LOG")
 
   run bash .scripts/production-k3d.sh release-migration-plan "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
-  [ "$(grep -c '^oras ' "$MOCK_LOG")" -eq "$registry_fetches" ]
+  [ "$(grep -c '^oras blob fetch ' "$MOCK_LOG")" -eq "$inventory_fetches" ]
   [[ $output == *"Service images: current=1 required=2"* ]]
   [[ $output == *"Service recipes: current=1 required=3"* ]]
   [[ $output == *"Service tags: current=1 required=2"* ]]
