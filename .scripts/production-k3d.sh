@@ -393,23 +393,23 @@ routes() {
         del(.http.routers["oauth2-public"], .http.routers["graphql-cookie"],
           .http.middlewares["oauth2-forward-auth"], .http.services["oauth2-proxy"])
       end
-    | if $config[0].httpsStaging then
+    | if $config[0].https then
         if all(.http.routers[]; all(.entrypoints[]; . == "web" or . == "rest-internal")) then .
         else error("existing routes must use supported application or internal entrypoints") end
-        | ("Host(`" + $config[0].httpsStaging.hostname + "`)") as $host
-        | {certResolver:"letsencrypt",domains:[{main:$config[0].httpsStaging.hostname}]} as $tls
-        | def preview($name):
+        | ("Host(`" + $config[0].https.hostname + "`)") as $host
+        | {certResolver:"letsencrypt",domains:[{main:$config[0].https.hostname}]} as $tls
+        | def public_router($name):
             .http.routers[$name] as $router |
             if $router == null or $router.service == null then
               error("missing required application router: " + $name)
             else
-              .http.routers["preview-" + $name] = ($router + {
+              .http.routers["public-" + $name] = ($router + {
                 rule:($host + " && (" + $router.rule + ")"),
                 entrypoints:["websecure"], tls:$tls,
                 middlewares:(["identity-strip"] + [($router.middlewares // [])[] | select(. != "identity-strip")])})
             end;
-          reduce $webRouters[] as $name (. ; preview($name))
-          | if $googleEnabled then preview("oauth2-public") else . end
+          reduce $webRouters[] as $name (. ; public_router($name))
+          | if $googleEnabled then public_router("oauth2-public") else . end
       else . end
   ' "$work/routes-base.json" > "$work/routes.yml"
 }
@@ -450,7 +450,7 @@ guard_ingress_service() {
 }
 
 guard_acme_claim() {
-  [[ $(jq -r 'has("httpsStaging")' "$work/config.json") == true ]] || return 0
+  [[ $(jq -r 'has("https")' "$work/config.json") == true ]] || return 0
   kube --namespace kube-system get pvc recipe-db-acme --ignore-not-found -o json \
     > "$work/existing-acme-claim.json"
   if [[ -s $work/existing-acme-claim.json ]]; then
@@ -506,7 +506,7 @@ wait_traefik() {
   while ((SECONDS < deadline)); do
     if kube --namespace kube-system get deployment traefik -o json > "$work/traefik.json" 2> /dev/null \
       && jq -e --arg image "$expected" --arg checksum "$route_checksum" \
-        --argjson https "$(jq 'has("httpsStaging")' "$work/config.json")" '
+        --argjson https "$(jq 'has("https")' "$work/config.json")" '
         .spec.template.metadata.annotations["recipe-db/routes-checksum"] == $checksum
         and any(.spec.template.spec.containers[]?;
           (.image | sub("^docker.io/"; "")) == ($image | sub("^docker.io/"; ""))

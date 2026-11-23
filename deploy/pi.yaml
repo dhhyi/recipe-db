@@ -3,7 +3,7 @@ cluster: recipe-db-pi
 context: recipe-db-pi
 namespace: recipe-db
 origin: https://recipes.example.invalid
-httpsStaging:
+https:
   hostname: recipes.example.invalid
 httpPort: 8080
 apiPort: 6445

@@ -123,7 +123,7 @@ pi_https_restore_values() {
     .timeoutSeconds=8 |
     .piStorage={node:"recipe-db-pi",expectedRootUuid:"02f61d5e-92cb-4f9c-a781-099d97795020",dataRoot:"/srv/recipe-db"} |
     .origin="https://recipes.example.org" |
-    .httpsStaging={hostname:"recipes.example.org"} |
+    .https={hostname:"recipes.example.org"} |
     .secrets."acme-account-email"=(.secrets."auth-accounts.json" | sub("auth-accounts.json$"; "acme-account-email"))'
 }
 

@@ -26,8 +26,8 @@ wait_ingress_service_convergence() {
         .spec.type == "LoadBalancer" and .spec.allocateLoadBalancerNodePorts == false and
         ((.spec.externalIPs // []) | length == 0) and
         ([.spec.ports[] | {name,port,targetPort,protocol}] | sort_by(.port)) ==
-          (if $config[0].httpsStaging then
-            [{name:"staging-http",port:8081,targetPort:"staging-http",protocol:"TCP"},
+          (if $config[0].https then
+            [{name:"public-http",port:8081,targetPort:"public-http",protocol:"TCP"},
              {name:"websecure",port:8443,targetPort:"websecure",protocol:"TCP"}]
           else [{name:"web",port:80,targetPort:"web",protocol:"TCP"}] end) and
         (.metadata.resourceVersion | type == "string" and length > 0) and
@@ -105,8 +105,8 @@ restore_routes_apply() {
 restore_build_public_barrier_routes() {
   local input=$1 output=$2 image_port=$3
   local https hostname
-  https=$(jq 'has("httpsStaging")' "$work/config.json")
-  hostname=$(jq -r '.httpsStaging.hostname // empty' "$work/config.json")
+  https=$(jq 'has("https")' "$work/config.json")
+  hostname=$(jq -r '.https.hostname // empty' "$work/config.json")
   jq --arg ns "$namespace" --argjson port "$image_port" \
     --argjson https "$https" --arg hostname "$hostname" '
     .http.routers |= with_entries(select(
@@ -134,8 +134,8 @@ restore_build_public_barrier_routes() {
 
 restore_validate_public_barrier() {
   local routes=$1 https hostname
-  https=$(jq 'has("httpsStaging")' "$work/config.json")
-  hostname=$(jq -r '.httpsStaging.hostname // empty' "$work/config.json")
+  https=$(jq 'has("https")' "$work/config.json")
+  hostname=$(jq -r '.https.hostname // empty' "$work/config.json")
   jq -e --arg ns "$namespace" --argjson https "$https" --arg hostname "$hostname" '
     .http.routers["restore-public-barrier"].rule == "PathPrefix(`/`)"
     and .http.routers["restore-public-barrier"].priority == 2147482647

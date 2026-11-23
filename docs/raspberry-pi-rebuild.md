@@ -101,7 +101,7 @@ Update `pi-values.yaml`:
 
 - Set `piStorage.expectedRootUuid` to the UUID recorded above.
 - Update the same UUID in `backup/backup-values.yaml`.
-- Set `origin` to the deployment's `https://` URL and set `httpsStaging.hostname` to the same hostname without the scheme.
+- Set `origin` to the deployment's `https://` URL and set `https.hostname` to the same hostname without the scheme.
 - Set private input references as listed in the [configuration inventory](production-configuration.md), preferably relative to `~/.config/recipe-db/`. Backup provisioning copies those source files into `/etc/recipe-db/application-inputs/` and writes those absolute Pi paths into installed values.
 - Keep the template's data path, images and resource defaults unless intentionally changing them.
 
