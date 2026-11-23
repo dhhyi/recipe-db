@@ -121,7 +121,7 @@ templ ingredients(recipe *gql.RecipeDetail, publicURL string) {
 				<tr>
 					<td colspan="2" class="px-0!">
 						<div class="flex justify-end pt-4">
-							<a href={ templ.SafeURL("https://api.getbring.com/rest/bringrecipes/deeplink?url=" + url.QueryEscape(publicURL) + "&source=web&baseQuantity=4&requestedQuantity=4") }>Auf die Einkaufsliste</a>
+							<a href={ templ.SafeURL("https://api.getbring.com/rest/bringrecipes/deeplink?url=" + url.QueryEscape(publicURL) + "&source=web&baseQuantity=4&requestedQuantity=4") } target="_blank" rel="noopener">Auf die Einkaufsliste</a>
 						</div>
 					</td>
 				</tr>

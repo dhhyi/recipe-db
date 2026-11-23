@@ -210,9 +210,9 @@ func TestBringIngredientFooter(t *testing.T) {
 			t.Errorf("plain import link must not contain %q", obsolete)
 		}
 	}
-	link := regexp.MustCompile(`<a href="(https://api.getbring.com/[^"]+)"`).FindStringSubmatch(body)
+	link := regexp.MustCompile(`<a href="(https://api.getbring.com/[^"]+)" target="_blank" rel="noopener"`).FindStringSubmatch(body)
 	if len(link) != 2 {
-		t.Fatalf("missing no-JavaScript import link: %s", body)
+		t.Fatalf("missing no-JavaScript import link with a separate browsing context: %s", body)
 	}
 	deeplink, err := url.Parse(html.UnescapeString(link[1]))
 	if err != nil {
