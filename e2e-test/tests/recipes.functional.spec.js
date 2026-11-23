@@ -145,7 +145,7 @@ transitionTest(
     const recipe = overviewRecipes[0];
     for (const home of ["detail", "header"]) {
       const tile = page.locator(`recipe-tile-component[data-recipe-id="${recipe.id}"]`);
-      await expect(tile.locator("img")).toBeVisible();
+      await expect(tile.locator('a[slot="image"] img')).toBeVisible();
       await expect(tile.locator('a[slot="rating"]')).toBeVisible();
       await page.evaluate(() => (window.recipeTransitions = []));
       await tile.locator('a[slot="title"]').click();
@@ -205,7 +205,7 @@ transitionTest(
     await page.goto("/");
     const tile = page.locator(`recipe-tile-component[data-recipe-id="${recipeWithoutImage.id}"]`);
     await tile.locator('a[slot="rating"]').evaluate((rating) => rating.remove());
-    await expect(tile.locator("img")).toHaveCount(0);
+    await expect(tile.locator('a[slot="image"] img')).toHaveCount(0);
     await tile.locator('a[slot="title"]').click();
     await expect(page).toHaveURL(`/recipe/${recipeWithoutImage.id}`);
     await page.getByRole("link", { name: "Zur Startseite" }).click();
