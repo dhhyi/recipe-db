@@ -143,8 +143,9 @@ async fn maintenance_multipart_barrier(
         return axum::response::IntoResponse::into_response(response);
     }
 
-    *request.body_mut() =
-        Body::from_stream(futures::stream::iter([Ok::<_, axum::Error>(prefix)]).chain(stream));
+    *request.body_mut() = Body::from_stream(
+        futures::stream::iter([Ok::<_, axum::Error>(Bytes::from(prefix))]).chain(stream),
+    );
     next.run(request).await
 }
 
@@ -636,7 +637,7 @@ async fn shutdown_signal() {
 mod ingress_tests {
     use super::{
         backup_mode_barrier, execute_graphql, mutation_request_error, serve_until_shutdown,
-        trusted_graphql_ingress, GraphQLState, IngressSecret, INGRESS_HEADER,
+        trusted_graphql_ingress, Bytes, GraphQLState, IngressSecret, INGRESS_HEADER,
     };
     use async_graphql::{UploadValue, Variables};
     use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
