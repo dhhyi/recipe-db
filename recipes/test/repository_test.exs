@@ -137,6 +137,33 @@ defmodule Recipes.RepositoryTest do
     assert :not_found = Repository.delete(created["id"], repository)
   end
 
+  test "keeps ingredient amounts schemaless for direct callers", %{repository: repository} do
+    ingredients = [
+      %{"name" => "numeric", "amount" => 2},
+      %{"name" => "object", "amount" => %{"quantity" => 1}},
+      %{"name" => "boolean", "amount" => true}
+    ]
+
+    assert {:ok, created} =
+             Repository.create(
+               %{"name" => "Schemaless amounts", "ingredients" => ingredients},
+               repository
+             )
+
+    assert created["ingredients"] == ingredients
+
+    patched_ingredients = [%{"name" => "fraction", "amount" => 0.5}]
+
+    assert {:ok, patched} =
+             Repository.patch(
+               created["id"],
+               %{"ingredients" => patched_ingredients},
+               repository
+             )
+
+    assert patched["ingredients"] == patched_ingredients
+  end
+
   test "advances updatedAt only when effective core values change", %{repository: repository} do
     assert {:ok, created} =
              Repository.create(

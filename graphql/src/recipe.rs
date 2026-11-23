@@ -1,5 +1,5 @@
-use async_graphql::{ComplexObject, Context, Error, InputValueError, InputValueResult, Value};
-use async_graphql::{InputObject, Scalar, ScalarType, SimpleObject};
+use async_graphql::{ComplexObject, Context, Error};
+use async_graphql::{InputObject, SimpleObject};
 use serde::{Deserialize, Serialize};
 
 use crate::images::ImagesApi;
@@ -9,42 +9,6 @@ use crate::ratings::RatingsApi;
 #[cfg(test)]
 #[path = "recipe_test.rs"]
 mod tests;
-
-/// Custom scalar accepting either a JSON number or string, matching `recipe-db.graphqls`'s
-/// `StringOrInt` (used for ingredient amounts like `"1"` or `1`).
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct StringOrInt(pub serde_json::Value);
-
-#[Scalar(name = "StringOrInt")]
-impl ScalarType for StringOrInt {
-    fn parse(value: Value) -> InputValueResult<Self> {
-        match value {
-            Value::String(s) => Ok(StringOrInt(serde_json::Value::String(s))),
-            Value::Number(n) => n
-                .as_i64()
-                .map(|i| StringOrInt(serde_json::json!(i)))
-                .or_else(|| n.as_f64().map(|f| StringOrInt(serde_json::json!(f))))
-                .ok_or_else(|| InputValueError::custom("invalid number")),
-            _ => Err(InputValueError::expected_type(value)),
-        }
-    }
-
-    fn to_value(&self) -> Value {
-        match &self.0 {
-            serde_json::Value::String(s) => Value::String(s.clone()),
-            serde_json::Value::Number(n) => n
-                .as_i64()
-                .map(|i| Value::Number(i.into()))
-                .or_else(|| {
-                    n.as_f64()
-                        .and_then(async_graphql::Number::from_f64)
-                        .map(Value::Number)
-                })
-                .unwrap_or(Value::Null),
-            _ => Value::Null,
-        }
-    }
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize, SimpleObject)]
 pub struct Ingredient {
@@ -62,15 +26,16 @@ where
     D: serde::Deserializer<'de>,
 {
     let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(value.map(|value| match value {
-        serde_json::Value::String(s) => s,
-        other => other.to_string(),
-    }))
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+        _ => None,
+    })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, InputObject)]
 pub struct IngredientInput {
-    pub amount: Option<StringOrInt>,
+    pub amount: Option<String>,
     pub name: String,
     pub optional: Option<bool>,
     pub unit: Option<String>,

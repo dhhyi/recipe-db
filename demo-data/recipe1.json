@@ -3,17 +3,17 @@
   "ingredients": [
     {
       "name": "Rundkörniger Reis (Milchreis, Risottoreis)",
-      "amount": 1,
+      "amount": "1",
       "unit": "Teil"
     },
     {
       "name": "Milch",
-      "amount": 2,
+      "amount": "2",
       "unit": "Teile"
     },
     {
       "name": "Sahne",
-      "amount": 1,
+      "amount": "1",
       "unit": "Teil"
     },
     {

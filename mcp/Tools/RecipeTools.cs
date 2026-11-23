@@ -376,9 +376,7 @@ public class RecipeTools(
         return new IngredientInput
         {
             Name = (string)ingredient["name"]!,
-            Amount = amount is JsonValue value && value.GetValueKind() == JsonValueKind.Number
-                ? value.GetValue<JsonElement>().GetRawText()
-                : (string?)amount,
+            Amount = (string?)amount,
             Unit = (string?)ingredient["unit"],
             Optional = (bool?)ingredient["optional"],
         };
@@ -397,9 +395,9 @@ public class RecipeTools(
         {
             if (ingredient.ValueKind == JsonValueKind.Object
                 && ingredient.TryGetProperty("amount", out var amount)
-                && amount.ValueKind is not (JsonValueKind.String or JsonValueKind.Number))
+                && amount.ValueKind != JsonValueKind.String)
             {
-                throw new McpException("Recipe failed schema validation: ingredient amount expects a string or number.");
+                throw new McpException("Recipe failed schema validation: ingredient amount expects a string.");
             }
         }
     }

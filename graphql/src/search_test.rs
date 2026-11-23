@@ -111,6 +111,13 @@ async fn search(
         "perPage": 100, "facetCounts": [], "searchCutoff": false
     });
     match fixture.mode.as_str() {
+        "facets" => {
+            result["facetCounts"] = json!([{
+                "field_name": "ingredients",
+                "counts": [{"value": "Kartoffeln", "count": 2, "highlighted": "Kartoffeln"}],
+                "stats": {"min": 0.5}
+            }]);
+        }
         "bad-page" => result["page"] = json!(0),
         "bad-per-page" => result["perPage"] = json!(10),
         "negative-found" => result["found"] = json!(-1),
@@ -485,6 +492,7 @@ async fn ordinary_search_preserves_caller_options_and_hydrates_recipes() {
     let _lock = crate::REST_ENDPOINT_TEST_MUTEX.lock().await;
     let fixture = Arc::new(Mutex::new(Fixture {
         count: 1,
+        mode: "facets".into(),
         ..Default::default()
     }));
     let _server = start(fixture.clone()).await;
@@ -507,7 +515,11 @@ async fn ordinary_search_preserves_caller_options_and_hydrates_recipes() {
         json!({
             "searchRecipes": {
                 "recipes": [{"id": "match-0000", "name": "Source"}],
-                "found": 1, "page": 1, "perPage": 100, "facets": []
+                "found": 1, "page": 1, "perPage": 100, "facets": [{
+                    "field_name": "ingredients",
+                    "counts": [{"value": "Kartoffeln", "count": 2, "highlighted": "Kartoffeln"}],
+                    "stats": {"min": 0.5}
+                }]
             }
         })
     );

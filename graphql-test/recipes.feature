@@ -47,7 +47,7 @@ Feature: recipes
           name: 'test',
           method: 'cook it',
           ingredients: [
-            { name: 'ingredient', amount: 1 },
+            { name: 'ingredient', amount: '1' },
             { name: 'opt', optional: true }
           ]
         }
@@ -83,7 +83,7 @@ Feature: recipes
     * match response.data.recipes[0].updatedAt == updatedAt
 
   Scenario: should be able to edit a recipe
-    * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'test', method: 'cook it', ingredients: [{ name: 'ingredient', amount: 1 }] } } }
+    * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'test', method: 'cook it', ingredients: [{ name: 'ingredient', amount: '1' }] } } }
     * method post
     * status 200
     * def recipeId = response.data.createRecipe.id

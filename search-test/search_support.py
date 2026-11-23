@@ -105,7 +105,7 @@ class SearchSession:
     def create(self, name, ingredient, rating):
         value = {
             "name": name, "method": "Mit Öl und Zwiebeln kochen.",
-            "ingredients": [{"name": ingredient, "unit": "g", "amount": 100},
+            "ingredients": [{"name": ingredient, "unit": "g", "amount": "100"},
                             {"name": self.scope}],
             "inspirations": [],
         }

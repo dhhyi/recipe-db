@@ -3,16 +3,16 @@
   "ingredients": [
     {
       "name": "Spaghetti",
-      "amount": 125,
+      "amount": "125",
       "unit": "g"
     },
     {
       "name": "Eigelb",
-      "amount": 2
+      "amount": "2"
     },
     {
       "name": "Parmesan",
-      "amount": 100,
+      "amount": "100",
       "unit": "g"
     },
     {
