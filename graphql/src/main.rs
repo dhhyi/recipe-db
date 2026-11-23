@@ -642,6 +642,7 @@ mod ingress_tests {
     use async_graphql::{UploadValue, Variables};
     use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
     use axum::{middleware, routing::get, Router};
+    use futures::StreamExt;
     use serde_json::json;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
