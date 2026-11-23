@@ -37,7 +37,7 @@ Keep the existing host, user, root UUID, networks, and other operator-specific s
 │   ├── auth-accounts.json
 │   ├── google-oauth-client-secret
 │   ├── oauth2-cookie-secret
-│   └── acme-account-email             # only when HTTPS staging is configured
+│   └── acme-account-email             # required for Pi production HTTPS
 ├── provisioning/
 │   └── inventory.yml
 ├── ssh/
@@ -56,7 +56,7 @@ The backup inputs are operator-prepared. `backup.json` keeps its absolute Pi run
 
 `backup-release-ref` must be the immutable OCI release artifact reference `ghcr.io/dhhyi/recipe-db-releases@sha256:<64 lowercase hexadecimal characters>`; commit IDs and tags are not accepted.
 
-`pi-values.yaml` begins as a private copy of [`deploy/pi.yaml`](../deploy/pi.yaml). It contains the Pi's immutable release/deployment settings and operator-held secret references, preferably relative paths such as `deployment/auth-accounts.json`. `auth-accounts.json` follows [`graphql/auth-accounts.schema.json`](../graphql/auth-accounts.schema.json). The Google client ID is public configuration in the values file; its client secret and OAuth cookie key are private inputs. The ACME email is needed only for the optional HTTPS configuration.
+`pi-values.yaml` begins as a private copy of [`deploy/pi.yaml`](../deploy/pi.yaml). It contains the Pi's immutable release/deployment settings and operator-held secret references, preferably relative paths such as `deployment/auth-accounts.json`. Pi deployment requires production HTTPS: `httpsStaging.hostname` must be the hostname in `origin`, which must use the `https://` scheme. `auth-accounts.json` follows [`graphql/auth-accounts.schema.json`](../graphql/auth-accounts.schema.json). The Google client ID is public configuration in the values file; its client secret and OAuth cookie key are private inputs and remain optional. The ACME account email is required for certificate issuance and renewal.
 
 `inventory.yml` is copied from [`provisioning/inventory.example.yml`](../provisioning/inventory.example.yml). Set its host, `operator_ssh_private_key` reference, measured root UUID, and narrowly scoped administrator/application networks. Keep `known_hosts` limited to the Pi host key verified during bootstrap. The kubeconfig is generated from the live Pi by `access.yml`; it is sensitive, disposable, and can be recreated after provisioning.
 
