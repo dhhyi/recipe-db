@@ -1725,14 +1725,15 @@ restore_wait_reads() {
 }
 
 restore_wait_public_routes() {
+  local expected=${1:-$work/restore-final-routes.json}
   local deadline=$((SECONDS + timeout))
-  restore_verify_configured_routes "$work/restore-final-routes.json" \
+  restore_verify_configured_routes "$expected" \
     "$work/restore-public-routes-secret.json" "$work/restore-public-routes.json" || return 1
   while :; do
     if curl --silent --show-error --fail --connect-timeout 5 --max-time "$timeout" \
       "http://127.0.0.1:$restore_graphql_port/api/http/routers" > "$work/restore-observed-routers.json" \
       2> "$work/restore-request-error" \
-      && restore_public_routers_match "$work/restore-final-routes.json" \
+      && restore_public_routers_match "$expected" \
         "$work/restore-observed-routers.json"; then return 0; fi
     ((SECONDS < deadline)) || return 1
     sleep 2

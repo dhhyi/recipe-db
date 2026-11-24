@@ -1332,7 +1332,8 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
               .http.routers.graphql == null
             else .http.routers.graphql.entrypoints == ["web"] end)
             and .http.middlewares["graphql-ingress"].headers.customRequestHeaders["X-Internal-Ingress-Token"] == ($ingress | rtrimstr("\n"))' \
-            "$route_file" > /dev/null || exit 1 ;;
+            "$route_file" > /dev/null || exit 1
+          cp "$route_file" "$MOCK_LOG.restore-routes" ;;
       esac
     done
     echo '{"kind":"Secret","data":{}}' ;;
@@ -1752,7 +1753,16 @@ restore_image_json=${MOCK_RESTORE_IMAGE_JSON:-null}
 restore_image_url=$(jq -r '.url // empty' <<< "$restore_image_json")
 restore_image_thumb_url=$(jq -r '.thumbUrl // empty' <<< "$restore_image_json")
 if [[ $url == */api/http/routers ]]; then
-  echo '[{"name":"graphql@file","status":"enabled"}]'
+  if [[ -f $MOCK_LOG.restore-routes ]]; then
+    jq -c '[.http.routers | to_entries[] |
+      (.value.entrypoints // ["web"]) as $entrypoints |
+      select(any($entrypoints[]; . == "web" or . == "websecure")) |
+      {name:(.key + "@file"),status:"enabled",rule:.value.rule,
+        service:.value.service,entryPoints:($entrypoints | sort)}]' \
+      "$MOCK_LOG.restore-routes"
+  else
+    echo '[{"name":"graphql@file","status":"enabled"}]'
+  fi
 elif [[ $url == */graphql ]]; then
   query=$(jq -r .query "$request_file")
   case "$query" in

@@ -2867,7 +2867,7 @@ release_recovery_reopen() {
     > "$work/recovery-route-port" \
     || production_fail "could not inspect public route convergence; recovery remains blocked"
   restore_graphql_port=$(cat "$work/recovery-route-port")
-  restore_wait_public_routes \
+  restore_wait_public_routes "$work/routes.yml" \
     || production_fail "public recovery routes did not converge; access barrier and Lease are retained"
   release_recovery_state_write recovered migration-reopened \
     "$(jq -cn --arg reopenedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -2958,7 +2958,8 @@ release_recovery_validate_closeout() {
   restore_forward deployment/traefik 3000 "$work/closeout-route-forward.log" \
     > "$work/closeout-route-port" || production_fail "cannot inspect already reopened route convergence"
   restore_graphql_port=$(cat "$work/closeout-route-port")
-  restore_wait_public_routes || production_fail "already reopened public routes have not converged"
+  restore_wait_public_routes "$work/routes.yml" \
+    || production_fail "already reopened public routes have not converged"
 }
 
 release_recovery_closeout_ownership() {
