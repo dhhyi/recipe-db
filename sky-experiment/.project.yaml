@@ -1,0 +1,86 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://debian
+devcontainer:
+  name: recipe-db-sky-experiment
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-sky-experiment
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
+  build:
+    args:
+      SKY_VERSION: "0.31.2"
+    root:
+      - |
+        RUN /bin/sh -ec 'case "$(dpkg --print-architecture)" in \
+              amd64) arch=x64; checksum=4088d283efa645d357ee1d0dc307d8f1662c4f3be1b3c320efd2155c76bd57a4 ;; \
+              arm64) arch=arm64; checksum=ef31b9619233c21335bb47db720ad72b7d25058ed06c2d07f767444a79060a88 ;; \
+              *) echo "Unsupported Sky architecture" >&2; exit 1 ;; \
+            esac \
+            && curl -fsSL "https://github.com/anzellai/sky/releases/download/v${SKY_VERSION}/sky-linux-${arch}.tar.gz" -o /tmp/sky.tar.gz \
+            && echo "$checksum  /tmp/sky.tar.gz" | sha256sum -c - \
+            && tar -xzf /tmp/sky.tar.gz -C /tmp \
+            && install "/tmp/sky-linux-${arch}" /usr/local/bin/sky \
+            && rm /tmp/sky.tar.gz "/tmp/sky-linux-${arch}" "/tmp/sky-ffi-inspect-sky-linux-${arch}"'
+    user:
+      - RUN mise use -g go@1.25
+  ports:
+    - 8000
+  environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
+    ENV: local
+    SKY_HOST: "0.0.0.0"
+    SKY_ALLOWED_HOSTS: "localhost,127.0.0.1,traefik,sky-experiment"
+    SKY_LIVE_BASE_PATH: /sky-experiment
+  initialize: sky build src/Main.sky
+vscode:
+  settings:
+    window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
+    peacock.remoteColor: "#dba694"
+  extensions:
+    - johnpapa.vscode-peacock
+  tasks:
+    - label: Run Sky watch server
+      command: sky watch src/Main.sky
+extras:
+  - traefik
+traefik:
+  network: intranet
+  labels:
+    http:
+      services:
+        recipe-db-sky-experiment:
+          loadBalancer:
+            server:
+              port: 8000
+            healthCheck:
+              interval: 10s
+              timeout: 1s
+              path: /_sky/readyz
+      routers:
+        sky-experiment:
+          rule: Path(`/sky-experiment`) || PathPrefix(`/sky-experiment/`)
+          entrypoints: web
+          middlewares: sky-experiment-prefix
+      middlewares:
+        sky-experiment-prefix:
+          stripPrefix:
+            prefixes:
+              - /sky-experiment
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: frontend
+tailwind:
+  sources:
+    - src
+format:
+  - check: sky fmt --check $argv
+    apply: sky fmt $argv
+    files: ["**/*.sky"]
+check: sky build src/Main.sky
+test: sky test tests/CounterTest.sky
+integrationDependencies:
+  - design
+prettier:
+  ignore:
+    - "*.sky"
+    - Dockerfile
