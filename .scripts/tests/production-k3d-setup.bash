@@ -1780,7 +1780,11 @@ elif [[ $url == */graphql ]]; then
         echo '{"data":{"recipe":{"id":"fixture-recipe","name":"Recovery fixture recipe","image":null,"rating":{"count":0}}}}'
       fi ;;
     *"recipes {"*)
-      echo '{"data":{"recipes":[{"id":"fixture-recipe","name":"Recovery fixture recipe"}]}}' ;;
+        if [[ $query == *maintenance* ]]; then
+          echo '{"data":{"maintenance":true,"recipes":[{"id":"fixture-recipe","name":"Recovery fixture recipe"}]}}'
+        else
+          echo '{"data":{"recipes":[{"id":"fixture-recipe","name":"Recovery fixture recipe"}]}}'
+        fi ;;
     *) echo '{"data":{"__typename":"Query"}}' ;;
   esac
 elif [[ $url == */recipe/recovery-probe && ! -f $MOCK_LOG.probe-name ]]; then

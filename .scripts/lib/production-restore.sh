@@ -355,7 +355,8 @@ restore_cleanup() {
       fi
     fi
   fi
-  if [[ (${command:-} == restore || ${command:-} == restore-recheck) &&
+  if [[ (${command:-} == restore || ${command:-} == restore-recheck ||
+    ${command:-} == recovery-restore) &&
     ${restore_current_phase:-} == verifying-reads &&
     -f ${restore_state:-}/restore-state.json ]] \
     && jq -e '.import.status == "complete" and (.writesMayHaveOpened // false) == false' \
@@ -365,6 +366,7 @@ restore_cleanup() {
     preserve_readable=true
     restore_record_read_check failed \
       || printf 'production: failed read-check result could not be recorded; inspect state before retrying\n' >&2
+    [[ ${command:-} != recovery-restore ]] || recovery_started=false
   else
     recovery_stop_workers \
       || printf 'production: could not stop every restore worker; isolate application storage\n' >&2
@@ -1662,7 +1664,18 @@ restore_verify_reads() {
       break
     fi
   done < "$work/restore-recipe-sample.jsonl"
-  [[ -n $recipe ]] || return 0
+  if [[ -z $recipe ]]; then
+    restore_graphql 'query($options: JSON!) { searchRecipes(options:$options) { recipes { id } found } }' \
+      '{"options":{"q":"*","query_by":"name","per_page":1}}' || return 1
+    jq -e '.data.searchRecipes.found == 0
+      and (.data.searchRecipes.recipes | type == "array" and length == 0)' \
+      "$work/restore-response.json" > /dev/null || return 1
+    curl --silent --show-error --fail --connect-timeout 5 --max-time "$timeout" \
+      "http://127.0.0.1:$restore_browse_port/" \
+      > "$work/restore-browse.html" 2> "$work/restore-request-error" || return 1
+    [[ -s $work/restore-browse.html ]]
+    return
+  fi
   id=$(jq -r .id <<< "$recipe")
   name=$(jq -r .name <<< "$recipe")
   restore_graphql 'query($id: ID!) { recipe(id:$id) { id name image { url thumbUrl } rating { count } } }' \
@@ -1735,7 +1748,7 @@ restore_expose_readonly_routes() {
 }
 
 restore_load_saved_operation() {
-  local state=$1 current lease_uid
+  local state=$1 current lease_uid saved_cluster_state
   recovery_private_state "$state"
   restore_state=$state
   restore_cluster_state=true
@@ -1754,6 +1767,19 @@ restore_load_saved_operation() {
     || production_fail "saved restore state or target does not match; preserve its state and Lease and inspect it before any action"
   jq -e '(.probeRecipeId // null) == null' "$restore_state/restore-state.json" > /dev/null \
     || production_fail "retained write-probe identity requires operator investigation; preserve the state and Lease"
+  kube get configmap recipe-db-restore -o json > "$work/restore-saved-configmap.json" \
+    || production_fail "cannot inspect durable restore state; preserve the state and Lease"
+  jq -e --arg ns "$namespace" '.metadata.namespace == $ns
+    and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and (.data["restore-state.json"] | type == "string")' \
+    "$work/restore-saved-configmap.json" > /dev/null \
+    || production_fail "durable restore state is missing or not application-owned; preserve the state and Lease"
+  saved_cluster_state=$(jq -er '.data["restore-state.json"] | fromjson' \
+    "$work/restore-saved-configmap.json") \
+    || production_fail "durable restore state is malformed; preserve the state and Lease"
+  jq -e --argjson cluster "$saved_cluster_state" '. == $cluster' \
+    "$restore_state/restore-state.json" > /dev/null \
+    || production_fail "local and durable restore state differ; inspect status and Lease before any action"
   backup_id=$(jq -er .backupId "$restore_state/restore-state.json")
   lock_holder=$(jq -er .holder "$restore_state/restore-state.json")
   cluster_operation_lock_holder=$lock_holder
@@ -1894,7 +1920,7 @@ restore_status() {
     ($state[0]) as $saved |
     ($lease // null) as $currentLease |
     {
-      savedProgress:{status:$saved.status,phase:$saved.phase,
+      savedProgress:{backupId:$saved.backupId,status:$saved.status,phase:$saved.phase,
         import:($saved.import // null),readChecks:($saved.readChecks // null),
         publicRoutesMayBeOpen:($saved.publicRoutesMayBeOpen // null),
         writesMayHaveOpened:($saved.writesMayHaveOpened // null)},
@@ -1914,11 +1940,13 @@ restore_status() {
             and $routers != null and
             any($routers[]; .name == "graphql@file" and .status == "enabled"))}},
       writesMayHaveOpened:(($saved.writesMayHaveOpened // false)
-        or ($saved.status == "awaiting-signoff" and
-          ($graphqlMode != "maintenance" or $maintenanceQuery != true))),
+        or ($configmap.writesMayHaveOpened // false)
+        or $graphqlMode != "maintenance" or $maintenanceQuery != true),
+      savedStateMatchesCluster:($configmap != null and $configmap == $saved),
       nextAction:(if ($saved.writesMayHaveOpened // false)
-        or ($saved.status == "awaiting-signoff" and
-          ($graphqlMode != "maintenance" or $maintenanceQuery != true))
+        or ($configmap.writesMayHaveOpened // false)
+        or $graphqlMode != "maintenance" or $maintenanceQuery != true
+        or $configmap == null or $configmap != $saved
         then "Inspect this status and recent application writes; explicitly close access or reconcile the transition. Do not retry restore or assume no writes occurred."
         elif $saved.status == "awaiting-signoff" and $maintenanceVerified
           and $currentLease.spec.holderIdentity == $saved.holder
@@ -1991,6 +2019,8 @@ restore_reopen() {
     || production_fail "reopening requires a verified pending restore with no previous reopen attempt; inspect restore-status"
   [[ $confirmation == "OPEN-RESTORE-$backup_id-$lock_holder" ]] \
     || production_fail "reopening requires OPEN-RESTORE-<backup-id>-<holder> confirmation"
+  restore_guard_assert_absent \
+    || production_fail "reopening requires the recovery shutdown guard to be terminated and removed"
   jq -e '.metadata.annotations["recipe-db/phase"] == "awaiting-signoff"' \
     <<< "$(cluster_operation_lock_status)" > /dev/null \
     || production_fail "reopening requires the exact pending-sign-off Lease phase"

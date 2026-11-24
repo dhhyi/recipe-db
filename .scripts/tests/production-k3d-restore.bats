@@ -222,6 +222,59 @@ load production-k3d-restore-setup
     and (.nextAction | contains("Inspect this status and recent application writes"))' <<< "$output"
 }
 
+@test "restore status detects exposure recorded by another operator despite stale local phase" {
+  restore_fixture
+  run_restore
+  [ "$status" -eq 0 ]
+  jq '.data["restore-state.json"] |= (fromjson | .writesMayHaveOpened=true |
+    .status="reopening" | .phase="reopening" | tojson)' "$MOCK_LOG.cluster-restore-state" \
+    > "$MOCK_LOG.cluster-restore-state.next"
+  mv "$MOCK_LOG.cluster-restore-state.next" "$MOCK_LOG.cluster-restore-state"
+  jq '(.items[] | select(.metadata.name == "graphql").spec.template.spec.containers[] |
+    select(.name == "graphql").env[] | select(.name == "MODE").value)="production"' \
+    "$MOCK_LOG.restore-deployments" > "$MOCK_LOG.restore-deployments.next"
+  mv "$MOCK_LOG.restore-deployments.next" "$MOCK_LOG.restore-deployments"
+  run bash .scripts/production-k3d.sh restore-status "$VALUES" "$RESTORE_STATE"
+  [ "$status" -eq 0 ]
+  jq -e '.savedProgress.status == "awaiting-signoff"
+    and .savedStateMatchesCluster == false
+    and .observed.graphql.mode == "production"
+    and .writesMayHaveOpened == true
+    and (.nextAction | contains("Inspect this status and recent application writes"))' <<< "$output"
+}
+
+@test "restore reopening refuses local state that differs from durable cluster state" {
+  restore_fixture
+  run_restore
+  [ "$status" -eq 0 ]
+  jq '.writesMayHaveOpened=true' "$RESTORE_STATE/restore-state.json" \
+    > "$RESTORE_STATE/restore-state.next"
+  mv "$RESTORE_STATE/restore-state.next" "$RESTORE_STATE/restore-state.json"
+  local holder
+  holder=$(jq -r .holder "$RESTORE_STATE/restore-state.json")
+  run bash .scripts/production-k3d.sh restore-reopen "$VALUES" "$RESTORE_STATE" \
+    "OPEN-RESTORE-$RESTORE_ID-$holder"
+  [ "$status" -ne 0 ]
+  [[ $output == *"local and durable restore state differ"* ]]
+  [ ! -e "$MOCK_LOG.reopening" ]
+  [ -e "$MOCK_LOG.lease" ]
+}
+
+@test "restore reopening refuses a surviving shutdown guard" {
+  restore_fixture
+  run_restore
+  [ "$status" -eq 0 ]
+  local holder
+  holder=$(jq -r .holder "$RESTORE_STATE/restore-state.json")
+  export MOCK_SURVIVING_RECOVERY_GUARD=true
+  run bash .scripts/production-k3d.sh restore-reopen "$VALUES" "$RESTORE_STATE" \
+    "OPEN-RESTORE-$RESTORE_ID-$holder"
+  [ "$status" -ne 0 ]
+  [[ $output == *"shutdown guard to be terminated and removed"* ]]
+  [ ! -e "$MOCK_LOG.reopening" ]
+  [ -e "$MOCK_LOG.lease" ]
+}
+
 @test "restore reopening preserves and refuses a retained legacy write-probe identity" {
   restore_fixture
   run_restore
@@ -789,6 +842,7 @@ run_restore_abandon() {
 
 @test "pending restore can select another backup through preview reset and recovery restore" {
   restore_real_package_fixture
+  set_value '.timeoutSeconds=8'
   run_restore
   [ "$status" -eq 0 ]
   local alternate_id=backup-20261101123456-43
@@ -812,13 +866,35 @@ run_restore_abandon() {
     and .reset.pendingRestore == null' "$RESTORE_STATE/restore-state.json"
   [ -e "$MOCK_LOG.lease" ]
   [ ! -e "$MOCK_LOG.reopening" ]
+  export MOCK_RESTORE_READ_FAIL=true
   run bash .scripts/production-k3d.sh recovery-restore "$VALUES" "$RESTORE_STATE" \
     "$RESTORE_ALT_MANIFEST" "$RESTORE_ALT_ARCHIVE" "$alternate_id" "RESTORE-$alternate_id"
-  [ "$status" -eq 0 ]
-  jq -e --arg id "$alternate_id" '.backupId == $id and .status == "awaiting-signoff"
-    and .import.status == "complete" and .readChecks.status == "passed"
-    and .writesMayHaveOpened == false' "$RESTORE_STATE/restore-state.json"
+  [ "$status" -ne 0 ]
+  jq -e --arg id "$alternate_id" '.backupId == $id and .status == "recovery-required"
+    and .phase == "verifying-reads" and .import.status == "complete"
+    and .readChecks.status == "failed" and .writesMayHaveOpened == false' \
+    "$RESTORE_STATE/restore-state.json"
+  jq -e 'all(.items[]; (.spec.replicas // 0) == (.status.readyReplicas // 0))' \
+    "$MOCK_LOG.restore-deployments"
   [ -e "$MOCK_LOG.lease" ]
+  [ ! -e "$MOCK_LOG.reopening" ]
+  local imports_before
+  imports_before=$(grep -c -- 'exec -i restore-volume-.*tar -xpkf -' "$MOCK_LOG")
+  unset MOCK_RESTORE_READ_FAIL
+  run bash .scripts/production-k3d.sh restore-recheck "$VALUES" "$RESTORE_STATE" \
+    "RECHECK-RESTORE-$alternate_id"
+  [ "$status" -eq 0 ]
+  jq -e '.status == "awaiting-signoff" and .readChecks.status == "passed"
+    and any(.readChecks.attempts[]; .status == "failed")' "$RESTORE_STATE/restore-state.json"
+  [ "$(grep -c -- 'exec -i restore-volume-.*tar -xpkf -' "$MOCK_LOG")" -eq "$imports_before" ]
+  local holder
+  holder=$(jq -er .holder "$RESTORE_STATE/restore-state.json")
+  run bash .scripts/production-k3d.sh restore-reopen "$VALUES" "$RESTORE_STATE" \
+    "OPEN-RESTORE-$alternate_id-$holder"
+  [ "$status" -eq 0 ]
+  jq -e '.status == "succeeded" and .writesMayHaveOpened == true' \
+    "$RESTORE_STATE/restore-state.json"
+  [ ! -e "$MOCK_LOG.lease" ]
 }
 
 @test "restore SIGTERM during read-only verification retains maintenance and recovery state" {

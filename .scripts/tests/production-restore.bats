@@ -791,9 +791,12 @@ jq '.origin = "https://recipe.test"' "$work/config.json" > "$work/config.next"
 mv "$work/config.next" "$work/config.json"
 restore_graphql() {
   local variables=${2:-'{}'} id
+  if [[ ${RESTORE_EMPTY:-false} == true ]]; then printf '%s\n' "$1" >> "$MOCK_LOG"; fi
   case "$1" in
     'query { maintenance recipes { id name } }')
-      if [[ ${RESTORE_LARGE:-false} == true ]]; then
+      if [[ ${RESTORE_EMPTY:-false} == true ]]; then
+        printf '{"data":{"maintenance":true,"recipes":[]}}\n' > "$work/restore-response.json"
+      elif [[ ${RESTORE_LARGE:-false} == true ]]; then
         jq -n '{data:{maintenance:true,recipes:[range(0;12) | {id:("recipe-" + (if . < 10 then "0" else "" end) + tostring),name:"First"}]}}' \
           > "$work/restore-response.json"
       elif [[ ${RESTORE_IMAGE_FREE:-false} == true ]]; then
@@ -829,8 +832,15 @@ restore_graphql() {
       fi
       ;;
     *searchRecipes*)
-      jq -n --arg id "$EXPECTED_RECIPE_ID" \
-        '{data:{searchRecipes:{recipes:[{id:$id}],found:1}}}' > "$work/restore-response.json"
+      if [[ ${RESTORE_EMPTY_SEARCH_FAIL:-false} == true ]]; then
+        printf '{"errors":[{"message":"search unavailable"}]}\n' > "$work/restore-response.json"
+        return 1
+      elif [[ ${RESTORE_EMPTY:-false} == true ]]; then
+        printf '{"data":{"searchRecipes":{"recipes":[],"found":0}}}\n' > "$work/restore-response.json"
+      else
+        jq -n --arg id "$EXPECTED_RECIPE_ID" \
+          '{data:{searchRecipes:{recipes:[{id:$id}],found:1}}}' > "$work/restore-response.json"
+      fi
       ;;
     *) return 1 ;;
   esac
@@ -850,7 +860,11 @@ curl() {
         : > "$output"
       fi
       if [[ ${IMAGE_FAILURE:-} == "redirect:${url##*/}" ]]; then printf 302; else printf 200; fi ;;
-    "http://127.0.0.1:4100/recipe/$EXPECTED_RECIPE_ID") printf 'restored recipe page\n' ;;
+    "http://127.0.0.1:4100/recipe/${EXPECTED_RECIPE_ID:-}") printf 'restored recipe page\n' ;;
+    http://127.0.0.1:4100/)
+      [[ ${RESTORE_EMPTY_BROWSE_FAIL:-false} != true ]] || return 1
+      printf '%s\n' "$url" >> "$MOCK_LOG"
+      printf 'restored browse home\n' ;;
     *) return 1 ;;
   esac
 }
@@ -894,6 +908,15 @@ EOF
   done
   run env RESTORE_IMAGE_FREE=true EXPECTED_RECIPE_ID=first bash restore-image-harness.sh
   [ "$status" -eq 0 ]
+  : > "$MOCK_LOG"
+  run env RESTORE_EMPTY=true bash restore-image-harness.sh
+  [ "$status" -eq 0 ]
+  grep -Fq 'searchRecipes' "$MOCK_LOG"
+  grep -Fxq 'http://127.0.0.1:4100/' "$MOCK_LOG"
+  run env RESTORE_EMPTY=true RESTORE_EMPTY_SEARCH_FAIL=true bash restore-image-harness.sh
+  [ "$status" -ne 0 ]
+  run env RESTORE_EMPTY=true RESTORE_EMPTY_BROWSE_FAIL=true bash restore-image-harness.sh
+  [ "$status" -ne 0 ]
   rm -f work/image-samples
   run env RESTORE_LARGE=true EXPECTED_RECIPE_ID=recipe-00 bash restore-image-harness.sh
   [ "$status" -eq 0 ]
@@ -911,7 +934,14 @@ timeout=3
 restore_graphql_port=4000
 restore_graphql() {
   printf '%s\n' "$1" >> "$MOCK_LOG"
-  printf '{"data":{"maintenance":true,"recipes":[]}}\n' > "$work/restore-response.json"
+  case "$1" in
+    'query { maintenance recipes { id name } }')
+      printf '{"data":{"maintenance":true,"recipes":[]}}\n' > "$work/restore-response.json" ;;
+    *searchRecipes*)
+      printf '{"data":{"searchRecipes":{"recipes":[],"found":0}}}\n' \
+        > "$work/restore-response.json" ;;
+    *) return 1 ;;
+  esac
 }
 for restore_mode in standalone migration-recovery; do
   restore_wait_reads
@@ -920,6 +950,7 @@ EOF
   run bash readonly-verification.sh
   [ "$status" -eq 0 ]
   [ "$(grep -c '^query { maintenance recipes { id name } }$' "$MOCK_LOG")" -eq 2 ]
+  [ "$(grep -c 'searchRecipes' "$MOCK_LOG")" -eq 2 ]
   run ! grep -Eq 'mutation|createRecipe|updateRecipe|deleteRecipe' "$MOCK_LOG"
   [[ ! -e $FIXTURE_ROOT/restore-state/restore-state.json ]]
 }

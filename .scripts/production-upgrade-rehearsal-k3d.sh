@@ -459,6 +459,30 @@ lifecycle() {
   fi
 }
 
+approve_restore() {
+  local values=$1 state=$2 expected_backup=$3 label=$4
+  local status_log="$work/logs/$label-restore-status.log" holder
+  run_logged "$status_log" lifecycle "$root" true restore-status "$values" "$state"
+  jq -e --arg id "$expected_backup" '
+    .savedProgress.status == "awaiting-signoff"
+    and .savedProgress.backupId == $id
+    and .savedProgress.import.status == "complete"
+    and .savedProgress.readChecks.status == "passed"
+    and .lease.ownedByRestore
+    and .observed.graphql.mode == "maintenance"
+    and .observed.graphql.maintenanceQuery == true
+    and .observed.publicRoutes.normalRoutesObserved
+    and (.writesMayHaveOpened | not)
+  ' "$status_log" > /dev/null || die "$label restore status is not safe for operator-approved reopening"
+  holder=$(jq -er .holder "$state/restore-state.json")
+  run_logged "$work/logs/$label-restore-reopen.log" lifecycle "$root" true restore-reopen \
+    "$values" "$state" "OPEN-RESTORE-$expected_backup-$holder"
+  jq -e --arg id "$expected_backup" '.backupId == $id
+    and .status == "succeeded" and .phase == "operator-reopened"
+    and .writesMayHaveOpened == true' "$state/restore-state.json" > /dev/null \
+    || die "$label restore did not record explicit reopening"
+}
+
 create_worktree() {
   local revision=$1 destination=$2 label=$3
   git -C "$root" worktree add --detach "$destination" "$revision" \
@@ -1032,6 +1056,7 @@ run_rehearsal_scenarios() {
   new_cluster r "$values"
   run_logged "$work/logs/restore.log" lifecycle "$root" true \
     restore "$source_values" "$manifest" "$archive" "$backup_id" "$work/state/restore" "RESTORE-$backup_id"
+  approve_restore "$source_values" "$work/state/restore" "$backup_id" source
   mark
 
   run_scenario failure-recovery "$source_values" "$candidate_values"
@@ -1057,6 +1082,7 @@ run_rehearsal_scenarios() {
   run_logged "$work/logs/post-release-restore.log" lifecycle "$root" true \
     restore "$restore_values" "$post_manifest" "$post_archive" "$package_id" \
     "$work/state/post-release-restore" "RESTORE-$package_id"
+  approve_restore "$restore_values" "$work/state/post-release-restore" "$package_id" post-release
   verify_sample "$restore_values" post-release-restore
   post_backup_restore_status=passed
   mark

@@ -291,7 +291,7 @@ pull_release() {
   [[ $revision = "$(jq -r '.annotations["org.opencontainers.image.revision"]' "$work/manifest.json")" ]] \
     || production_fail "artifact and inventory revision mismatch"
   case "$command" in
-    backup-run | backup-enter | backup-capture | maintenance-restore | backup-exit | restore | recovery-* | release-closeout | release-migration-recover | release-recovery-reopen)
+    backup-run | backup-enter | backup-capture | maintenance-restore | backup-exit | restore | restore-status | restore-recheck | restore-reopen | recovery-* | release-closeout | release-migration-recover | release-recovery-reopen)
       local inputs=(.scripts/lib/project-metadata.sh
         .scripts/templates/kubernetes-template.yml .scripts/templates/kubernetes.lib.yml
         .scripts/templates/storage-version-gate.sh.ytt .scripts/templates/storage-version-sidecar.sh.ytt
