@@ -187,6 +187,8 @@ load production-k3d-restore-setup
   jq -e '.status == "awaiting-signoff" and .import.status == "complete"
     and .readChecks.status == "passed" and .writesMayHaveOpened == false' \
     "$RESTORE_STATE/restore-state.json"
+  grep -Fq 'searchRecipes' "$MOCK_LOG"
+  grep -Fq 'http://127.0.0.1:18082/' "$MOCK_LOG"
   run ! grep -Eq 'createRecipe|updateRecipe|deleteRecipe|recipe/probe' "$MOCK_LOG"
   [ ! -e "$MOCK_LOG.restore-mutation-attempt" ]
 }
@@ -258,6 +260,31 @@ load production-k3d-restore-setup
   [[ $output == *"local and durable restore state differ"* ]]
   [ ! -e "$MOCK_LOG.reopening" ]
   [ -e "$MOCK_LOG.lease" ]
+}
+
+@test "restore status treats an unexpected public router as possible write exposure" {
+  restore_fixture
+  run_restore
+  [ "$status" -eq 0 ]
+  export MOCK_RESTORE_ROUTE_UNEXPECTED=true
+  run bash .scripts/production-k3d.sh restore-status "$VALUES" "$RESTORE_STATE"
+  [ "$status" -eq 0 ]
+  jq -e '.observed.publicRoutes.configuredRoutesMatchSaved
+    and (.observed.publicRoutes.activeRoutesMatchConfiguration | not)
+    and (.observed.publicRoutes.normalRoutesObserved | not)
+    and .writesMayHaveOpened == true
+    and (.nextAction | contains("Inspect this status and recent application writes"))' <<< "$output"
+  local holder
+  holder=$(jq -r .holder "$RESTORE_STATE/restore-state.json")
+  run bash .scripts/production-k3d.sh restore-reopen "$VALUES" "$RESTORE_STATE" \
+    "OPEN-RESTORE-$RESTORE_ID-$holder"
+  [ "$status" -ne 0 ]
+  [[ $output == *"active public routers do not match"* ||
+    $output == *"configured public routes differ"* ]]
+  jq -e '.status == "awaiting-signoff" and .writesMayHaveOpened == false' \
+    "$RESTORE_STATE/restore-state.json"
+  [ -e "$MOCK_LOG.lease" ]
+  [ ! -e "$MOCK_LOG.reopening" ]
 }
 
 @test "restore reopening refuses a surviving shutdown guard" {

@@ -924,7 +924,7 @@ EOF
   run ! grep -Fxq recipe-11 work/image-samples
 }
 
-@test "shared restore read verification is non-mutating for normal and migration recovery" {
+@test "shared restore read verification is non-mutating" {
   cat > readonly-verification.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -948,14 +948,12 @@ curl() {
   printf '%s\n' "${*: -1}" >> "$MOCK_LOG"
   printf 'restored browse home\n'
 }
-for restore_mode in standalone migration-recovery; do
-  restore_wait_reads
-done
+restore_wait_reads
 EOF
   run bash readonly-verification.sh
   [ "$status" -eq 0 ]
-  [ "$(grep -c '^query { maintenance recipes { id name } }$' "$MOCK_LOG")" -eq 2 ]
-  [ "$(grep -c 'searchRecipes' "$MOCK_LOG")" -eq 2 ]
+  [ "$(grep -c '^query { maintenance recipes { id name } }$' "$MOCK_LOG")" -eq 1 ]
+  [ "$(grep -c 'searchRecipes' "$MOCK_LOG")" -eq 1 ]
   run ! grep -Eq 'mutation|createRecipe|updateRecipe|deleteRecipe' "$MOCK_LOG"
   [[ ! -e $FIXTURE_ROOT/restore-state/restore-state.json ]]
 }

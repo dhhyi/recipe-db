@@ -51,7 +51,17 @@ if [[ ${MOCK_RESTORE_HTTP_FAIL:-false} == true ]]; then exit 1; fi
 if [[ $* == *"api/http/routers"* ]]; then
   if [[ ${MOCK_RESTORE_ROUTE_STALE:-false} == true ]]; then
     echo '[{"name":"restore-public-barrier@file","status":"enabled"}]'
-  else echo '[{"name":"graphql@file","status":"enabled"}]'; fi
+  elif [[ -f $MOCK_LOG.restore-routes ]]; then
+    jq '[.http.routers | to_entries[] |
+      (.value.entrypoints // ["web"]) as $entrypoints |
+      select(any($entrypoints[]; . == "web" or . == "websecure")) |
+      {name:(.key + "@file"),status:"enabled",rule:.value.rule,
+        service:.value.service,entryPoints:$entrypoints}]' "$MOCK_LOG.restore-routes" |
+      if [[ ${MOCK_RESTORE_ROUTE_UNEXPECTED:-false} == true ]]; then
+        jq '. + [{name:"unexpected@file",status:"enabled",rule:"Host(`public.example.test`)",
+          service:"unexpected",entryPoints:["web"]}]'
+      else cat; fi
+  else echo '[]'; fi
   exit
 fi
 if [[ $* == *"/public/"* ]]; then
@@ -76,6 +86,9 @@ fi
 file=
 for argument in "$@"; do case "$argument" in @*) file="${argument#@}" ;; esac; done
 query=$(jq -r .query "$file")
+if [[ ${MOCK_RESTORE_EMPTY:-false} == true ]]; then
+  printf 'graphql %s\n' "$query" >> "$MOCK_LOG"
+fi
 case "$query" in
   *"mutation"* | *"createRecipe"* | *"updateRecipe"* | *"deleteRecipe"*)
     touch "$MOCK_LOG.restore-mutation-attempt"

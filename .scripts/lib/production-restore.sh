@@ -1726,17 +1726,62 @@ restore_wait_reads() {
 
 restore_wait_public_routes() {
   local deadline=$((SECONDS + timeout))
+  restore_verify_configured_routes "$work/restore-final-routes.json" \
+    "$work/restore-public-routes-secret.json" "$work/restore-public-routes.json" || return 1
   while :; do
     if curl --silent --show-error --fail --connect-timeout 5 --max-time "$timeout" \
       "http://127.0.0.1:$restore_graphql_port/api/http/routers" > "$work/restore-observed-routers.json" \
       2> "$work/restore-request-error" \
-      && jq -e 'type == "array" and
-        all(.[]; .name != "restore-public-barrier@file") and
-        any(.[]; .name == "graphql@file" and .status == "enabled")' \
-        "$work/restore-observed-routers.json" > /dev/null 2>&1; then return 0; fi
+      && restore_public_routers_match "$work/restore-final-routes.json" \
+        "$work/restore-observed-routers.json"; then return 0; fi
     ((SECONDS < deadline)) || return 1
     sleep 2
   done
+}
+
+restore_verify_configured_routes() {
+  local expected=$1 secret=$2 actual=$3
+  kube --namespace kube-system get secret recipe-db-routes -o json > "$secret" \
+    || return 1
+  jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and (.data["routes.yml"] | type == "string")' "$secret" > /dev/null \
+    || return 1
+  jq -er '.data["routes.yml"] | @base64d' "$secret" > "$actual" \
+    || return 1
+  restore_routes_canonical "$expected" > "$expected.canonical" \
+    && restore_routes_canonical "$actual" > "$actual.canonical" \
+    && cmp -s "$expected.canonical" "$actual.canonical"
+}
+
+restore_routes_canonical() {
+  jq -S '
+    if (.http.middlewares["graphql-ingress"].headers.customRequestHeaders
+      | type == "object" and has("X-Internal-Ingress-Token")) then
+      .http.middlewares["graphql-ingress"].headers.customRequestHeaders[
+        "X-Internal-Ingress-Token"] = "<deployment-token>"
+    else . end
+  ' "$1"
+}
+
+restore_routes_sha256() {
+  restore_routes_canonical "$1" | sha256sum | cut -d ' ' -f 1
+}
+
+restore_public_routers_match() {
+  local expected=$1 observed=$2
+  jq -S '[.http.routers | to_entries[] |
+    (.value.entrypoints // ["web"]) as $entrypoints |
+    select(any($entrypoints[]; . == "web" or . == "websecure")) |
+    {name:(.key + "@file"),status:"enabled",rule:.value.rule,
+      service:.value.service,entryPoints:($entrypoints | sort)}] | sort_by(.name)' \
+    "$expected" > "$work/restore-expected-public-routers.json" || return 1
+  jq -S 'if type != "array" then error("router response is not an array") else
+    [.[] | select(any(.entryPoints[]?; . == "web" or . == "websecure")) |
+      {name,status,rule,service,entryPoints:(.entryPoints // [] | sort)}] |
+      sort_by(.name) end' \
+    "$observed" > "$work/restore-actual-public-routers.json" || return 1
+  cmp -s "$work/restore-expected-public-routers.json" \
+    "$work/restore-actual-public-routers.json"
 }
 
 restore_expose_readonly_routes() {
@@ -1846,20 +1891,27 @@ restore_prepare_saved_release() {
 }
 
 restore_assert_saved_public_routes() {
+  local expected_routes_sha256
+  restore_verify_configured_routes "$work/restore-final-routes.json" \
+    "$work/restore-saved-routes-secret.json" "$work/restore-saved-routes.json" \
+    || production_fail "configured public routes differ from the saved restore release"
+  expected_routes_sha256=$(restore_routes_sha256 "$work/restore-final-routes.json")
+  jq -e --arg hash "$expected_routes_sha256" '.routesSha256 == $hash' \
+    "$restore_state/restore-state.json" > /dev/null \
+    || production_fail "saved public routes differ from the verified restore operation"
   curl --silent --show-error --fail --connect-timeout 5 --max-time "$timeout" \
     "http://127.0.0.1:$restore_graphql_port/api/http/routers" \
     > "$work/restore-observed-routers.json" 2> "$work/restore-request-error" \
     || production_fail "cannot observe public routes through the configured ingress"
-  jq -e 'type == "array" and
-    all(.[]; .name != "restore-public-barrier@file") and
-    any(.[]; .name == "graphql@file" and .status == "enabled")' \
-    "$work/restore-observed-routers.json" > /dev/null \
-    || production_fail "public routes are blocked or do not match the saved restore"
+  restore_public_routers_match "$work/restore-final-routes.json" \
+    "$work/restore-observed-routers.json" \
+    || production_fail "active public routers do not match the saved restore routes"
 }
 
 restore_status() {
   local state=$1 graphql_mode=unknown maintenance_query=null route_config=null routers=null
   local lease=null observed_deployments target_matches=false configmap=null current
+  local routes_match_saved=false active_routes_match=false route_sha256
   recovery_private_state "$state"
   [[ -f $state/restore-state.json ]] \
     || production_fail "restore status requires the retained restore-state.json"
@@ -1886,6 +1938,11 @@ restore_status() {
     "$work/restore-status-routes-secret.json" > /dev/null 2>&1; then
     jq -er '.data["routes.yml"] | @base64d' "$work/restore-status-routes-secret.json" \
       > "$work/restore-status-routes.json"
+    route_sha256=$(restore_routes_sha256 "$work/restore-status-routes.json")
+    if jq -e --arg hash "$route_sha256" '.routesSha256 == $hash' \
+      "$state/restore-state.json" > /dev/null; then
+      routes_match_saved=true
+    fi
     route_config=$(jq -c '[.http.routers | to_entries[] |
       select(any(.value.entrypoints[]?; . == "web" or . == "websecure")) | .key]' \
       "$work/restore-status-routes.json")
@@ -1898,6 +1955,11 @@ restore_status() {
       > "$work/restore-status-observed-routers.json" 2> /dev/null; then
       routers=$(jq -c '[.[] | select(.name | endswith("@file")) |
         {name,status,rule,entryPoints}]' "$work/restore-status-observed-routers.json")
+      if [[ -f $work/restore-status-routes.json ]] &&
+        restore_public_routers_match "$work/restore-status-routes.json" \
+          "$work/restore-status-observed-routers.json"; then
+        active_routes_match=true
+      fi
     fi
     if restore_graphql 'query { maintenance }'; then
       maintenance_query=$(jq -c '.data.maintenance // null' "$work/restore-response.json")
@@ -1916,7 +1978,9 @@ restore_status() {
     --argjson lease "${lease:-null}" --argjson configmap "$configmap" \
     --arg graphqlMode "$graphql_mode" --argjson maintenanceQuery "$maintenance_query" \
     --argjson routes "$route_config" --argjson routers "$routers" \
-    --argjson maintenanceVerified "$target_matches" '
+    --argjson maintenanceVerified "$target_matches" \
+    --argjson routesMatchSaved "$routes_match_saved" \
+    --argjson activeRoutesMatch "$active_routes_match" '
     ($state[0]) as $saved |
     ($lease // null) as $currentLease |
     {
@@ -1936,16 +2000,21 @@ restore_status() {
           maintenanceQuery:$maintenanceQuery,maintenanceVerified:$maintenanceVerified},
         publicRoutes:{configured:$routes,active:$routers,
           barrierConfigured:($routes != null and ($routes | index("restore-public-barrier") != null)),
-          normalRoutesObserved:($routes != null and ($routes | index("restore-public-barrier") == null)
+          configuredRoutesMatchSaved:$routesMatchSaved,
+          activeRoutesMatchConfiguration:$activeRoutesMatch,
+          normalRoutesObserved:($routesMatchSaved and $activeRoutesMatch
+            and $routes != null and ($routes | index("restore-public-barrier") == null)
             and $routers != null and
             any($routers[]; .name == "graphql@file" and .status == "enabled"))}},
       writesMayHaveOpened:(($saved.writesMayHaveOpened // false)
         or ($configmap.writesMayHaveOpened // false)
-        or $graphqlMode != "maintenance" or $maintenanceQuery != true),
+        or $graphqlMode != "maintenance" or $maintenanceQuery != true
+        or ($routesMatchSaved | not) or ($activeRoutesMatch | not)),
       savedStateMatchesCluster:($configmap != null and $configmap == $saved),
       nextAction:(if ($saved.writesMayHaveOpened // false)
         or ($configmap.writesMayHaveOpened // false)
         or $graphqlMode != "maintenance" or $maintenanceQuery != true
+        or ($routesMatchSaved | not) or ($activeRoutesMatch | not)
         or $configmap == null or $configmap != $saved
         then "Inspect this status and recent application writes; explicitly close access or reconcile the transition. Do not retry restore or assume no writes occurred."
         elif $saved.status == "awaiting-signoff" and $maintenanceVerified
@@ -2037,7 +2106,8 @@ restore_reopen() {
     || production_fail "restored workloads are not ready in read-only maintenance"
   restore_forward deployment/traefik 3000 "$work/restore-forward.log" > "$work/restore-port"
   restore_graphql_port=$(cat "$work/restore-port")
-  restore_assert_saved_public_routes
+  restore_assert_saved_public_routes \
+    || production_fail "active public routers do not match the saved restore routes"
   if ! restore_graphql 'query { maintenance }' \
     || ! jq -e '.data.maintenance == true' "$work/restore-response.json" > /dev/null; then
     production_fail "GraphQL is not observed in maintenance mode before reopening"
@@ -2061,7 +2131,8 @@ restore_reopen() {
     || ! jq -e '.data.maintenance == false' "$work/restore-response.json" > /dev/null; then
     production_fail "GraphQL production mode could not be observed after reopening"
   fi
-  restore_assert_saved_public_routes
+  restore_assert_saved_public_routes \
+    || production_fail "active public routers changed during reopening; inspect status and retain ownership"
   restore_state_update --arg at "$exposure_at" '
     .status="succeeded" | .phase="operator-reopened"
     | .operatorApprovedAt=$at | .accessOpenedAt=$at
@@ -2081,6 +2152,7 @@ restore_run() {
   local manifest=$1 archive=$2 expected=$3 state=$4 confirmation=$5
   local mode=${6:-standalone} recovery_candidate=${7:-}
   local parent key name image_port artifact source_artifact source_revision current source_flag=
+  local routes_sha256
   local recovery_state_phase='' recovery_attempt='' recovery_attempts=''
   restore_mode=$mode
   backup_id=$expected
@@ -2280,6 +2352,7 @@ restore_run() {
   fi
   routes
   cp "$work/routes.yml" "$work/restore-final-routes.json"
+  routes_sha256=$(restore_routes_sha256 "$work/restore-final-routes.json")
   image_port=$(jq -er 'select(.name == "images") | .devcontainer.ports[0]' "$work/projects.jsonl")
   restore_build_public_barrier_routes "$work/routes.yml" \
     "$work/restore-barrier-routes.json" "$image_port" \
@@ -2296,16 +2369,18 @@ restore_run() {
     jq -n --arg backupId "$expected" --arg holder "$lock_holder" --arg target "$target" \
       --arg cluster "$cluster" --arg context "$context" --arg ns "$namespace" --arg artifact "$artifact" \
       --arg revision "$revision" --arg configSha256 "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" \
-      --arg leaseUid "$restore_operation_lease_uid" \
+      --arg leaseUid "$restore_operation_lease_uid" --arg routesSha256 "$routes_sha256" \
       '{version:1,backupId:$backupId,holder:$holder,target:$target,cluster:$cluster,context:$context,
         namespace:$ns,artifact:$artifact,revision:$revision,configSha256:$configSha256,
-        restoreMode:"standalone",leaseUid:$leaseUid,writesMayHaveOpened:false,
+        restoreMode:"standalone",leaseUid:$leaseUid,routesSha256:$routesSha256,
+        writesMayHaveOpened:false,
         publicRoutesMayBeOpen:false,
         status:"in-progress",phase:"prepared",recovery:"Keep ingress isolated and workers stopped; never merge or overwrite a partial import. Investigate then select a new empty target."}' \
       > "$state/restore-state.json"
   fi
   if [[ $mode == existing-reset ]]; then
-    restore_state_update '.restoreMode="existing-reset" | .leaseUid=.reset.leaseUid'
+    restore_state_update --arg routesSha256 "$routes_sha256" \
+      '.restoreMode="existing-reset" | .leaseUid=.reset.leaseUid | .routesSha256=$routesSha256'
   fi
   restore_started=true
   retain_lock=true

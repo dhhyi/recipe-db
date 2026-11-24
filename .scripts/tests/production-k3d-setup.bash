@@ -312,10 +312,15 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         else echo '{"items":[]}'; fi
         exit ;;
       *"get secret recipe-db-routes"*)
-        jq --arg bad "${MOCK_ABANDON_BAD_BARRIER:-false}" '
-          if $bad == "true" then .http.routers.graphql={entrypoints:["web"]} else . end |
-          {metadata:{labels:{"app.kubernetes.io/part-of":"recipe-db"}},
-            data:{"routes.yml":(tojson|@base64)}}' "$MOCK_LOG.restore-routes"
+        if [[ ${MOCK_ABANDON_BAD_BARRIER:-false} == true ]]; then
+          jq '.http.routers.graphql={entrypoints:["web"]} |
+            {metadata:{labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+              data:{"routes.yml":(tojson|@base64)}}' "$MOCK_LOG.restore-routes"
+        else
+          jq -n --rawfile routes "$MOCK_LOG.restore-routes" \
+            '{metadata:{labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+              data:{"routes.yml":($routes|@base64)}}'
+        fi
         exit ;;
       *"get configmap recipe-db-restore"*)
         if [[ -f $MOCK_LOG.cluster-restore-state ]]; then
@@ -1322,7 +1327,10 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
               service:"recipe-db-graphql-projection",middlewares:["graphql-ingress"]}
             and .http.services["recipe-db-graphql-projection"].loadBalancer.servers[0].url ==
               "http://graphql-projection.recipe-db.svc.cluster.local:4000"
-            and .http.routers.graphql.entrypoints == ["web"]
+            and (if .http.routers["restore-public-barrier"] != null then
+              .http.routers["restore-public-barrier"].rule == "PathPrefix(`/`)" and
+              .http.routers.graphql == null
+            else .http.routers.graphql.entrypoints == ["web"] end)
             and .http.middlewares["graphql-ingress"].headers.customRequestHeaders["X-Internal-Ingress-Token"] == ($ingress | rtrimstr("\n"))' \
             "$route_file" > /dev/null || exit 1 ;;
       esac
@@ -1767,7 +1775,9 @@ elif [[ $url == */graphql ]]; then
     *"searchRecipes"*)
       search=$(jq -r '.variables.options.q' "$request_file")
       filter=$(jq -r '.variables.options.filter_by // empty' "$request_file")
-      if [[ $filter == 'id:=`recovery-probe`' && ! -f $MOCK_LOG.probe-name ]]; then
+      if [[ ${MOCK_RESTORE_EMPTY:-false} == true ]]; then
+        echo '{"data":{"searchRecipes":{"recipes":[],"found":0}}}'
+      elif [[ $filter == 'id:=`recovery-probe`' && ! -f $MOCK_LOG.probe-name ]]; then
         echo '{"data":{"searchRecipes":{"recipes":[],"found":0}}}'
       elif [[ $search == '*' ]]; then
         echo '{"data":{"searchRecipes":{"recipes":[{"id":"fixture-recipe","name":"Recovery fixture recipe"}],"found":1}}}'
@@ -1785,7 +1795,9 @@ elif [[ $url == */graphql ]]; then
         echo '{"data":{"recipe":{"id":"fixture-recipe","name":"Recovery fixture recipe","image":null,"rating":{"count":0}}}}'
       fi ;;
     *"recipes {"*)
-        if [[ $query == *maintenance* ]]; then
+        if [[ ${MOCK_RESTORE_EMPTY:-false} == true && $query == *maintenance* ]]; then
+          echo '{"data":{"maintenance":true,"recipes":[]}}'
+        elif [[ $query == *maintenance* ]]; then
           echo '{"data":{"maintenance":true,"recipes":[{"id":"fixture-recipe","name":"Recovery fixture recipe"}]}}'
         else
           echo '{"data":{"recipes":[{"id":"fixture-recipe","name":"Recovery fixture recipe"}]}}'
