@@ -110,6 +110,26 @@ SH
   [ ! -e "$result_directory" ]
 }
 
+@test "initialization interruption reports the retained result directory" {
+  use_mise_tools
+  setup_mock_bin
+  cat > "$FIXTURE_ROOT/bin/mkdir" <<'SH'
+#!/usr/bin/env bash
+if [[ ${3:-} == */secrets ]]; then
+  kill -TERM "$PPID"
+  exit 1
+fi
+exec /bin/mkdir "$@"
+SH
+  chmod +x "$FIXTURE_ROOT/bin/mkdir"
+  local release=ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  local candidate=ghcr.io/dhhyi/recipe-db-releases@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  run bash .scripts/backup-recovery-k3d.sh "$release" "$result_directory" "$candidate"
+  [ "$status" -ne 0 ]
+  [ -d "$result_directory" ]
+  [[ $output == *"stopped during initialization"*"$result_directory"* ]]
+}
+
 @test "synthetic source and target values satisfy the real token-only production configuration contract" {
   use_mise_tools
   mkdir -p deploy work secrets "$result_directory"
@@ -222,7 +242,7 @@ bash() {
     [[ ${UNVERIFIED:-} != "$cluster" ]]
   else
     [[ $4 == "DELETE-$cluster-AND-ALL-DATA" ]]
-    [[ ${INTERRUPT_DELETE:-} != "$cluster" ]] || kill -TERM $$
+    if [[ ${INTERRUPT_DELETE:-} == "$cluster" ]]; then kill -TERM $$; return 1; fi
     [[ ${FAIL_DELETE:-} != "$cluster" ]] || return 1
     [[ ${KEEP_CLUSTER:-} == "$cluster" ]] || rm "$FIXTURE_ROOT/$cluster-present"
   fi
@@ -231,12 +251,21 @@ rm() {
   if [[ ${1:-} == -rf && ${FAIL_FILE:-} == "${*: -1}" ]]; then return 1; fi
   command rm "$@"
 }
+setsid() {
+  if [[ ${REAL_SIGNAL:-} == true ]]; then exec setsid "$@"; else "$@"; fi
+}
+jq() {
+  if [[ ${FAIL_RESULT:-} == true && ${1:-} == -n && ${2:-} == --arg && ${3:-} == release ]]; then
+    return 1
+  fi
+  command jq "$@"
+}
 SH
-  sed -n '/^mark() {/,/^}/p; /^write_result() {/,/^}/p; /^finish() {/,/^}/p; /^verify_owned_cluster() {/,/^}/p; /^delete_owned_cluster() {/,/^}/p; /^cleanup_rehearsal() {/,/^}/p' \
+  sed -n '/^mark() {/,/^}/p; /^write_result() {/,/^}/p; /^finish() {/,/^}/p; /^interrupt() {/,/^}/p; /^verify_owned_cluster() {/,/^}/p; /^run_cleanup_command() {/,/^}/p; /^delete_owned_cluster() {/,/^}/p; /^cleanup_rehearsal() {/,/^}/p' \
     .scripts/backup-recovery-k3d.sh >> cleanup-harness.sh
   cat >> cleanup-harness.sh <<'SH'
 trap finish EXIT
-trap 'exit 143' TERM
+trap 'interrupt 143' TERM
 if [[ ${EARLY_FAILURE:-} == true ]]; then exit 1; fi
 if [[ ${EARLY_INTERRUPT:-} == true ]]; then kill -TERM $$; fi
 phase=rehearsal-cleanup
@@ -306,6 +335,59 @@ SH
       [[ $output == *"source source: removed; target target: uncertain"* ]]
     fi
   done
+}
+
+@test "first cluster deletion failure does not attempt the second cluster" {
+  use_mise_tools
+  export FIXTURE_ROOT
+  prepare_cleanup_harness
+  run env FAIL_DELETE=source bash cleanup-harness.sh
+  [ "$status" -ne 0 ]
+  [ -e "$FIXTURE_ROOT/source-present" ]
+  [ -e "$FIXTURE_ROOT/target-present" ]
+  [ -e "$result_directory/secrets/token" ]
+  ! grep -q '^delete target$' "$FIXTURE_ROOT/calls"
+  jq -e '.success == false and .cleanup == {sourceCluster:"uncertain",targetCluster:"not-attempted",files:"not-attempted"}' \
+    "$result_directory/result.json"
+}
+
+@test "result writing failure cannot report success" {
+  use_mise_tools
+  export FIXTURE_ROOT
+  prepare_cleanup_harness
+  run env FAIL_RESULT=true bash cleanup-harness.sh
+  [ "$status" -ne 0 ]
+  [[ $output != *"rehearsal passed"* ]]
+  [ ! -e "$result_directory/result.json" ]
+}
+
+@test "signal stops an active external deletion process and retains remaining resources" {
+  use_mise_tools
+  export FIXTURE_ROOT
+  prepare_cleanup_harness
+  cat > driver <<'SH'
+#!/usr/bin/env bash
+touch "$FIXTURE_ROOT/deletion-started"
+sleep 30
+touch "$FIXTURE_ROOT/deletion-finished"
+SH
+  REAL_SIGNAL=true bash cleanup-harness.sh > "$FIXTURE_ROOT/output" 2>&1 &
+  local pid=$! i
+  for ((i = 0; i < 100; i++)); do
+    [[ -e $FIXTURE_ROOT/deletion-started ]] && break
+    sleep 0.1
+  done
+  [ -e "$FIXTURE_ROOT/deletion-started" ]
+  kill -TERM "$pid"
+  local exit_status=0
+  wait "$pid" || exit_status=$?
+  [ "$exit_status" -ne 0 ]
+  [ ! -e "$FIXTURE_ROOT/deletion-finished" ]
+  [ -e "$FIXTURE_ROOT/target-present" ]
+  [ -e "$result_directory/secrets/token" ]
+  ! grep -q '^delete target$' "$FIXTURE_ROOT/calls"
+  jq -e '.success == false and .cleanup.sourceCluster == "uncertain" and .cleanup.targetCluster == "not-attempted"' \
+    "$result_directory/result.json"
 }
 
 @test "file cleanup failure reports partial cleanup after both verified cluster deletions" {
