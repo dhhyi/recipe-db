@@ -122,6 +122,7 @@ PY
   export RESULT_DIRECTORY="$RESULT_PARENT/result"
   export MOCK_LOG="$BATS_TEST_TMPDIR/operations.log"
   export MOCK_FAIL_ON=
+  export MOCK_BAD_RESTORE_STATUS=
   : > "$MOCK_LOG"
   mkdir -m 700 bin
   export PATH="$FIXTURE_ROOT/bin:$PATH"
@@ -175,6 +176,9 @@ operation=$1
 values=$2
 shift 2
 printf '%s\n' "$operation" >> "$MOCK_LOG"
+cluster=$(yq -r '.cluster' "$values")
+[[ $(yq -r '.target' "$values") == local &&
+  ($cluster == recipe-db-rehearsal-*-s || $cluster == recipe-db-rehearsal-*-t) ]] || exit 97
 if [[ ${MOCK_SIGNAL_ON:-} == "$operation" ]]; then
   kill -TERM "$PPID"
   exit 0
@@ -214,7 +218,7 @@ case "$operation" in
       > "$state/restore-state.json"
     ;;
   restore-status)
-    jq -nc '{
+    jq -nc --arg bad "$MOCK_BAD_RESTORE_STATUS" '{
       savedProgress:{status:"awaiting-signoff",phase:"pending-signoff",
         writesMayHaveOpened:false,readChecks:{status:"passed"},
         publicRoutesMayBeOpen:true},
@@ -222,7 +226,11 @@ case "$operation" in
       lease:{present:true,ownedByRestore:true,phase:"awaiting-signoff"},
       observed:{graphql:{mode:"maintenance",maintenanceQuery:true},
         publicRoutes:{normalRoutesObserved:true}}
-    }'
+    } |
+    if $bad == "routes" then .observed.publicRoutes.normalRoutesObserved=false
+    elif $bad == "lease" then .lease.ownedByRestore=false
+    elif $bad == "writes" then .writesMayHaveOpened=true
+    else . end'
     ;;
   *) ;;
 esac
@@ -274,7 +282,14 @@ PY
   local invalid_receipt="$INPUT_DIRECTORY/invalid-retrieval.json" filter
   for filter in \
     '.maintenanceOperation.uploadStatus = "pending"' \
-    '.backupId = "backup-20261101123456-99"'; do
+    '.maintenanceOperation.status = "failed"' \
+    '.maintenanceOperation.phase = "in-progress"' \
+    '.backupId = "backup-20261101123456-99"' \
+    '.manifest = "/other/package.manifest.json"' \
+    '.archive = "/other/package.tar.gz"' \
+    '.maintenanceOperation.capturedAt = "2026-11-02T12:34:56Z"' \
+    '.maintenanceOperation.source.artifact = "ghcr.io/dhhyi/recipe-db-releases@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"' \
+    '.maintenanceOperation.source.revision = "0000000000000000000000000000000000000000"'; do
     jq "$filter" "$RETRIEVAL_RECEIPT" > "$invalid_receipt"
     chmod 600 "$invalid_receipt"
     run bash .scripts/prepare-cutover-backup-k3d.sh "$INPUT_MANIFEST" "$INPUT_ARCHIVE" \
@@ -312,6 +327,26 @@ PY
   [ -f "$INPUT_MANIFEST" ] && [ -f "$INPUT_ARCHIVE" ] && [ -f "$RETRIEVAL_RECEIPT" ]
   [ "$(grep -c '^delete$' "$MOCK_LOG")" -eq 2 ]
   run ! grep -q 'storage-version' "$RESULT_DIRECTORY/result.json"
+}
+
+@test "preparation retains the source cluster when restore-status lacks barrier evidence" {
+  local bad_status result_directory
+  for bad_status in routes lease writes; do
+    MOCK_BAD_RESTORE_STATUS=$bad_status
+    result_directory="$RESULT_PARENT/result-$bad_status"
+    : > "$MOCK_LOG"
+    run bash .scripts/prepare-cutover-backup-k3d.sh "$INPUT_MANIFEST" "$INPUT_ARCHIVE" \
+      "$RETRIEVAL_RECEIPT" "$CANDIDATE_RELEASE" "$result_directory"
+    [ "$status" -ne 0 ]
+    jq -e '
+      .status == "failed" and .phase == "verify-cutover-read-checks"
+      and .clusters.source.created and (.clusters.source.deleted | not)
+      and (.clusters.target.creationAttempted | not)
+      and .failureReason != null
+    ' "$result_directory/result.json"
+    [ -d "$result_directory/.private/inputs" ]
+    [ ! -e "$result_directory/cutover-backup" ]
+  done
 }
 
 @test "failed second restore preserves both clusters and private input copies for operator investigation" {

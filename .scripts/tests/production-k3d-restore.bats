@@ -314,6 +314,8 @@ load production-k3d-restore-setup
   [[ $output == *"backup source revision differs from the immutable release artifact"* ]]
   [ ! -e "$MOCK_LOG.imported" ]
   [ ! -e "$cutover_state/restore-state.json" ]
+  run ! grep -Fq "$candidate" "$MOCK_LOG"
+  run ! grep -q '^kubectl' "$MOCK_LOG"
 }
 
 @test "restore accepts a valid empty dataset without creating an application record" {
