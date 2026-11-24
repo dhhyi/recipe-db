@@ -142,12 +142,13 @@ SH
 #!/usr/bin/env bash
 if [[ ${MOCK_BLOCK_ON:-} == candidate-fetch ]]; then
   (
-    trap 'touch "$MOCK_LOG.active-child-terminated"; exit 0' TERM
+    trap 'touch "$MOCK_LOG.active-child-terminated"; exit 0' TERM HUP
     touch "$MOCK_LOG.active-child-started"
     while :; do sleep 0.1; done
   ) &
   child_pid=$!
   trap 'kill -TERM "$child_pid" 2>/dev/null || true; wait "$child_pid" 2>/dev/null || true; touch "$MOCK_LOG.active-command-terminated"; exit 143' TERM
+  trap 'kill -HUP "$child_pid" 2>/dev/null || true; wait "$child_pid" 2>/dev/null || true; touch "$MOCK_LOG.active-command-terminated"; exit 129' HUP
   wait "$child_pid"
   exit $?
 fi
@@ -171,12 +172,13 @@ fi
 if [[ ${MOCK_BLOCK_PRIVATE_CLEANUP:-false} == true &&
   $target == "$RESULT_DIRECTORY/.private" ]]; then
   (
-    trap 'touch "$MOCK_LOG.active-child-terminated"; exit 0' TERM
+    trap 'touch "$MOCK_LOG.active-child-terminated"; exit 0' TERM HUP
     touch "$MOCK_LOG.active-child-started"
     while :; do sleep 0.1; done
   ) &
   child_pid=$!
   trap 'kill -TERM "$child_pid" 2>/dev/null || true; wait "$child_pid" 2>/dev/null || true; touch "$MOCK_LOG.active-command-terminated"' TERM
+  trap 'kill -HUP "$child_pid" 2>/dev/null || true; wait "$child_pid" 2>/dev/null || true; touch "$MOCK_LOG.active-command-terminated"' HUP
   wait "$child_pid"
 fi
 exec "$REAL_RM" "$@"
@@ -209,14 +211,17 @@ printf '%s\n' "$operation" >> "$MOCK_LOG"
 cluster=$(yq -r '.cluster' "$values")
 [[ $(yq -r '.target' "$values") == local &&
   ($cluster == recipe-db-rehearsal-*-s || $cluster == recipe-db-rehearsal-*-t) ]] || exit 97
-if [[ ${MOCK_BLOCK_ON:-} == "$operation" ]]; then
+if [[ ${MOCK_BLOCK_ON:-} == "$operation" &&
+  ($operation != delete || -z ${MOCK_BLOCK_DELETE_NUMBER:-} ||
+    $(grep -c '^delete$' "$MOCK_LOG") == "$MOCK_BLOCK_DELETE_NUMBER") ]]; then
   (
-    trap 'touch "$MOCK_LOG.active-child-terminated"; exit 0' TERM
+    trap 'touch "$MOCK_LOG.active-child-terminated"; exit 0' TERM HUP
     touch "$MOCK_LOG.active-child-started"
     while :; do sleep 0.1; done
   ) &
   child_pid=$!
   trap 'kill -TERM "$child_pid" 2>/dev/null || true; wait "$child_pid" 2>/dev/null || true; touch "$MOCK_LOG.active-command-terminated"; exit 143' TERM
+  trap 'kill -HUP "$child_pid" 2>/dev/null || true; wait "$child_pid" 2>/dev/null || true; touch "$MOCK_LOG.active-command-terminated"; exit 129' HUP
   wait "$child_pid"
   exit $?
 fi
@@ -232,6 +237,8 @@ fi
 case "$operation" in
   cutover-restore)
     manifest=$1 archive=$2 id=$3 state=$4 candidate=$5 snapshot=$6
+    jq -n --arg manifest "$manifest" --arg archive "$archive" --arg id "$id" \
+      '{manifest:$manifest,archive:$archive,backupId:$id}' > "$MOCK_LOG.cutover-restore-inputs"
     cluster=$(yq -r '.cluster' "$values")
     context=$(yq -r '.context' "$values")
     source_release=$(jq -r '.source.artifact' "$manifest")
@@ -250,6 +257,8 @@ case "$operation" in
     ;;
   restore)
     manifest=$1 archive=$2 id=$3 state=$4
+    jq -n --arg manifest "$manifest" --arg archive "$archive" --arg id "$id" \
+      '{manifest:$manifest,archive:$archive,backupId:$id}' > "$MOCK_LOG.restore-inputs"
     mkdir -m 700 "$state"
     jq -n --arg id "$id" --arg candidate "$(jq -r .source.artifact "$manifest")" \
       --arg revision "$(jq -r .source.revision "$manifest")" '{
@@ -393,15 +402,47 @@ PY
   ' "$RESULT_DIRECTORY/provenance.json"
   [ -f "$INPUT_MANIFEST" ] && [ -f "$INPUT_ARCHIVE" ] && [ -f "$RETRIEVAL_RECEIPT" ]
   [ "$(grep -c '^delete$' "$MOCK_LOG")" -eq 2 ]
+  python3 - "$MOCK_LOG.cutover-restore-inputs" "$MOCK_LOG.restore-inputs" \
+    "$RESULT_DIRECTORY" "$INPUT_MANIFEST" "$INPUT_ARCHIVE" << 'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+source_input = json.loads(Path(sys.argv[1]).read_text())
+target_input = json.loads(Path(sys.argv[2]).read_text())
+result = Path(sys.argv[3])
+assert Path(source_input["manifest"]).parent == result / ".private" / "inputs"
+assert Path(source_input["archive"]).parent == result / ".private" / "inputs"
+provenance = json.loads((result / "provenance.json").read_text())
+assert source_input["backupId"] == provenance["previousBackup"]["backupId"]
+assert hashlib.sha256(Path(sys.argv[4]).read_bytes()).hexdigest() == \
+    provenance["previousBackup"]["manifestSha256"]
+assert hashlib.sha256(Path(sys.argv[5]).read_bytes()).hexdigest() == \
+    provenance["previousBackup"]["archiveSha256"]
+target_manifest = Path(target_input["manifest"])
+target_archive = Path(target_input["archive"])
+assert target_manifest.parent == result / "cutover-backup"
+assert target_archive.parent == result / "cutover-backup"
+assert target_input["backupId"] != source_input["backupId"]
+package = json.loads(target_manifest.read_text())
+assert package["backupId"] == target_input["backupId"]
+assert package["source"] == provenance["cutoverBackup"]["source"]
+assert package["archive"]["sha256"] == hashlib.sha256(target_archive.read_bytes()).hexdigest()
+operations = Path(sys.argv[1]).with_name("operations.log").read_text().splitlines()
+assert operations.index("cutover-restore") < operations.index("restore")
+PY
   run ! grep -q 'storage-version' "$RESULT_DIRECTORY/result.json"
 }
 
 @test "verified-unchanged receipt binds the previous package to the retained snapshot contents" {
-  local operation_id=backup-20261102123456-2 receipt="$INPUT_DIRECTORY/unchanged-retrieval.json"
-  local fingerprint
+  local operation_id receipt="$INPUT_DIRECTORY/unchanged-retrieval.json"
+  local fingerprint captured_at invalid_receipt result_directory index=0
+  operation_id=$(jq -er .backupId "$INPUT_MANIFEST")
   fingerprint=$(jq -er .contentFingerprint "$INPUT_MANIFEST")
+  captured_at=$(jq -er .capturedAt "$INPUT_MANIFEST")
   jq --arg operationId "$operation_id" --arg fingerprint "$fingerprint" \
-    --arg capturedAt "2026-11-02T12:34:56Z" '
+    --arg capturedAt "$captured_at" '
     .maintenanceOperation.uploadStatus = "verified-unchanged"
     | .maintenanceOperation.backupId = $operationId
     | .maintenanceOperation.capturedAt = $capturedAt
@@ -416,11 +457,29 @@ PY
   jq -e --arg operationId "$operation_id" '
     .maintenanceOperation.backupId == $operationId
     and .maintenanceOperation.packageBackupId == .previousBackup.backupId
+    and .maintenanceOperation.capturedAt == .previousBackup.capturedAt
     and .maintenanceOperation.uploadStatus == "verified-unchanged"
   ' "$RESULT_DIRECTORY/provenance.json"
+  for filter in \
+    '.maintenanceOperation.backupId = "backup-20261102123456-2"' \
+    '.maintenanceOperation.capturedAt = "2026-11-02T12:34:56Z"'; do
+    index=$((index + 1))
+    invalid_receipt="$INPUT_DIRECTORY/unchanged-retrieval-invalid-$index.json"
+    result_directory="$RESULT_PARENT/result-verified-unchanged-invalid-$index"
+    jq "$filter" "$receipt" > "$invalid_receipt"
+    chmod 600 "$invalid_receipt"
+    export RESULT_DIRECTORY=$result_directory
+    : > "$MOCK_LOG"
+    run bash .scripts/prepare-cutover-backup-k3d.sh "$INPUT_MANIFEST" "$INPUT_ARCHIVE" \
+      "$invalid_receipt" "$CANDIDATE_RELEASE" "$result_directory"
+    [ "$status" -ne 0 ]
+    [[ $output == *"retrieval receipt does not verify this exact final backup"* ]]
+    [ ! -e "$result_directory" ]
+    [ ! -s "$MOCK_LOG" ]
+  done
 }
 
-@test "failed second cluster cleanup records the remaining target and preserves evidence" {
+@test "failed second cluster deletion reports partial cleanup and preserves evidence" {
   export MOCK_FAIL_DELETE_NUMBER=2
   run bash .scripts/prepare-cutover-backup-k3d.sh "$INPUT_MANIFEST" "$INPUT_ARCHIVE" \
     "$RETRIEVAL_RECEIPT" "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY"
@@ -430,6 +489,7 @@ PY
     and .clusters.source.deletionAttempted
     and .clusters.target.created and .clusters.target.deletionAttempted
     and (.clusters.target.deleted == null)
+    and .failureReason == "success cleanup stopped after the source cluster was deleted; target cluster deletion outcome is uncertain; no retry or recreation was attempted"
     and (.cleanup.privateDataRemoved | not) and (.cleanup.inputCopiesRemoved | not)' \
     "$RESULT_DIRECTORY/result.json"
   [ -d "$RESULT_DIRECTORY/.private/inputs" ]
@@ -438,6 +498,22 @@ PY
   [ "$(find "$RESULT_DIRECTORY/cutover-backup" -type f | wc -l)" -eq 2 ]
   [ -f "$RESULT_DIRECTORY/provenance.json" ]
   [ "$(grep -c '^delete$' "$MOCK_LOG")" -eq 2 ]
+}
+
+@test "failed first cluster deletion stops without attempting the target or retrying" {
+  export MOCK_FAIL_DELETE_NUMBER=1
+  run bash .scripts/prepare-cutover-backup-k3d.sh "$INPUT_MANIFEST" "$INPUT_ARCHIVE" \
+    "$RETRIEVAL_RECEIPT" "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY"
+  [ "$status" -ne 0 ]
+  jq -e '.status == "failed" and .phase == "remove-successful-rehearsal-clusters"
+    and .clusters.source.deletionAttempted and (.clusters.source.deleted == null)
+    and .clusters.target.created and (.clusters.target.deletionAttempted | not)
+    and (.clusters.target.deleted | not)
+    and .failureReason == "success cleanup stopped with the source cluster deletion outcome uncertain; target cluster deletion was not attempted; no retry or recreation was attempted"
+    and (.cleanup.privateDataRemoved | not)' "$RESULT_DIRECTORY/result.json"
+  [ "$(grep -c '^delete$' "$MOCK_LOG")" -eq 1 ]
+  [ "$(grep -c '^create-new$' "$MOCK_LOG")" -eq 2 ]
+  [ -d "$RESULT_DIRECTORY/.private/inputs" ]
 }
 
 @test "preparation retains the source cluster when restore-status lacks barrier evidence" {
@@ -508,10 +584,10 @@ PY
     "$RESULT_DIRECTORY/result.json"
 }
 
-@test "SIGINT and SIGTERM stop active commands and report cluster state accurately" {
-  local signal operation expected_status expected_phase source_attempted source_created \
+@test "SIGINT SIGTERM and SIGHUP stop active commands and report cluster state accurately" {
+  local signal operation expected_status expected_phase expected_reason source_attempted source_created \
     source_deleted source_deletion_attempted result_directory pid deadline result output_log
-  for signal in TERM INT; do
+  for signal in TERM INT HUP; do
     for operation in create-new cutover-restore candidate-fetch delete; do
       export MOCK_BLOCK_ON=$operation
       result_directory="$RESULT_PARENT/result-$operation-$signal"
@@ -552,7 +628,11 @@ PY
       done
       kill -s "$signal" "$(cat "$MOCK_LOG.preparation-pid")"
       if wait "$pid"; then result=0; else result=$?; fi
-      if [[ $signal == TERM ]]; then expected_status=143; else expected_status=130; fi
+      case "$signal" in
+        TERM) expected_status=143 ;;
+        INT) expected_status=130 ;;
+        HUP) expected_status=129 ;;
+      esac
       [ "$result" -eq "$expected_status" ]
       [ -e "$MOCK_LOG.active-command-terminated" ]
       [ -e "$MOCK_LOG.active-child-terminated" ]
@@ -575,17 +655,22 @@ PY
           ;;
         delete)
           expected_phase=remove-successful-rehearsal-clusters
+          expected_reason='success cleanup stopped with the source cluster deletion outcome uncertain; target cluster deletion was not attempted; no retry or recreation was attempted'
           source_deleted=null
           source_deletion_attempted=true
           ;;
       esac
-      jq -e --arg signal "$signal" --arg phase "$expected_phase" \
+      if [[ $operation != delete ]]; then
+        expected_reason="interrupted by SIG$signal"
+      fi
+      jq -e --arg phase "$expected_phase" \
+        --arg reason "$expected_reason" \
         --argjson sourceAttempted "$source_attempted" \
         --argjson sourceCreated "$source_created" \
         --argjson sourceDeleted "$source_deleted" \
         --argjson sourceDeletionAttempted "$source_deletion_attempted" '
         .status == "failed" and .phase == $phase
-        and .failureReason == ("interrupted by SIG" + $signal)
+        and .failureReason == $reason
         and .clusters.source.creationAttempted == $sourceAttempted
         and .clusters.source.created == $sourceCreated
         and .clusters.source.deletionAttempted == $sourceDeletionAttempted
@@ -602,6 +687,60 @@ PY
       fi
     done
   done
+}
+
+@test "interruption during second cluster deletion reports partial cleanup without retry or recreation" {
+  local pid result_directory output_log deadline result
+  export MOCK_BLOCK_ON=delete MOCK_BLOCK_DELETE_NUMBER=2
+  result_directory="$RESULT_PARENT/result-second-delete-interrupted"
+  export RESULT_DIRECTORY=$result_directory
+  rm -f "$MOCK_LOG.active-child-started" "$MOCK_LOG.active-child-terminated" \
+    "$MOCK_LOG.active-command-terminated" "$MOCK_LOG.preparation-pid"
+  : > "$MOCK_LOG"
+  output_log="$BATS_TEST_TMPDIR/interruption-second-delete.log"
+  python3 - "$MOCK_LOG.preparation-pid" bash .scripts/prepare-cutover-backup-k3d.sh \
+    "$INPUT_MANIFEST" "$INPUT_ARCHIVE" "$RETRIEVAL_RECEIPT" "$CANDIDATE_RELEASE" \
+    "$result_directory" > "$output_log" 2>&1 << 'PY' &
+import signal
+import subprocess
+import sys
+
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+pid_file, *command = sys.argv[1:]
+process = subprocess.Popen(command, start_new_session=True)
+with open(pid_file, "w", encoding="ascii") as output:
+    output.write(str(process.pid))
+sys.exit(process.wait())
+PY
+  pid=$!
+  deadline=$((SECONDS + 30))
+  while [[ ! -e "$MOCK_LOG.active-child-started" ]]; do
+    if ! kill -0 "$pid" 2> /dev/null || ((SECONDS >= deadline)); then
+      if [[ -s "$MOCK_LOG.preparation-pid" ]]; then
+        kill -TERM "$(cat "$MOCK_LOG.preparation-pid")" 2> /dev/null || true
+      else
+        kill -TERM "$pid" 2> /dev/null || true
+      fi
+      wait "$pid" 2> /dev/null || true
+      cat "$output_log"
+      return 1
+    fi
+    sleep 0.1
+  done
+  kill -TERM "$(cat "$MOCK_LOG.preparation-pid")"
+  if wait "$pid"; then result=0; else result=$?; fi
+  [ "$result" -eq 143 ]
+  [ -e "$MOCK_LOG.active-command-terminated" ]
+  [ -e "$MOCK_LOG.active-child-terminated" ]
+  jq -e '.status == "failed" and .phase == "remove-successful-rehearsal-clusters"
+    and .failureReason == "success cleanup stopped after the source cluster was deleted; target cluster deletion outcome is uncertain; no retry or recreation was attempted"
+    and .clusters.source.deleted
+    and .clusters.target.deletionAttempted and (.clusters.target.deleted == null)
+    and (.cleanup.privateDataRemoved | not) and (.cleanup.inputCopiesRemoved | not)' \
+    "$result_directory/result.json"
+  [ "$(grep -c '^delete$' "$MOCK_LOG")" -eq 2 ]
+  [ "$(grep -c '^create-new$' "$MOCK_LOG")" -eq 2 ]
+  [ -d "$result_directory/.private/inputs" ]
 }
 
 @test "SIGTERM during final private cleanup persists result and records completed cluster deletion" {

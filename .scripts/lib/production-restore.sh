@@ -1548,7 +1548,7 @@ restore_verify_volume_identity() {
 }
 
 restore_import() {
-  local entry name archive pod
+  local entry name archive pod root_uid root_gid root_mode root_mode_octal
   while IFS= read -r entry; do
     name=$(jq -r .service <<< "$entry")
     archive=$(jq -r .archive <<< "$entry")
@@ -1566,16 +1566,47 @@ restore_import() {
     kube exec "$pod" -- sh -ec \
       'entries=$(find /data -mindepth 1 -maxdepth 1 -print -quit) || exit 1; test -z "$entries"' \
       || return 1
+    python3 "$root/.scripts/validate-backup-snapshot.py" --include-metadata \
+      "$work/validated/$archive" > "$work/source-$name-metadata.json" || return 1
+    root_uid=$(jq -r '[.directoryMetadata[] | select(.path == ".")][0].uid // empty' \
+      "$work/source-$name-metadata.json") || return 1
+    if [[ -n $root_uid ]]; then
+      root_gid=$(jq -er '[.directoryMetadata[] | select(.path == ".")][0].gid' \
+        "$work/source-$name-metadata.json") || return 1
+      root_mode=$(jq -er '[.directoryMetadata[] | select(.path == ".")][0].mode' \
+        "$work/source-$name-metadata.json") || return 1
+      printf -v root_mode_octal '%o' "$root_mode"
+    fi
     # Preserve numeric ownership and permission bits from the exact recorded release.
     kube exec -i "$pod" -- tar -xpkf - --numeric-owner -C /data < "$work/validated/$archive" || return 1
+    if [[ -n $root_uid ]]; then
+      kube exec "$pod" -- sh -ec 'chown "$1:$2" /data && chmod "$3" /data' \
+        sh "$root_uid" "$root_gid" "$root_mode_octal" || return 1
+    fi
     kube exec "$pod" -- sync || return 1
     kube exec "$pod" -- tar -C /data -cf - . > "$work/restored-$name.tar" || return 1
-    python3 "$root/.scripts/validate-backup-snapshot.py" "$work/restored-$name.tar" \
+    python3 "$root/.scripts/validate-backup-snapshot.py" --include-metadata \
+      "$work/restored-$name.tar" \
       > "$work/restored-$name-files.json" || return 1
     jq -e --slurpfile actual "$work/restored-$name-files.json" \
-      '(.files | sort_by(.path)) == ($actual[0] | sort_by(.path))' \
+      '(.files | sort_by(.path)) == ($actual[0].files | sort_by(.path))' \
       <<< "$entry" > /dev/null || {
       printf 'production: restored volume verification failed: %s\n' "$name" >&2
+      return 1
+    }
+    jq -e --slurpfile source "$work/source-$name-metadata.json" \
+      '. as $actual
+        | ($actual.fileMetadata == $source[0].fileMetadata)
+        and (all($source[0].directories[]; . as $path |
+          any($actual.directories[]; . == $path)))
+        and (all($source[0].directoryMetadata[] | select(.path != "."); . as $expected |
+          any($actual.directoryMetadata[]; . == $expected)))
+        and (if any($source[0].directoryMetadata[]; .path == ".")
+          then ([$actual.directoryMetadata[] | select(.path == ".")]
+            == [$source[0].directoryMetadata[] | select(.path == ".")])
+          else true end)' \
+      "$work/restored-$name-files.json" > /dev/null || {
+      printf 'production: restored volume ownership or permissions differ: %s\n' "$name" >&2
       return 1
     }
   done < <(jq -c '.inventory[]' "$work/restore-manifest.json")

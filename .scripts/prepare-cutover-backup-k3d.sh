@@ -103,6 +103,9 @@ jq -e --arg id "$backup_id" --arg manifest "$input_manifest" --arg archive "$inp
   and (.maintenanceOperation.uploadStatus != "verified-upload"
     or (.maintenanceOperation.backupId == $id
       and .maintenanceOperation.capturedAt == $capturedAt))
+  and (.maintenanceOperation.uploadStatus != "verified-unchanged"
+    or (.maintenanceOperation.backupId == $id
+      and .maintenanceOperation.capturedAt == $capturedAt))
   and .maintenanceOperation.source.artifact == $artifact
   and .maintenanceOperation.source.revision == $revision
 ' "$retrieval_receipt" > /dev/null || fail 'retrieval receipt does not verify this exact final backup'
@@ -192,8 +195,21 @@ on_exit() {
   trap - EXIT
   trap 'record_cleanup_signal INT 130' INT
   trap 'record_cleanup_signal TERM 143' TERM
-  if [[ $status != 0 && -z $failure_reason ]]; then
-    failure_reason="command failed during $phase (exit $status); preserve both clusters and investigate manually"
+  trap 'record_cleanup_signal HUP 129' HUP
+  if [[ $status != 0 && $phase == remove-successful-rehearsal-clusters ]]; then
+    if [[ $source_cluster_deleted == true && $target_cluster_deleted == true ]]; then
+      failure_reason="both rehearsal clusters were deleted before cleanup was interrupted; no retry or recreation was attempted"
+    elif [[ $source_cluster_deleted == true && $target_cluster_deletion_attempted == true ]]; then
+      failure_reason="success cleanup stopped after the source cluster was deleted; target cluster deletion outcome is uncertain; no retry or recreation was attempted"
+    elif [[ $source_cluster_deleted == true ]]; then
+      failure_reason="success cleanup stopped after the source cluster was deleted; target cluster deletion was not attempted; no retry or recreation was attempted"
+    elif [[ $source_cluster_deletion_attempted == true ]]; then
+      failure_reason="success cleanup stopped with the source cluster deletion outcome uncertain; target cluster deletion was not attempted; no retry or recreation was attempted"
+    else
+      failure_reason="success cleanup stopped before cluster deletion began; no retry or recreation was attempted"
+    fi
+  elif [[ $status != 0 && -z $failure_reason ]]; then
+    failure_reason="command failed during $phase (exit $status); no automatic recovery, retry, recreation or cluster deletion was attempted"
   fi
   if [[ $success == true ]]; then
     if rm -rf -- "$private"; then
@@ -212,7 +228,7 @@ on_exit() {
     failure_reason='result.json could not be persisted; inspect the result directory and retained clusters'
     write_result || printf 'Cutover backup preparation: could not write result.json\n' >&2
   fi
-  trap '' INT TERM
+  trap '' INT TERM HUP
   if [[ -n $cleanup_signal ]]; then
     apply_cleanup_interruption
     write_result || {
@@ -223,7 +239,9 @@ on_exit() {
     }
   fi
   if [[ $status != 0 ]]; then
-    printf 'Cutover backup preparation stopped in phase %s; do not delete clusters automatically.\n' "$phase" >&2
+    printf 'Cutover backup preparation stopped in phase %s; no automatic recovery, retry or recreation was attempted.\n' \
+      "$phase" >&2
+    printf 'Inspect the exact per-cluster state before taking operator action.\n' >&2
     printf 'Inspect %s/result.json and the private logs under %s/.private/logs.\n' \
       "$result_directory" "$result_directory" >&2
   fi
@@ -270,6 +288,7 @@ interrupt_active_command() {
 }
 trap 'interrupt_active_command INT 130' INT
 trap 'interrupt_active_command TERM 143' TERM
+trap 'interrupt_active_command HUP 129' HUP
 
 run_active_process() {
   local log=$1 output=$2 status signal
@@ -504,7 +523,8 @@ jq -n --arg previousId "$backup_id" --arg previousManifestSha "$source_manifest_
   --arg createdAt "$(date -u +%FT%TZ)" '
   {schemaVersion:1,createdAt:$createdAt,
     previousBackup:{backupId:$previousId,manifestSha256:$previousManifestSha,
-      archiveSha256:$previousArchiveSha,source:$previous[0].source,
+      archiveSha256:$previousArchiveSha,capturedAt:$previous[0].capturedAt,
+      source:$previous[0].source,
       verifiedUploadStatus:$verification},
     maintenanceOperation:{backupId:$maintenanceBackupId,packageBackupId:$previousId,
       capturedAt:$maintenanceCapturedAt,uploadStatus:$verification},
@@ -518,15 +538,10 @@ phase=verify-cleanup-ownership
 run_cluster_lifecycle "$private/logs/source-verify.log" verify "$source_values"
 run_cluster_lifecycle "$private/logs/target-verify.log" verify "$target_values"
 phase=remove-successful-rehearsal-clusters
-source_cluster_deletion_attempted=true
-source_cluster_deleted=null
+source_cluster_deletion_attempted=true source_cluster_deleted=null
 run_cluster_lifecycle "$private/logs/source-delete.log" delete "$source_values" \
   "DELETE-$source_cluster-AND-ALL-DATA"
-source_cluster_deleted=true
-target_cluster_deletion_attempted=true
-target_cluster_deleted=null
+source_cluster_deleted=true target_cluster_deletion_attempted=true target_cluster_deleted=null
 run_cluster_lifecycle "$private/logs/target-delete.log" delete "$target_values" \
   "DELETE-$target_cluster-AND-ALL-DATA"
-target_cluster_deleted=true
-phase=complete
-success=true
+target_cluster_deleted=true phase=complete success=true

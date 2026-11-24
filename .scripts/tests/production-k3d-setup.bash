@@ -537,6 +537,20 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
           }]}]
         }'
         exit ;;
+      *"exec restore-volume-"*"-- sh -ec chown"*)
+        for argument in "$@"; do
+          if [[ $argument == restore-volume-* ]]; then
+            name="${argument#restore-volume-}"
+            break
+          fi
+        done
+        [[ -n ${name:-} ]] || exit 98
+        uid="${@: -3:1}"
+        gid="${@: -2:1}"
+        mode="${*: -1}"
+        chown "$uid:$gid" "$FIXTURE_ROOT/imported/$name"
+        chmod "$mode" "$FIXTURE_ROOT/imported/$name"
+        exit ;;
       *"exec "*restore-volume-*"-- sh -ec"*)
         if [[ ${MOCK_RESTORE_FIND_FAIL:-false} == true ]]; then
           mkdir -p "$FIXTURE_ROOT/find-error"
@@ -567,7 +581,15 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       *"exec restore-volume-"*"-- tar -C /data -cf - .")
         name="${*: -8:1}"
         name="${name#restore-volume-}"
-        tar -C "$FIXTURE_ROOT/imported/$name" -cf - .
+        if [[ ${MOCK_RESTORE_METADATA_DRIFT:-} == owner ]]; then
+          tar --owner="$((EUID + 1))" --group="$(($(id -g) + 1))" --numeric-owner \
+            -C "$FIXTURE_ROOT/imported/$name" -cf - .
+        else
+          if [[ ${MOCK_RESTORE_METADATA_DRIFT:-} == mode ]]; then
+            chmod 600 "$FIXTURE_ROOT/imported/$name/nested/data.bin"
+          fi
+          tar -C "$FIXTURE_ROOT/imported/$name" -cf - .
+        fi
         exit ;;
       *"exec restore-volume-"*"-- sync") exit ;;
       *"delete pod restore-image-probe-"*)

@@ -201,6 +201,28 @@ load production-k3d-restore-setup
   run ! grep -q private-restore-token "$MOCK_LOG"
 }
 
+@test "restore rejects file permission changes after import" {
+  restore_fixture
+  export MOCK_RESTORE_METADATA_DRIFT=mode
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"restored volume ownership or permissions differ: recipes"* ]]
+  [ -e "$MOCK_LOG.imported" ]
+  [ ! -e "$RESTORE_STATE/restore-state.json" ] \
+    || ! jq -e '.import.status == "complete"' "$RESTORE_STATE/restore-state.json"
+}
+
+@test "restore rejects numeric ownership changes after import" {
+  restore_fixture
+  export MOCK_RESTORE_METADATA_DRIFT=owner
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"restored volume ownership or permissions differ: recipes"* ]]
+  [ -e "$MOCK_LOG.imported" ]
+  [ ! -e "$RESTORE_STATE/restore-state.json" ] \
+    || ! jq -e '.import.status == "complete"' "$RESTORE_STATE/restore-state.json"
+}
+
 @test "restore rejects a package revision that differs from its immutable source artifact" {
   restore_fixture
   printf 'different source artifact revision\n' > source-revision.txt
@@ -266,18 +288,20 @@ load production-k3d-restore-setup
   [ ! -e "$cutover_snapshot/backup-state.json" ]
   cmp "$FIXTURE_ROOT/tar-data/recipes/nested/data.bin" \
     "$FIXTURE_ROOT/imported/recipes/nested/data.bin"
-  tar --numeric-owner -tvf "$FIXTURE_ROOT/recipes.tar" | grep -Fq '1001/1002'
-  [ "$(id -u)" != 1001 ] && [ "$(id -g)" != 1002 ]
+  tar --numeric-owner -tvf "$FIXTURE_ROOT/recipes.tar" | grep -Fq "$(id -u)/$(id -g)"
   grep -Fq 'tar -xpkf - --numeric-owner' "$MOCK_LOG"
   for path in recipes/nested recipes/nested/data.bin; do
     [ "$(stat -c '%a:%Y' "$FIXTURE_ROOT/tar-data/$path")" = \
       "$(stat -c '%a:%Y' "$FIXTURE_ROOT/imported/$path")" ]
-    if [[ $EUID -eq 0 ]]; then
-      [ "$(stat -c '%u:%g' "$FIXTURE_ROOT/imported/$path")" = "1001:1002" ]
-    fi
+    [ "$(stat -c '%u:%g' "$FIXTURE_ROOT/tar-data/$path")" = \
+      "$(stat -c '%u:%g' "$FIXTURE_ROOT/imported/$path")" ]
   done
+  [ "$(stat -c '%a:%u:%g' "$FIXTURE_ROOT/tar-data/recipes")" = \
+    "$(stat -c '%a:%u:%g' "$FIXTURE_ROOT/imported/recipes")" ]
   [ ! -e "$MOCK_LOG.restore-mutation-attempt" ]
   run ! grep -Eq 'createRecipe|updateRecipe|deleteRecipe|recipe/probe' "$MOCK_LOG"
+  run ! grep -Eq 'apply -f .*backup-cleanup-job\.yml|patch job backup-cleanup|wait --for=condition=complete job/backup-cleanup' \
+    "$MOCK_LOG"
   [ "$(jq -r '.metadata.annotations["recipe-db/phase"]' "$MOCK_LOG.lease")" = awaiting-signoff ]
   [ "$(wc -l < "$MOCK_LOG.forward-pids-traefik")" -eq 2 ]
   [ ! -e "$MOCK_LOG.traefik-forward-overlap" ]

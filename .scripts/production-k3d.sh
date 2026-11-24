@@ -4728,8 +4728,12 @@ backup_run_locked() {
   cluster_operation_lock_update backend-transition || return 1
   backup_start_modes || return 1
   backup_state_write backup-mode backend-backup-mode || return 1
-  backup_cleanup_job || return 1
-  backup_state_write cleanup-complete cleanup-complete || return 1
+  if [[ ${cutover_readonly_capture:-false} == true ]]; then
+    backup_state_write backup-mode cleanup-skipped || return 1
+  else
+    backup_cleanup_job || return 1
+    backup_state_write cleanup-complete cleanup-complete || return 1
+  fi
   if [[ $command = backup-enter ]]; then
     printf 'production: backup mode entered; holder=%s; recovery state=%s/backup-state.json\n' \
       "$lock_holder" "$snapshot"
@@ -4784,6 +4788,7 @@ cutover_capture_snapshot() {
   capture_id="backup-$(date -u +%Y%m%d%H%M%S)-$$"
   local backup_id=$capture_id
   local command=backup-run
+  local cutover_readonly_capture=true
   local locked=true retain_lock=true
   local cutover_status="$work/cutover-restore-status.json"
   restore_stop_forward

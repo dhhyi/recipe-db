@@ -488,7 +488,7 @@ drive = root / "drive"
 package_id = os.environ["PACKAGE_ID"]
 operation_id = os.environ["OPERATION_ID"]
 manifest_path = next(drive.glob(f"*{package_id}.manifest.json"))
-package = json.loads(manifest_path.read_text())
+placeholder = json.loads(manifest_path.read_text())
 now = datetime.now(timezone.utc).replace(microsecond=0)
 source = {
     "target": "pi", "cluster": "recipe-db-pi", "context": "recipe-db-pi",
@@ -498,53 +498,72 @@ source = {
 }
 operation_captured = (now - timedelta(hours=1)).isoformat()
 file_data = b"final snapshot data\n"
-inner = io.BytesIO()
-with tarfile.open(fileobj=inner, mode="w", format=tarfile.USTAR_FORMAT) as archive:
-    info = tarfile.TarInfo("data.txt")
-    info.size = len(file_data)
-    info.mode, info.uid, info.gid, info.mtime = 0o640, 123, 456, 0
-    archive.addfile(info, io.BytesIO(file_data))
-archive_bytes = inner.getvalue()
-archive_sha = hashlib.sha256(archive_bytes).hexdigest()
-operation_snapshot = {
-    "format": "recipe-db-pvc-snapshot", "formatVersion": 1,
-    "backupId": operation_id, "capturedAt": operation_captured, "source": source,
-    "inventory": [{
-        "service": "recipes", "role": "authoritative-read-only", "pvc": "recipes",
-        "archive": "recipes.tar", "sizeBytes": len(archive_bytes), "sha256": archive_sha,
-        "fileCount": 1,
-        "files": [{"path": "data.txt", "sizeBytes": len(file_data),
-                   "sha256": hashlib.sha256(file_data).hexdigest()}],
-    }],
-}
 spec = importlib.util.spec_from_file_location(
     "upload", root.parent / "provisioning/files/backup-upload.py"
 )
 upload = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(upload)
+
+def make_archive(mode, uid, gid):
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        info = tarfile.TarInfo("data.txt")
+        info.size = len(file_data)
+        info.mode, info.uid, info.gid, info.mtime = mode, uid, gid, 0
+        archive.addfile(info, io.BytesIO(file_data))
+    return buffer.getvalue()
+
+file_inventory = [{
+    "path": "data.txt", "sizeBytes": len(file_data),
+    "sha256": hashlib.sha256(file_data).hexdigest(),
+}]
+
+def make_snapshot(backup_id, captured_at, archive_bytes):
+    return {
+        "format": "recipe-db-pvc-snapshot", "formatVersion": 1,
+        "backupId": backup_id, "capturedAt": captured_at, "source": source,
+        "inventory": [{
+            "service": "recipes", "role": "authoritative-read-only", "pvc": "recipes",
+            "archive": "recipes.tar", "sizeBytes": len(archive_bytes),
+            "sha256": hashlib.sha256(archive_bytes).hexdigest(),
+            "fileCount": len(file_inventory), "files": file_inventory,
+        }],
+    }
+
+operation_archive = make_archive(0o640, 123, 456)
+operation_snapshot = make_snapshot(operation_id, operation_captured, operation_archive)
+baseline_archive = make_archive(0o600, 1, 2)
+baseline_snapshot = make_snapshot(package_id, placeholder["capturedAt"], baseline_archive)
 fingerprint = upload.content_fingerprint(operation_snapshot)
-baseline_snapshot = {
-    **operation_snapshot, "backupId": package_id,
-    "capturedAt": package["capturedAt"],
-}
-package["source"] = source
-package["snapshotManifest"] = baseline_snapshot
-package["contentFingerprint"] = fingerprint
-manifest = (json.dumps(package, sort_keys=True, separators=(",", ":")) + "\n").encode()
-manifest_path.write_bytes(manifest)
+assert upload.content_fingerprint(baseline_snapshot) == fingerprint
+
+snapshot_dir = root / "baseline-snapshot"
+stage_dir = root / "baseline-stage"
+snapshot_dir.mkdir(mode=0o700)
+stage_dir.mkdir(mode=0o700)
+(snapshot_dir / "manifest.json").write_bytes(upload.json_bytes(baseline_snapshot))
+(snapshot_dir / "recipes.tar").write_bytes(baseline_archive)
+baseline_package = upload.create_package(
+    snapshot_dir, stage_dir, baseline_snapshot, "pi", upload.DEFAULT_MAX_STAGING_BYTES
+)
+baseline_manifest = (stage_dir / baseline_package["manifest"]).read_bytes()
+baseline_path_manifest = drive / baseline_package["manifest"]
+baseline_path_archive = drive / baseline_package["archive"]
+baseline_path_manifest.write_bytes(baseline_manifest)
+baseline_path_archive.write_bytes((stage_dir / baseline_package["archive"]).read_bytes())
 
 baseline_path = root / "state/baseline.json"
 baseline = json.loads(baseline_path.read_text())
 baseline.update(
     backupId=package_id,
-    archive=package["archive"]["name"],
-    manifest=manifest_path.name,
-    archiveSizeBytes=package["archive"]["sizeBytes"],
-    manifestSizeBytes=len(manifest),
-    archiveSha256=package["archive"]["sha256"],
-    manifestSha256=hashlib.sha256(manifest).hexdigest(),
-    capturedAt=package["capturedAt"],
-    fingerprint=fingerprint,
+    archive=baseline_package["archive"],
+    manifest=baseline_package["manifest"],
+    archiveSizeBytes=baseline_package["archiveSizeBytes"],
+    manifestSizeBytes=len(baseline_manifest),
+    archiveSha256=baseline_package["archiveSha256"],
+    manifestSha256=hashlib.sha256(baseline_manifest).hexdigest(),
+    capturedAt=baseline_package["capturedAt"],
+    fingerprint=baseline_package["fingerprint"],
 )
 baseline_path.write_text(json.dumps(baseline))
 
@@ -561,7 +580,7 @@ operation = {
 }
 (maintenance / "backup-state.json").write_text(json.dumps(operation))
 (maintenance / "manifest.json").write_text(json.dumps(operation_snapshot))
-(maintenance / "recipes.tar").write_bytes(archive_bytes)
+(maintenance / "recipes.tar").write_bytes(operation_archive)
 PY
   run python3 .scripts/retrieve-verified-backup.py --maintenance "$DESTINATION"
   [ "$status" -eq 0 ]

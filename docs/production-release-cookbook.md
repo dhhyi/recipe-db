@@ -30,7 +30,7 @@ For current capabilities and limits, see the [release capability overview](produ
 
 ## First-cutover local preparation
 
-Use this once, after the separately approved Pi operation has blocked writes and verified the final backup of the previous release. Retrieve the final backup and receipt using the existing verified-backup procedure in step 4; the receipt must still report `verified-upload` or `verified-unchanged`. When the retained snapshot is verified unchanged, retrieval selects the remote baseline only after confirming its content fingerprint matches the final snapshot; provenance keeps both the operation and package backup identities. Keep the original backup and receipt private and unchanged.
+Use this once, after the separately approved Pi operation has blocked writes and verified the final backup of the previous release. Retrieve the final backup and receipt using the existing verified-backup procedure in step 4; the receipt must still report `verified-upload` or `verified-unchanged`. For `verified-unchanged`, retrieval verifies and packages the exact retained snapshot locally; it does not substitute the older remote baseline package. Provenance records the retained operation and the verified baseline identities. Keep the original backup and receipt private and unchanged.
 
 This first cutover assumes the candidate can read the previous release's existing persistent-data formats and storage-version markers unchanged. Do not run migrations during this preparation; if the candidate requires a data-format change, stop and plan that separately.
 

@@ -21,7 +21,7 @@ restore_fixture() {
   fi
   : > restore-archives.jsonl
   for name in recipes images tags; do
-    tar --owner=1001 --group=1002 --numeric-owner \
+    tar --owner="$EUID" --group="$(id -g)" --numeric-owner \
       -C "$FIXTURE_ROOT/tar-data/$name" -cf "$FIXTURE_ROOT/$name.tar" .
     python3 .scripts/validate-backup-snapshot.py "$FIXTURE_ROOT/$name.tar" > "$name-files.json"
     jq -cn --arg name "$name" --slurpfile files "$name-files.json" \
