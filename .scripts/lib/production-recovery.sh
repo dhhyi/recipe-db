@@ -469,6 +469,7 @@ recovery_plan() {
   local manifest=$1 archive=$2 expected=$3 state=$4 catalog=${5:-} pending_restore=false lease
   recovery_private_state "$state"
   recovery_validate_package "$manifest" "$archive" "$expected"
+  backup_id=$expected
   recovery_selected_manifest=$manifest
   restore_state=$state
   connect
@@ -635,6 +636,17 @@ PY
 
 recovery_validate_pending_restore_handoff() {
   local lease=$1
+  local selected_backup_id=$backup_id selected_artifact=$artifact selected_revision=$revision
+  local selected_release_root=$release_root selected_lease_uid=${restore_operation_lease_uid:-}
+  local pending_backup_id pending_artifact pending_revision pending_guard=false
+  local selected_prior_workloads=false selected_rendered=false
+  recovery_pending_guard_backup_id=
+  recovery_pending_guard_artifact=
+  recovery_pending_guard_revision=
+  recovery_pending_guard_release_root=
+  recovery_pending_guard_lease_uid=
+  recovery_pending_guard_prior_workloads=
+  recovery_pending_guard_had_prior_workloads=false
   recovery_identity || production_fail "cannot verify the pending restore target identity"
   kube get configmap recipe-db-restore -o json \
     > "$work/pending-restore-configmap.json" \
@@ -657,6 +669,7 @@ recovery_validate_pending_restore_handoff() {
     and .version == 1 and .target == $target and .cluster == $cluster
     and .context == $context and .namespace == $ns
     and .import.status == "complete" and .writesMayHaveOpened == false
+    and (.backupId | type == "string" and test("^backup-[0-9]{14}-[0-9]+$"))
     and .restoreIdentity == $identity[0]
     and (.probeRecipeId // null) == null
     and (.migrationRecovery.probeRecipeId // null) == null
@@ -669,17 +682,57 @@ recovery_validate_pending_restore_handoff() {
       (if .status == "awaiting-signoff" then "awaiting-signoff" else "recovery-required" end))
   ' "$work/pending-restore-state.json" > /dev/null \
     || production_fail "pending restore state, target, read checks, write exposure or exact Lease is incompatible; preserve it and inspect status"
+  pending_backup_id=$(jq -er .backupId "$work/pending-restore-state.json")
+  pending_artifact=$(jq -er .artifact "$work/pending-restore-state.json")
+  pending_revision=$(jq -er .revision "$work/pending-restore-state.json")
+  backup_id=$pending_backup_id
+  restore_operation_lease_uid=$(jq -er .metadata.uid <<< "$lease")
+  pull_release "$pending_artifact"
+  [[ $revision == "$pending_revision" ]] \
+    || production_fail "pending restore source revision differs from its immutable release"
   application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
+  kube get job "recovery-guard-$pending_backup_id" --ignore-not-found -o json \
+    > "$work/pending-restore-guard-check.json" \
+    || production_fail "cannot inspect the pending restore shutdown guard"
+  if [[ -s $work/pending-restore-guard-check.json ]]; then
+    if [[ -f $work/prior-workloads.json ]]; then
+      cp "$work/prior-workloads.json" "$work/pending-restore-selected-workloads.json"
+      selected_prior_workloads=true
+    fi
+    if [[ -f $work/rendered.yml ]]; then
+      cp "$work/rendered.yml" "$work/pending-restore-selected-rendered.yml"
+      selected_rendered=true
+    fi
+    production_secrets
+    render
+    yq -o=json -I=0 'select(.kind == "Deployment")' "$work/rendered.yml" \
+      | jq -s '[.[] | {name:.metadata.name}]' > "$work/prior-workloads.json"
+    if [[ $selected_rendered == true ]]; then
+      mv "$work/pending-restore-selected-rendered.yml" "$work/rendered.yml"
+    else
+      rm -f "$work/rendered.yml"
+    fi
+    restore_guard_validate_expired \
+      || production_fail "cannot validate the pending restore shutdown guard"
+    [[ -n $restore_expired_guard_uid ]] \
+      || production_fail "pending restore guard disappeared during validation"
+    pending_guard=true
+  else
+    restore_expired_guard_uid=
+  fi
   kube get deployments -o json > "$work/pending-restore-deployments.json" \
     || production_fail "cannot inspect the pending restore workloads"
-  jq -e --slurpfile state "$work/pending-restore-state.json" \
+  jq -e --argjson expiredGuard "$pending_guard" \
+    --slurpfile state "$work/pending-restore-state.json" \
     --slurpfile projects "$work/projects.jsonl" '
     . as $deployments |
     any($deployments.items[]; .metadata.name == "graphql"
       and any(.spec.template.spec.containers[];
         .name == "graphql" and any(.env[]?; .name == "MODE" and .value == "maintenance")))
-    and all($deployments.items[]; .spec.template.metadata.annotations["recipe-db/release"] == $state[0].artifact
-      and (.status.readyReplicas // 0) == (.spec.replicas // 1))
+    and all($deployments.items[];
+      .spec.template.metadata.annotations["recipe-db/release"] == $state[0].artifact
+      and (if $expiredGuard then (.spec.replicas // 0) == 0 and (.status.replicas // 0) == 0
+        else (.status.readyReplicas // 0) == (.spec.replicas // 1) end))
     and all($projects[] | select((.category == "api" or .category == "backend")
       and .name != "graphql"); .name as $name |
       any($deployments.items[]; .metadata.name == $name and
@@ -696,7 +749,28 @@ recovery_validate_pending_restore_handoff() {
   jq -er '.data["routes.yml"] | @base64d' "$work/pending-restore-routes.json" \
     > "$work/pending-restore-routes.yml" \
     || production_fail "pending restore public routes are malformed"
-  if jq -e '.status == "awaiting-signoff"' "$work/pending-restore-state.json" > /dev/null; then
+  if [[ $pending_guard == true ]]; then
+    restore_validate_public_barrier "$work/pending-restore-routes.yml" \
+      || production_fail "expired pending restore guard has no valid public barrier"
+    restore_forward deployment/traefik 3000 "$work/pending-restore-forward.log" \
+      > "$work/pending-restore-port" \
+      || production_fail "cannot observe the expired pending restore public barrier"
+    restore_graphql_port=$(cat "$work/pending-restore-port")
+    curl --silent --show-error --fail --connect-timeout 5 --max-time "$timeout" \
+      "http://127.0.0.1:$restore_graphql_port/api/http/routers" \
+      > "$work/pending-restore-observed-routers.json" 2> "$work/pending-restore-request-error" \
+      || production_fail "cannot observe active public routes behind the expired pending restore guard"
+    restore_public_routers_match "$work/pending-restore-routes.yml" \
+      "$work/pending-restore-observed-routers.json" \
+      || production_fail "expired pending restore public barrier is not active"
+    recovery_pending_guard_backup_id=$pending_backup_id
+    recovery_pending_guard_artifact=$pending_artifact
+    recovery_pending_guard_revision=$pending_revision
+    recovery_pending_guard_release_root=$release_root
+    recovery_pending_guard_lease_uid=$restore_operation_lease_uid
+    recovery_pending_guard_prior_workloads=$work/pending-restore-selected-workloads.json
+    recovery_pending_guard_had_prior_workloads=$selected_prior_workloads
+  elif jq -e '.status == "awaiting-signoff"' "$work/pending-restore-state.json" > /dev/null; then
     jq -e '.http.routers["restore-public-barrier"] == null
       and any(.http.routers | to_entries[];
         .key == "graphql" and any(.value.entrypoints[]?; . == "web" or . == "websecure"))' \
@@ -706,14 +780,22 @@ recovery_validate_pending_restore_handoff() {
     restore_validate_public_barrier "$work/pending-restore-routes.yml" \
       || production_fail "failed read verification has no installed public barrier"
   fi
-  restore_forward deployment/traefik 3000 "$work/pending-restore-forward.log" \
-    > "$work/pending-restore-port" \
-    || production_fail "cannot observe GraphQL mode through the private route"
-  restore_graphql_port=$(cat "$work/pending-restore-port")
-  if ! restore_graphql 'query { maintenance }' \
-    || ! jq -e '.data.maintenance == true' "$work/restore-response.json" > /dev/null; then
-    production_fail "pending restore GraphQL is not observed in maintenance mode"
+  if [[ $pending_guard != true ]]; then
+    restore_forward deployment/traefik 3000 "$work/pending-restore-forward.log" \
+      > "$work/pending-restore-port" \
+      || production_fail "cannot observe GraphQL mode through the private route"
+    restore_graphql_port=$(cat "$work/pending-restore-port")
+    if ! restore_graphql 'query { maintenance }' \
+      || ! jq -e '.data.maintenance == true' "$work/restore-response.json" > /dev/null; then
+      production_fail "pending restore GraphQL is not observed in maintenance mode"
+    fi
   fi
+  application_project_metadata_to_jsonl "$selected_release_root" "$work/projects.jsonl"
+  backup_id=$selected_backup_id
+  artifact=$selected_artifact
+  revision=$selected_revision
+  release_root=$selected_release_root
+  restore_operation_lease_uid=$selected_lease_uid
 }
 
 recovery_reset() {
@@ -742,26 +824,59 @@ recovery_reset() {
   yq -o=json -I=0 'select(.kind == "Deployment")' "$work/rendered.yml" \
     | jq -s '[.[] | {name:.metadata.name}]' > "$work/prior-workloads.json"
   recovery_command_acquire
-  restore_guard_remove_expired
   if [[ $(jq -r .status "$state/restore-state.json") != reset-planned ]]; then
     recovery_assert_identity
     recovery_assert_lease
+    restore_guard_remove_expired \
+      || production_fail "could not validate or remove the expired recovery guard"
     retain_lock=true
     locked=true
   else
     recovery_identity || production_fail "cannot pin configured application storage identities before reset"
     current=$(cluster_operation_lock_status) || production_fail "cannot inspect operation Lease"
+    if [[ -z $current ]] && jq -e '.reset.pendingRestore == true' \
+      "$state/restore-state.json" > /dev/null; then
+      production_fail "pending restore lost its exact retained Lease; inspect status and preserve the barrier"
+    fi
     if [[ -n $current ]]; then
       current_phase=$(jq -r '.metadata.annotations["recipe-db/phase"]' <<< "$current")
       if [[ $current_phase == awaiting-signoff || $current_phase == recovery-required ]]; then
         recovery_validate_pending_restore_handoff "$current"
+        jq -e --slurpfile pending "$work/pending-restore-state.json" \
+          '.reset.pendingRestore == true and .reset.pendingRestoreState == $pending[0]' \
+          "$state/restore-state.json" > /dev/null \
+          || production_fail "pending restore state changed after preview; inspect status and Lease"
+        if [[ -n ${recovery_pending_guard_backup_id:-} ]]; then
+          local selected_backup_id=$backup_id selected_artifact=$artifact selected_revision=$revision
+          local selected_release_root=$release_root selected_lease_uid=${restore_operation_lease_uid:-}
+          backup_id=$recovery_pending_guard_backup_id
+          artifact=$recovery_pending_guard_artifact
+          revision=$recovery_pending_guard_revision
+          release_root=$recovery_pending_guard_release_root
+          restore_operation_lease_uid=$recovery_pending_guard_lease_uid
+          restore_guard_remove_expired \
+            || production_fail "could not validate or remove the expired pending restore guard"
+          backup_id=$selected_backup_id
+          artifact=$selected_artifact
+          revision=$selected_revision
+          release_root=$selected_release_root
+          restore_operation_lease_uid=$selected_lease_uid
+          if [[ $recovery_pending_guard_had_prior_workloads == true ]]; then
+            mv "$recovery_pending_guard_prior_workloads" "$work/prior-workloads.json" \
+              || production_fail "could not restore the selected backup workload set after guard removal"
+          else
+            rm -f "$work/prior-workloads.json" \
+              || production_fail "could not remove pending-restore workload metadata after guard removal"
+          fi
+          recovery_pending_guard_backup_id=
+        fi
         lock_holder=$(jq -er .holder "$work/pending-restore-state.json")
         jq --arg holder "$lock_holder" --arg uid "$(jq -er .metadata.uid <<< "$current")" \
           --slurpfile previous "$work/pending-restore-state.json" '
           .holder=$holder | .reset.acquisitionPending=true | .reset.leaseUid=$uid
           | .reset.previousRestore=($previous[0] | {
               backupId,artifact,revision,status,phase,import,readChecks,
-              writesMayHaveOpened,restoreIdentity})
+              writesMayHaveOpened,publicRoutesMayBeOpen,restoreIdentity})
           | del(.reset.pendingRestore,.reset.pendingRestoreState)
         ' "$state/restore-state.json" > "$state/restore-state.next"
         mv "$state/restore-state.next" "$state/restore-state.json"
@@ -769,6 +884,8 @@ recovery_reset() {
         lease_replaced=true
       elif [[ $current_phase == recovery-ready ]]; then
         recovery_read_handoff "$current"
+        restore_guard_remove_expired \
+          || production_fail "could not validate or remove the expired recovery guard"
         lock_holder=$(jq -er .holder "$work/recovery-handoff.json")
         jq --arg holder "$lock_holder" --arg uid "$(jq -er .metadata.uid <<< "$current")" \
           '.holder=$holder | .reset.acquisitionPending=true | .reset.leaseUid=$uid' \
@@ -785,6 +902,8 @@ recovery_reset() {
         and (.metadata.annotations["recipe-db/phase"] == "acquired"
           or .metadata.annotations["recipe-db/phase"] == "reset-prepared")' <<< "$current" > /dev/null \
           || production_fail "reset requires an idle cluster; close out the retained release first"
+        restore_guard_remove_expired \
+          || production_fail "could not validate or remove the expired recovery guard"
       fi
       lock_holder=$(jq -er .holder "$state/restore-state.json")
       cluster_operation_lock_holder=$lock_holder

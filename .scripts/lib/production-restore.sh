@@ -793,18 +793,22 @@ restore_guard_manifest() {
   if [[ -f $work/restore-barrier-routes.json ]]; then barrier=$(cat "$work/restore-barrier-routes.json"); fi
   if [[ ! -f $work/recovery-controller-inventory.json ]]; then
     if [[ -n ${restore_state:-} && -f $restore_state/restore-state.json ]]; then
-      jq '.reset.guardInventory // {items:[]}' "$restore_state/restore-state.json" \
+      jq '.restoreGuardInventory // .reset.guardInventory // .reset.pendingRestoreState.reset.guardInventory // {items:[]}' \
+        "$restore_state/restore-state.json" \
         > "$work/recovery-controller-inventory.json" || return 1
     else
       printf '{"items":[]}\n' > "$work/recovery-controller-inventory.json"
     fi
   fi
   if [[ -n ${restore_state:-} && -f $restore_state/restore-state.json ]] \
-    && jq -e '.reset != null' "$restore_state/restore-state.json" > /dev/null; then
+    && jq -e '.reset != null or
+      (.status == "in-progress" and .restoreGuardInventory == null)' \
+      "$restore_state/restore-state.json" > /dev/null; then
     jq --slurpfile inventory "$work/recovery-controller-inventory.json" \
-      '.reset.guardInventory={items:[$inventory[0].items[] |
+      '.restoreGuardInventory={items:[$inventory[0].items[] |
         select(.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db") |
-        {kind,metadata:{name:.metadata.name,labels:{"app.kubernetes.io/part-of":"recipe-db"}}}]}' \
+        {kind,metadata:{name:.metadata.name,labels:{"app.kubernetes.io/part-of":"recipe-db"}}}]} |
+        if .reset != null then .reset.guardInventory=.restoreGuardInventory else . end' \
       "$restore_state/restore-state.json" > "$restore_state/restore-state.next" || return 1
     mv "$restore_state/restore-state.next" "$restore_state/restore-state.json" || return 1
   fi
@@ -1117,14 +1121,20 @@ restore_guard_start() {
 }
 
 restore_guard_stop() {
-  local deadline=$((SECONDS + timeout))
+  local deadline=$((SECONDS + timeout)) expired_guard=${restore_expired_guard_uid:-}
+  local resource_namespace resource_kind resource_name resource_uid
   [[ ${restore_guard_started:-false} == true ]] || return 0
   if [[ -n ${restore_guard_heartbeat_pid:-} ]]; then
     kill "$restore_guard_heartbeat_pid" 2> /dev/null || true
     wait "$restore_guard_heartbeat_pid" 2> /dev/null || true
     restore_guard_heartbeat_pid=
   fi
-  kube delete job "$restore_guard_name" --wait=true --timeout="${timeout}s" > /dev/null || return 1
+  if [[ -n $expired_guard ]]; then
+    kube delete job "$restore_guard_name" --preconditions="uid=$expired_guard" \
+      --wait=true --timeout="${timeout}s" > /dev/null || return 1
+  else
+    kube delete job "$restore_guard_name" --wait=true --timeout="${timeout}s" > /dev/null || return 1
+  fi
   while :; do
     kube get pods -l "recipe-db/recovery-guard=$backup_id" -o json \
       > "$work/restore-remaining-guard-pods.json" || return 1
@@ -1137,14 +1147,25 @@ restore_guard_stop() {
     fi
     sleep 1
   done
-  kube delete rolebinding,role,serviceaccount,configmap "$restore_guard_name" > /dev/null || return 1
-  kube delete secret "$restore_guard_name" --ignore-not-found > /dev/null || return 1
-  if [[ -f $work/restore-guard.json ]] \
+  if [[ -n $expired_guard ]]; then
+    while IFS=$'\t' read -r resource_namespace resource_kind resource_name resource_uid; do
+      resource_kind=${resource_kind,,}
+      kube --namespace "$resource_namespace" delete "$resource_kind" "$resource_name" \
+        --preconditions="uid=$resource_uid" --ignore-not-found > /dev/null || return 1
+    done < <(jq -r '.items[] |
+      [.metadata.namespace,.kind,.metadata.name,.metadata.uid] | @tsv' \
+      "$work/restore-validated-guard-resources.json")
+  else
+    kube delete rolebinding,role,serviceaccount,configmap "$restore_guard_name" > /dev/null || return 1
+    kube delete secret "$restore_guard_name" --ignore-not-found > /dev/null || return 1
+  fi
+  if [[ -z $expired_guard && -f $work/restore-guard.json ]] \
     && jq -e '.items[] | select(.kind == "Role" and .metadata.namespace == "kube-system")' \
       "$work/restore-guard.json" > /dev/null; then
     kube --namespace kube-system delete rolebinding,role "$restore_guard_name" --ignore-not-found > /dev/null || return 1
   fi
   restore_guard_started=false
+  restore_expired_guard_uid=
 }
 
 restore_guard_assert_absent() {
@@ -1166,6 +1187,7 @@ restore_guard_assert_absent() {
 
 restore_guard_validate_expired() {
   local name="recovery-guard-$backup_id"
+  local expected resource_kind resource_name resource_namespace
   local guard_spec_check='
     def guard_containers:
       [.containers[] | {name,image,command,
@@ -1185,6 +1207,20 @@ restore_guard_validate_expired() {
   printf '{"items":[]}\n' > "$work/restore-validated-guard.json"
   kube get job "$name" --ignore-not-found -o json > "$work/restore-expired-guard.json" || return 1
   [[ -s $work/restore-expired-guard.json ]] || return 0
+  kube --namespace kube-system get secret recipe-db-routes -o json \
+    > "$work/restore-expired-guard-active-routes-secret.json" || return 1
+  jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and (.data["routes.yml"] | type == "string")' \
+    "$work/restore-expired-guard-active-routes-secret.json" > /dev/null \
+    || production_fail "expired recovery guard cannot verify the active public route Secret"
+  jq -er '.data["routes.yml"] | @base64d' \
+    "$work/restore-expired-guard-active-routes-secret.json" \
+    > "$work/restore-expired-guard-active-routes.json" || return 1
+  restore_validate_public_barrier "$work/restore-expired-guard-active-routes.json" \
+    || production_fail "expired recovery guard cannot verify the active public route barrier"
+  # Expired guards can outlive the release inputs used to render their barrier.
+  cp "$work/restore-expired-guard-active-routes.json" \
+    "$work/restore-barrier-routes.json" || return 1
   restore_guard_manifest || return 1
   kube get configmap "$name" -o json > "$work/restore-expired-guard-configmap.json" || return 1
   jq -e --arg holder "$backup_id" --arg name "$name" --arg ns "$namespace" \
@@ -1212,6 +1248,49 @@ restore_guard_validate_expired() {
   ' "$work/restore-expired-guard-configmap.json" > /dev/null \
     || production_fail "recovery shutdown guard is not confirmed owned and expired"
   restore_expired_guard_uid=$(jq -er .metadata.uid "$work/restore-expired-guard.json") || return 1
+  printf '{"items":[]}\n' > "$work/restore-validated-guard-resources.json"
+  while IFS= read -r expected; do
+    resource_kind=$(jq -er .kind <<< "$expected") || return 1
+    resource_kind=${resource_kind,,}
+    resource_name=$(jq -er .metadata.name <<< "$expected") || return 1
+    resource_namespace=$(jq -er .metadata.namespace <<< "$expected") || return 1
+    kube --namespace "$resource_namespace" get "$resource_kind" "$resource_name" \
+      --ignore-not-found -o json > "$work/restore-expired-guard-resource.json" || return 1
+    [[ -s $work/restore-expired-guard-resource.json ]] \
+      || production_fail "expired recovery guard companion resource is missing"
+    jq -e --arg holder "$backup_id" --arg name "$resource_name" \
+      --arg ns "$resource_namespace" --argjson expected "$expected" '
+      .apiVersion == $expected.apiVersion and .kind == $expected.kind
+      and .metadata.name == $name and .metadata.namespace == $ns
+      and .metadata.labels == $expected.metadata.labels
+      and (.metadata.uid | type == "string" and length > 0)
+      and (.metadata.resourceVersion | type == "string" and length > 0)
+      and .metadata.deletionTimestamp == null
+      and .metadata.labels["recipe-db/restore-holder"] == $holder
+      and (if .kind == "ConfigMap" then
+        .data.ready == "true" and .data.expired == "true"
+      elif .kind == "Secret" then
+        .type == $expected.type and (.data | keys == ["routes"])
+        and (.data.routes | @base64d) == $expected.stringData.routes
+      elif .kind == "ServiceAccount" then
+        (.automountServiceAccountToken // null) ==
+          ($expected.automountServiceAccountToken // null)
+        and (.imagePullSecrets // []) == ($expected.imagePullSecrets // [])
+      elif .kind == "Role" then
+        .rules == $expected.rules
+      elif .kind == "RoleBinding" then
+        .roleRef == $expected.roleRef and .subjects == $expected.subjects
+      else false end)
+    ' "$work/restore-expired-guard-resource.json" > /dev/null \
+      || production_fail "expired recovery guard companion resource $resource_kind/$resource_name in $resource_namespace has drifted"
+    jq --slurpfile resource "$work/restore-expired-guard-resource.json" \
+      '.items += [$resource[0]]' "$work/restore-validated-guard-resources.json" \
+      > "$work/restore-validated-guard-resources.next" || return 1
+    mv "$work/restore-validated-guard-resources.next" \
+      "$work/restore-validated-guard-resources.json" || return 1
+  done < <(jq -c '.items[] | select(.kind != "Job")' "$work/restore-guard.json")
+  jq -e '.items | length > 0' "$work/restore-validated-guard-resources.json" > /dev/null \
+    || production_fail "expired recovery guard has no validated companion resources"
   kube get deployments -o json > "$work/restore-expired-guard-deployments.json" || return 1
   jq -e 'all(.items[];
     .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
@@ -1912,7 +1991,7 @@ restore_assert_saved_public_routes() {
 restore_status() {
   local state=$1 graphql_mode=unknown maintenance_query=null route_config=null routers=null
   local lease=null observed_deployments target_matches=false configmap=null current
-  local routes_match_saved=false active_routes_match=false route_sha256
+  local routes_match_saved=false active_routes_match=false barrier_routes_validated=false routes_verified=false route_sha256
   recovery_private_state "$state"
   [[ -f $state/restore-state.json ]] \
     || production_fail "restore status requires the retained restore-state.json"
@@ -1947,6 +2026,9 @@ restore_status() {
     route_config=$(jq -c '[.http.routers | to_entries[] |
       select(any(.value.entrypoints[]?; . == "web" or . == "websecure")) | .key]' \
       "$work/restore-status-routes.json")
+    if restore_validate_public_barrier "$work/restore-status-routes.json"; then
+      barrier_routes_validated=true
+    fi
   fi
   if restore_forward deployment/traefik 3000 "$work/restore-status-forward.log" \
     > "$work/restore-status-port" 2> /dev/null; then
@@ -1963,8 +2045,12 @@ restore_status() {
       fi
     fi
     if restore_graphql 'query { maintenance }'; then
-      maintenance_query=$(jq -c '.data.maintenance // null' "$work/restore-response.json")
+      maintenance_query=$(jq -c '.data.maintenance' "$work/restore-response.json")
     fi
+  fi
+  if [[ $routes_match_saved == true ||
+    $barrier_routes_validated == true && $active_routes_match == true ]]; then
+    routes_verified=true
   fi
   if [[ $graphql_mode == maintenance && $maintenance_query == true ]]; then target_matches=true; fi
   kube get configmap recipe-db-restore --ignore-not-found -o json \
@@ -1981,9 +2067,17 @@ restore_status() {
     --argjson routes "$route_config" --argjson routers "$routers" \
     --argjson maintenanceVerified "$target_matches" \
     --argjson routesMatchSaved "$routes_match_saved" \
+    --argjson barrierRoutesValidated "$barrier_routes_validated" \
+    --argjson routesVerified "$routes_verified" \
     --argjson activeRoutesMatch "$active_routes_match" '
     ($state[0]) as $saved |
     ($lease // null) as $currentLease |
+    ($currentLease != null
+      and $currentLease.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and $currentLease.spec.holderIdentity == $saved.holder
+      and $currentLease.metadata.uid == ($saved.leaseUid // $saved.reset.leaseUid)
+      and $currentLease.metadata.annotations["recipe-db/operation"] == "restore"
+      and $currentLease.metadata.annotations["recipe-db/release"] == $saved.artifact) as $leaseOwnedByRestore |
     {
       savedProgress:{backupId:$saved.backupId,status:$saved.status,phase:$saved.phase,
         import:($saved.import // null),readChecks:($saved.readChecks // null),
@@ -1992,15 +2086,12 @@ restore_status() {
       lease:{present:($currentLease != null),
         holder:($currentLease.spec.holderIdentity // null),
         phase:($currentLease.metadata.annotations["recipe-db/phase"] // null),
-        ownedByRestore:($currentLease.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
-          and $currentLease.spec.holderIdentity == $saved.holder
-          and $currentLease.metadata.uid == ($saved.leaseUid // $saved.reset.leaseUid)
-          and $currentLease.metadata.annotations["recipe-db/operation"] == "restore"
-          and $currentLease.metadata.annotations["recipe-db/release"] == $saved.artifact)},
+        ownedByRestore:$leaseOwnedByRestore},
       observed:{graphql:{mode:(if $graphqlMode == "unknown" then null else $graphqlMode end),
           maintenanceQuery:$maintenanceQuery,maintenanceVerified:$maintenanceVerified},
         publicRoutes:{configured:$routes,active:$routers,
           barrierConfigured:($routes != null and ($routes | index("restore-public-barrier") != null)),
+          barrierValidated:$barrierRoutesValidated,
           configuredRoutesMatchSaved:$routesMatchSaved,
           activeRoutesMatchConfiguration:$activeRoutesMatch,
           normalRoutesObserved:($routesMatchSaved and $activeRoutesMatch
@@ -2010,17 +2101,18 @@ restore_status() {
       writesMayHaveOpened:(($saved.writesMayHaveOpened // false)
         or ($configmap.writesMayHaveOpened // false)
         or $graphqlMode != "maintenance" or $maintenanceQuery != true
-        or ($routesMatchSaved | not) or ($activeRoutesMatch | not)
+        or ($routesVerified | not) or ($activeRoutesMatch | not)
         or $configmap != $saved),
       savedStateMatchesCluster:($configmap != null and $configmap == $saved),
       nextAction:(if ($saved.writesMayHaveOpened // false)
         or ($configmap.writesMayHaveOpened // false)
         or $graphqlMode != "maintenance" or $maintenanceQuery != true
-        or ($routesMatchSaved | not) or ($activeRoutesMatch | not)
+        or ($routesVerified | not) or ($activeRoutesMatch | not)
         or $configmap == null or $configmap != $saved
         then "Inspect this status and recent application writes; explicitly close access or reconcile the transition. Do not retry restore or assume no writes occurred."
         elif $saved.status == "awaiting-signoff" and $maintenanceVerified
-          and $currentLease.spec.holderIdentity == $saved.holder
+          and $saved.phase == "pending-signoff" and $leaseOwnedByRestore
+          and $currentLease.metadata.annotations["recipe-db/phase"] == "awaiting-signoff"
           then "Operator may approve reopening separately with restore-reopen."
         elif $saved.import.status == "complete" and $saved.readChecks.status == "failed"
           and $graphqlMode == "maintenance"
@@ -2308,6 +2400,7 @@ restore_run() {
       || production_fail "reset handoff release differs from validated backup release"
     locked=true
     retain_lock=true
+    ensure_namespace
   elif [[ $mode == standalone ]]; then
     connect
     lock_holder="restore-$expected-$$"
@@ -2382,13 +2475,20 @@ restore_run() {
   fi
   if [[ $mode == existing-reset ]]; then
     restore_state_update --arg routesSha256 "$routes_sha256" \
-      '.restoreMode="existing-reset" | .leaseUid=.reset.leaseUid | .routesSha256=$routesSha256'
+      '. as $previous |
+        .restoreMode="existing-reset" | .leaseUid=.reset.leaseUid | .routesSha256=$routesSha256
+        | .reset.exposureHistory=((.reset.exposureHistory // []) + [{
+            backupId:$previous.backupId,status:$previous.status,phase:$previous.phase,
+            writesMayHaveOpened:($previous.writesMayHaveOpened // false),
+            publicRoutesMayBeOpen:($previous.publicRoutesMayBeOpen // false)}])
+        | .writesMayHaveOpened=false | .publicRoutesMayBeOpen=false
+        | del(.reopeningStartedAt)'
   fi
   restore_started=true
   retain_lock=true
   restore_phase preparing-target
   if [[ $mode == standalone || $mode == existing-reset ]]; then
-    ensure_namespace
+    if [[ $mode == standalone ]]; then ensure_namespace; fi
     restore_cluster_state=true
   else
     release_recovery_state_write recovery-required migration-recovery-preflight \

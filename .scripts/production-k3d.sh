@@ -521,18 +521,18 @@ ensure_namespace() {
       "$work/existing-namespace.json" > /dev/null \
       || production_fail "refusing to adopt an unowned application namespace"
     kube get configmap recipe-db-restore --ignore-not-found -o json > "$work/existing-restore-state.json"
-    if [[ -s $work/existing-restore-state.json ]]; then
-      if [[ ${command:-} == recovery-restore && ${restore_mode:-} == existing-reset ]]; then
-        recovery_validate_namespace_handoff "$work/existing-restore-state.json"
-      else
-        jq -e '.data["restore-state.json"] | fromjson |
-        (.status == "succeeded" and .phase == "complete")
-        or (.status == "succeeded" and .phase == "operator-reopened"
-          and .import.status == "complete" and .readChecks.status == "passed"
-          and .writesMayHaveOpened == true)' \
-          "$work/existing-restore-state.json" > /dev/null \
-          || production_fail "target has unresolved or abandoned restore state; keep it isolated and select a new empty target"
-      fi
+    if [[ ${command:-} == recovery-restore && ${restore_mode:-} == existing-reset ]]; then
+      [[ -s $work/existing-restore-state.json ]] \
+        || production_fail "reset namespace recovery ConfigMap is missing"
+      recovery_validate_namespace_handoff "$work/existing-restore-state.json"
+    elif [[ -s $work/existing-restore-state.json ]]; then
+      jq -e '.data["restore-state.json"] | fromjson |
+      (.status == "succeeded" and .phase == "complete")
+      or (.status == "succeeded" and .phase == "operator-reopened"
+        and .import.status == "complete" and .readChecks.status == "passed"
+        and .writesMayHaveOpened == true)' \
+        "$work/existing-restore-state.json" > /dev/null \
+        || production_fail "target has unresolved or abandoned restore state; keep it isolated and select a new empty target"
     fi
   else
     jq -n --arg ns "$namespace" '{apiVersion:"v1",kind:"Namespace",

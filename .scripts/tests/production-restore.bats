@@ -315,6 +315,33 @@ EOF
 @test "expired guard accepts API defaults but refuses altered runtime identity" {
   printf '{"infrastructure":{"maintenance":"fixture-image"},"volumes":{}}\n' > work/config.json
   printf '[]\n' > work/prior-workloads.json
+  cat > work/restore-barrier-routes.json << 'EOF'
+{
+  "http": {
+    "routers": {
+      "restore-public-barrier": {
+        "rule": "PathPrefix(`/`)",
+        "priority": 2147482647,
+        "entrypoints": ["web"],
+        "service": "restore-maintenance"
+      },
+      "restore-internal-images": {"entrypoints": ["rest-internal"]}
+    },
+    "middlewares": {
+      "graphql-ingress": {
+        "headers": {"customRequestHeaders": {"X-Internal-Ingress-Token": "fixture-token"}}
+      }
+    },
+    "services": {
+      "restore-maintenance": {
+        "loadBalancer": {
+          "servers": [{"url": "http://browse-maintenance.recipe-db.svc.cluster.local:80"}]
+        }
+      }
+    }
+  }
+}
+EOF
   cat > validate-expired.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -327,7 +354,8 @@ jq '.items[] | select(.kind=="Job") | .metadata += {uid:"guard-uid",resourceVers
     | .status.active=1
     | .spec.template.spec.containers[].env[] |=
         (if .value=="" then del(.value) else . end)' "$work/restore-guard.json" > job.json
-jq '.items[] | select(.kind=="ConfigMap") | .data={ready:"true",expired:"true"}' \
+jq '.items[] | select(.kind=="ConfigMap") | .data={ready:"true",expired:"true"}
+    | .metadata += {uid:"configmap-uid",resourceVersion:"1"}' \
   "$work/restore-guard.json" > configmap.json
 jq '{items:[{kind:"Pod",apiVersion:"v1",metadata:(.spec.template.metadata +
     {uid:"pod-uid",namespace:.metadata.namespace,ownerReferences:[
@@ -337,11 +365,45 @@ jq '{items:[{kind:"Pod",apiVersion:"v1",metadata:(.spec.template.metadata +
 jq "$JOB_CHANGE" job.json > actual-job.json
 jq "$POD_CHANGE" pods.json > actual-pods.json
 kube() {
-  case "$2" in
-    job) cat actual-job.json ;;
-    configmap) cat configmap.json ;;
-    deployments) echo '{"items":[]}' ;;
-    pods) cat actual-pods.json ;;
+  local resource_namespace=$namespace
+  if [[ $1 == --namespace ]]; then resource_namespace=$2; shift 2; fi
+  case "$1 $2" in
+    "get job"*) cat actual-job.json ;;
+    "get configmap"*) cat configmap.json ;;
+    "get secret"*)
+      if [[ $3 == recipe-db-routes ]]; then
+        jq -n --rawfile routes "$work/restore-barrier-routes.json" \
+          '{metadata:{labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+            data:{"routes.yml":($routes|@base64)}}'
+      else
+        resource_kind=Secret
+        resource_name=$3
+        jq -e --arg kind "$resource_kind" --arg name "$resource_name" \
+          --arg ns "$resource_namespace" '
+          .items[] | select(.kind == $kind and .metadata.name == $name
+            and .metadata.namespace == $ns)
+          | .metadata += {uid:(.kind | ascii_downcase + "-uid"),resourceVersion:"1"}
+          | .data={routes:(.stringData.routes | @base64)} | del(.stringData)' \
+          "$work/restore-guard.json" | jq "${RESOURCE_CHANGE:-.}"
+      fi ;;
+    "get deployments"*) echo '{"items":[]}' ;;
+    "get pods"*) cat actual-pods.json ;;
+    "get serviceaccount"* | "get role"* | "get rolebinding"*)
+      local resource_kind resource_name
+      case "$2" in
+        serviceaccount) resource_kind=ServiceAccount ;;
+        role) resource_kind=Role ;;
+        rolebinding) resource_kind=RoleBinding ;;
+      esac
+      resource_name=$3
+      jq -e --arg kind "$resource_kind" --arg name "$resource_name" \
+        --arg ns "$resource_namespace" '
+        .items[] | select(.kind == $kind and .metadata.name == $name
+          and .metadata.namespace == $ns)
+        | .metadata += {uid:(.kind | ascii_downcase + "-uid"),resourceVersion:"1"}
+        | if .kind == "Secret" then
+            .data={routes:(.stringData.routes | @base64)} | del(.stringData)
+          else . end' "$work/restore-guard.json" | jq "${RESOURCE_CHANGE:-.}" ;;
     *) return 1 ;;
   esac
 }
@@ -358,6 +420,33 @@ EOF
     bash validate-expired.sh
   [ "$status" -ne 0 ]
   [[ $output == *"guard Pods have drifted"* ]]
+  run env JOB_CHANGE=. POD_CHANGE=. \
+    RESOURCE_CHANGE='.metadata.labels["recipe-db/restore-holder"]="foreign"' \
+    bash validate-expired.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"companion resource serviceaccount/recovery-guard-backup-1 in fixture has drifted"* ]]
+}
+
+@test "guard manifest preserves legacy pending restore state without saved inventory" {
+  printf '{"infrastructure":{"maintenance":"fixture-image"},"volumes":{}}\n' > work/config.json
+  printf '[]\n' > work/prior-workloads.json
+  mkdir state
+  printf '{"status":"awaiting-signoff","phase":"pending-signoff"}\n' > state/restore-state.json
+  local before
+  before=$(sha256sum state/restore-state.json | cut -d ' ' -f 1)
+  cat > legacy-guard.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work=$FIXTURE_ROOT/work
+namespace=fixture backup_id=backup-1
+restore_state=$FIXTURE_ROOT/state
+restore_guard_manifest
+jq -e 'has("restoreGuardInventory") | not' "$restore_state/restore-state.json"
+EOF
+  run bash legacy-guard.sh
+  [ "$status" -eq 0 ]
+  [ "$(sha256sum state/restore-state.json | cut -d ' ' -f 1)" = "$before" ]
 }
 
 @test "active but unresponsive guard terminates the live client" {

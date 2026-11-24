@@ -264,11 +264,39 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       *"apply -f "*restore-guard-job.json)
         cp "$(dirname "${*: -1}")/restore-guard.json" "$MOCK_LOG.restore-guard"
         exit ;;
+      *"get serviceaccount recovery-guard-"*"-o json" | \
+      *"get role recovery-guard-"*"-o json" | \
+      *"get rolebinding recovery-guard-"*"-o json" | \
+      *"get secret recovery-guard-"*"-o json")
+        resource_namespace=$(sed -n 's/.*--namespace \([^ ]*\) get .*/\1/p' <<< "$*")
+        case "$*" in
+          *"get serviceaccount "*) resource_kind=ServiceAccount
+            resource_name=$(sed -n 's/.*get serviceaccount \([^ ]*\).*/\1/p' <<< "$*") ;;
+          *"get role "*) resource_kind=Role
+            resource_name=$(sed -n 's/.*get role \([^ ]*\).*/\1/p' <<< "$*") ;;
+          *"get rolebinding "*) resource_kind=RoleBinding
+            resource_name=$(sed -n 's/.*get rolebinding \([^ ]*\).*/\1/p' <<< "$*") ;;
+          *) resource_kind=Secret
+            resource_name=$(sed -n 's/.*get secret \([^ ]*\).*/\1/p' <<< "$*") ;;
+        esac
+        jq -e --arg kind "$resource_kind" --arg name "$resource_name" \
+          --arg ns "$resource_namespace" '
+          .items[] | select(.kind == $kind and .metadata.name == $name
+            and .metadata.namespace == $ns)
+          | .metadata += {uid:("expired-" + (.kind | ascii_downcase) + "-uid"),
+            resourceVersion:"1"}
+          | if .kind == "Secret" then
+              .data={routes:(.stringData.routes | @base64)} | del(.stringData)
+            else . end' "$MOCK_LOG.restore-guard"
+        exit ;;
       *"get configmap recovery-guard-"*"-o json")
         if [[ -f $MOCK_LOG.expired-guard-configmap ]]; then
-          cat "$MOCK_LOG.expired-guard-configmap"
+          jq '.metadata += {uid:"expired-configmap-uid",resourceVersion:"1"}' \
+            "$MOCK_LOG.expired-guard-configmap"
         elif [[ ${MOCK_EXPIRED_RECOVERY_GUARD:-false} == true && -f $MOCK_LOG.guard-expired ]]; then
-          echo '{"data":{"ready":"true","expired":"true"}}'
+          jq '.items[] | select(.kind == "ConfigMap")
+            | .metadata += {uid:"expired-configmap-uid",resourceVersion:"1"}
+            | .data.ready="true" | .data.expired="true"' "$MOCK_LOG.restore-guard"
         else
           jq -n --arg pulse "$(cat "$MOCK_LOG.guard-pulse" 2>/dev/null || printf initial)" \
             '{data:{ready:"true",expired:"false",observedPulse:$pulse}}'
@@ -288,6 +316,12 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       *"delete rolebinding,role,serviceaccount,configmap recovery-guard-"*)
         rm -f "$MOCK_LOG.expired-guard-job" "$MOCK_LOG.expired-guard-pod" \
           "$MOCK_LOG.expired-guard-configmap"
+        exit ;;
+      *"delete configmap recovery-guard-"*"--preconditions=uid="* | \
+      *"delete role recovery-guard-"*"--preconditions=uid="* | \
+      *"delete rolebinding recovery-guard-"*"--preconditions=uid="* | \
+      *"delete secret recovery-guard-"*"--preconditions=uid="* | \
+      *"delete serviceaccount recovery-guard-"*"--preconditions=uid="*)
         exit ;;
       *"get pods -l recipe-db/recovery-guard="*"-o json")
         if [[ -f $MOCK_LOG.expired-guard-pod ]]; then

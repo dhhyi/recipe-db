@@ -233,6 +233,31 @@ load production-k3d-restore-setup
     and .writesMayHaveOpened == false' <<< "$output"
 }
 
+@test "restore status withholds reopening recommendation for a mismatched Lease" {
+  restore_fixture
+  run_restore
+  [ "$status" -eq 0 ]
+  local saved_lease_uid
+  saved_lease_uid=$(jq -er .leaseUid "$RESTORE_STATE/restore-state.json")
+  jq '.metadata.uid="replacement-lease-uid"' "$MOCK_LOG.lease" > "$MOCK_LOG.lease.next"
+  mv "$MOCK_LOG.lease.next" "$MOCK_LOG.lease"
+  run bash .scripts/production-k3d.sh restore-status "$VALUES" "$RESTORE_STATE"
+  [ "$status" -eq 0 ]
+  jq -e '.lease.present and .lease.holder != null
+    and (.lease.ownedByRestore | not)
+    and (.nextAction | contains("Inspect saved progress, actual access mode/routes, and Lease"))
+    and (.nextAction | contains("Operator may approve reopening separately") | not)' <<< "$output"
+  jq --arg uid "$saved_lease_uid" \
+    '.metadata.uid=$uid | .metadata.annotations["recipe-db/phase"]="reopening"' \
+    "$MOCK_LOG.lease" > "$MOCK_LOG.lease.next"
+  mv "$MOCK_LOG.lease.next" "$MOCK_LOG.lease"
+  run bash .scripts/production-k3d.sh restore-status "$VALUES" "$RESTORE_STATE"
+  [ "$status" -eq 0 ]
+  jq -e '.lease.ownedByRestore and .lease.phase == "reopening"
+    and (.nextAction | contains("Inspect saved progress, actual access mode/routes, and Lease"))
+    and (.nextAction | contains("Operator may approve reopening separately") | not)' <<< "$output"
+}
+
 @test "restore status reports possible write exposure when maintenance cannot be queried" {
   restore_fixture
   run_restore
@@ -263,6 +288,7 @@ load production-k3d-restore-setup
   jq -e '.savedProgress.status == "awaiting-signoff"
     and .savedStateMatchesCluster == false
     and .observed.graphql.mode == "production"
+    and .observed.graphql.maintenanceQuery == false
     and .writesMayHaveOpened == true
     and (.nextAction | contains("Inspect this status and recent application writes"))' <<< "$output"
 }
@@ -650,6 +676,14 @@ load production-k3d-restore-setup
     any(.spec.template.spec.containers[].env[]; .name == "MODE" and .value == "maintenance"))' \
     "$MOCK_LOG.restore-deployments"
   run ! grep -Eq 'createRecipe|updateRecipe|deleteRecipe|recipe/probe' "$MOCK_LOG"
+  run bash .scripts/production-k3d.sh restore-status "$VALUES" "$RESTORE_STATE"
+  [ "$status" -eq 0 ]
+  jq -e '.observed.graphql.maintenanceVerified
+    and .observed.publicRoutes.barrierConfigured
+    and .observed.publicRoutes.barrierValidated
+    and .observed.publicRoutes.activeRoutesMatchConfiguration
+    and .writesMayHaveOpened == false
+    and (.nextAction | contains("restore-recheck"))' <<< "$output"
 
   imports_before=$(grep -c -- 'exec -i restore-volume-.*tar -xpkf -' "$MOCK_LOG")
   unset MOCK_RESTORE_READ_FAIL
@@ -911,6 +945,32 @@ run_restore_abandon() {
   set_value '.timeoutSeconds=8'
   run_restore
   [ "$status" -eq 0 ]
+  local pending_guard="recovery-guard-$RESTORE_ID"
+  jq -e --arg name "$pending_guard" \
+    'any(.items[]; .kind == "Job" and .metadata.name == $name)' "$MOCK_LOG.restore-guard"
+  jq -e '.restoreGuardInventory | type == "object"' "$RESTORE_STATE/restore-state.json"
+  jq -e --arg name "$pending_guard" '
+    .items[] | select(.kind == "Job" and .metadata.name == $name)
+    | .metadata += {uid:"pending-guard-job-uid",resourceVersion:"1"}
+    | .status={active:1}' "$MOCK_LOG.restore-guard" > "$MOCK_LOG.expired-guard-job"
+  jq -e --arg name "$pending_guard" '
+    .items[] | select(.kind == "ConfigMap" and .metadata.name == $name)
+    | .data.ready="true" | .data.expired="true"' \
+    "$MOCK_LOG.restore-guard" > "$MOCK_LOG.expired-guard-configmap"
+  jq -n --slurpfile job "$MOCK_LOG.expired-guard-job" '
+    ($job[0]) as $job |
+    {apiVersion:"v1",kind:"Pod",
+      metadata:{name:($job.metadata.name + "-pod"),namespace:$job.metadata.namespace,
+        uid:"pending-guard-pod-uid",labels:$job.spec.template.metadata.labels,
+        ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$job.metadata.name,
+          uid:$job.metadata.uid,controller:true}]},
+      spec:$job.spec.template.spec,status:{phase:"Running"}}' \
+    > "$MOCK_LOG.expired-guard-pod"
+  jq -er '.items[] | select(.kind == "Secret").stringData.routes | @base64d' \
+    "$MOCK_LOG.restore-guard" > "$MOCK_LOG.restore-routes"
+  jq '.items |= map(.spec.replicas=0 | .status.replicas=0 | .status.readyReplicas=0)' \
+    "$MOCK_LOG.restore-deployments" > "$MOCK_LOG.restore-deployments.next"
+  mv "$MOCK_LOG.restore-deployments.next" "$MOCK_LOG.restore-deployments"
   local alternate_id=backup-20261101123456-43
   restore_alternate_real_package "$alternate_id" "2026-11-01T12:34:56Z"
   run bash .scripts/production-k3d.sh recovery-plan "$VALUES" "$RESTORE_ALT_MANIFEST" \
@@ -923,22 +983,52 @@ run_restore_abandon() {
     "$RESTORE_STATE/restore-state.json"
   [ -e "$MOCK_LOG.lease" ]
   [ ! -e "$MOCK_LOG.reopening" ]
+  [ -e "$MOCK_LOG.expired-guard-job" ]
   run bash .scripts/production-k3d.sh recovery-reset "$VALUES" "$RESTORE_ALT_MANIFEST" \
     "$RESTORE_ALT_ARCHIVE" "$alternate_id" "$RESTORE_STATE" "RESET-$alternate_id"
   [ "$status" -eq 0 ]
   [[ $output == *"reset complete"* ]]
+  [ ! -e "$MOCK_LOG.expired-guard-job" ]
+  grep -Fq "delete job $pending_guard --preconditions=uid=pending-guard-job-uid" "$MOCK_LOG"
+  for resource in configmap role rolebinding secret serviceaccount; do
+    grep -Fq "delete $resource $pending_guard --preconditions=uid=expired-$resource-uid" "$MOCK_LOG"
+  done
+  local pending_guard_removal reset_wipe
+  pending_guard_removal=$(awk -v guard="$pending_guard" \
+    '$0 ~ ("delete job " guard " --preconditions=uid=pending-guard-job-uid") {
+      print NR; exit
+    }' "$MOCK_LOG")
+  reset_wipe=$(awk -v after="$pending_guard_removal" \
+    'NR > after {
+      if (index($0, "exec restore-volume-") && index($0, "find /data -mindepth 1 -maxdepth 1 -exec rm -rf")) {
+        print NR; exit
+      }
+    }' "$MOCK_LOG")
+  [ -n "$pending_guard_removal" ]
+  [ -n "$reset_wipe" ]
+  [ "$pending_guard_removal" -lt "$reset_wipe" ]
   jq -e --arg id "$alternate_id" '.backupId == $id and .status == "reset-ready"
     and .reset.previousRestore.status == "awaiting-signoff"
     and .reset.pendingRestore == null' "$RESTORE_STATE/restore-state.json"
   [ -e "$MOCK_LOG.lease" ]
   [ ! -e "$MOCK_LOG.reopening" ]
+  jq '.writesMayHaveOpened=true | .publicRoutesMayBeOpen=true' \
+    "$RESTORE_STATE/restore-state.json" > "$RESTORE_STATE/restore-state.next"
+  mv "$RESTORE_STATE/restore-state.next" "$RESTORE_STATE/restore-state.json"
+  jq '.data["restore-state.json"] |=
+    (fromjson | .writesMayHaveOpened=true | .publicRoutesMayBeOpen=true | tojson)' \
+    "$MOCK_LOG.cluster-restore-state" > "$MOCK_LOG.cluster-restore-state.next"
+  mv "$MOCK_LOG.cluster-restore-state.next" "$MOCK_LOG.cluster-restore-state"
   export MOCK_RESTORE_READ_FAIL=true
   run bash .scripts/production-k3d.sh recovery-restore "$VALUES" "$RESTORE_STATE" \
     "$RESTORE_ALT_MANIFEST" "$RESTORE_ALT_ARCHIVE" "$alternate_id" "RESTORE-$alternate_id"
   [ "$status" -ne 0 ]
   jq -e --arg id "$alternate_id" '.backupId == $id and .status == "recovery-required"
     and .phase == "verifying-reads" and .import.status == "complete"
-    and .readChecks.status == "failed" and .writesMayHaveOpened == false' \
+    and .readChecks.status == "failed" and .writesMayHaveOpened == false
+    and .publicRoutesMayBeOpen == false
+    and .reset.exposureHistory[-1].writesMayHaveOpened == true
+    and .reset.exposureHistory[-1].publicRoutesMayBeOpen == true' \
     "$RESTORE_STATE/restore-state.json"
   jq -e 'all(.items[]; (.spec.replicas // 0) == (.status.readyReplicas // 0))' \
     "$MOCK_LOG.restore-deployments"
