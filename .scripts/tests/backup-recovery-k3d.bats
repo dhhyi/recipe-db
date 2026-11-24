@@ -62,7 +62,10 @@ setup() {
       mv "$4/restore-state.next" "$4/restore-state.json"
     fi
   }
-  die() { printf '%s\n' "$*" >&2; return 1; }
+  die() {
+    printf '%s\n' "$*" >&2
+    return 1
+  }
   approve_restore values.yaml "$state" backup-123 rehearsal
   grep -Fq "release_lifecycle restore-status values.yaml $state" "$calls"
   grep -Fq "release_lifecycle restore-reopen values.yaml $state OPEN-RESTORE-backup-123-restore-holder" "$calls"

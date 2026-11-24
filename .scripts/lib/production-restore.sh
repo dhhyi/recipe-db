@@ -1955,8 +1955,8 @@ restore_status() {
       > "$work/restore-status-observed-routers.json" 2> /dev/null; then
       routers=$(jq -c '[.[] | select(.name | endswith("@file")) |
         {name,status,rule,entryPoints}]' "$work/restore-status-observed-routers.json")
-      if [[ -f $work/restore-status-routes.json ]] &&
-        restore_public_routers_match "$work/restore-status-routes.json" \
+      if [[ -f $work/restore-status-routes.json ]] \
+        && restore_public_routers_match "$work/restore-status-routes.json" \
           "$work/restore-status-observed-routers.json"; then
         active_routes_match=true
       fi
