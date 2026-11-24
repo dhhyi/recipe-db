@@ -199,6 +199,7 @@ for name in (package["manifest"], package["archive"]):
     (root / name).chmod(0o600)
 (root / "alternate-package-paths.json").write_text(json.dumps(package))
 PY
-  export RESTORE_ALT_MANIFEST="$FIXTURE_ROOT/$(jq -r .manifest alternate-package-paths.json)"
-  export RESTORE_ALT_ARCHIVE="$FIXTURE_ROOT/$(jq -r .archive alternate-package-paths.json)"
+  RESTORE_ALT_MANIFEST="$FIXTURE_ROOT/$(jq -r .manifest alternate-package-paths.json)"
+  RESTORE_ALT_ARCHIVE="$FIXTURE_ROOT/$(jq -r .archive alternate-package-paths.json)"
+  export RESTORE_ALT_MANIFEST RESTORE_ALT_ARCHIVE
 }
