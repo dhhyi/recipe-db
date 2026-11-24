@@ -155,14 +155,15 @@ The handoff runs the existing restore pipeline with its own separate `RESTORE-$B
 Require restore to finish in the saved `awaiting-signoff` state. It verifies stored data, search readiness and representative reads while GraphQL stays in maintenance; it does not create, update or delete application records, and read checks do not prove write propagation. Public reads are available, writes remain blocked, and the restore Lease is retained. Inspect the live status before deciding whether to sign off:
 
 ```fish
-mise run production-k3d restore-status "$STATE"
+mise run production-k3d --release-sources-from-git restore-status "$VALUES" "$STATE"
 ```
 
 Confirm the saved backup, target, successful read checks, Lease ownership, maintenance mode and public read routes. Then separately approve reopening with the exact saved holder:
 
 ```fish
 set -g HOLDER (jq -er .holder "$STATE/restore-state.json")
-mise run production-k3d restore-reopen "$STATE" "OPEN-RESTORE-$BACKUP_ID-$HOLDER"
+mise run production-k3d --release-sources-from-git restore-reopen "$VALUES" "$STATE" \
+  "OPEN-RESTORE-$BACKUP_ID-$HOLDER"
 ```
 
 The command records that writes may open before switching GraphQL to production and releases ownership only after success. After sign-off, the operator may perform directed write checks outside restore. A reachable home page alone is not acceptance.
@@ -178,7 +179,8 @@ Choose one action:
 - **Recheck reads:** if import completion is confirmed and only a read check failed, investigate first, then request the read-only recheck. This does not re-import data:
 
   ```fish
-  mise run production-k3d restore-recheck "$STATE" "RECHECK-RESTORE-$BACKUP_ID"
+  mise run production-k3d --release-sources-from-git restore-recheck "$VALUES" "$STATE" \
+    "RECHECK-RESTORE-$BACKUP_ID"
   ```
 
 - **Select another backup:** while sign-off is pending, do not reopen writes. Preview the alternative package and use the separately confirmed reset procedure in step 3 with the retained state. Reset requires the exact retained Lease and will block access before clearing data. If import completion is uncertain, use this approved reset/restore recovery path rather than rechecking or importing again.

@@ -71,6 +71,28 @@ load production-k3d-restore-setup
   [[ $output != *"metadata and templates must match"* && $output != *"Git release sources are limited"* ]]
 }
 
+@test "pending restore preview refuses to rewrite state while a recovery command claim is held" {
+  restore_real_package_fixture
+  set_value '.timeoutSeconds=8'
+  run_restore
+  [ "$status" -eq 0 ]
+  cp "$RESTORE_STATE/restore-state.json" "$FIXTURE_ROOT/restore-state-before-preview.json"
+  jq -n --arg now "$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)" '
+    {apiVersion:"coordination.k8s.io/v1",kind:"Lease",
+      metadata:{name:"recipe-db-recovery-command",namespace:"kube-system",
+        labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+      spec:{holderIdentity:"other-recovery-command",leaseDurationSeconds:45,renewTime:$now}}' \
+    > "$MOCK_LOG.recovery-command-lease"
+  local alternate_id=backup-20261101123456-43
+  restore_alternate_real_package "$alternate_id" "2026-11-01T12:34:56Z"
+
+  run bash .scripts/production-k3d.sh recovery-plan "$VALUES" \
+    "$RESTORE_ALT_MANIFEST" "$RESTORE_ALT_ARCHIVE" "$alternate_id" "$RESTORE_STATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"another recovery command is active"* ]]
+  cmp "$FIXTURE_ROOT/restore-state-before-preview.json" "$RESTORE_STATE/restore-state.json"
+}
+
 @test "fresh Pi HTTPS restore creates retained storage before applying Traefik certificate infrastructure" {
   restore_fixture
   export MOCK_RETAINED_CLASS_MISSING=true

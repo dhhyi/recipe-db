@@ -297,20 +297,20 @@ On a fresh Pi, restore runs the guarded storage preflight and creates the retain
 Successful read checks do not prove write propagation. Restore finishes in a saved `awaiting-signoff` state: GraphQL remains in maintenance, public read routes are available, and the restore Lease is retained. Inspect the saved state and live access status before taking another action:
 
 ```sh
-mise run production-k3d restore-status "$STATE_DIRECTORY"
+mise run production-k3d restore-status "$VALUES" "$STATE_DIRECTORY"
 ```
 
 If a read check failed after the import was confirmed complete, investigate first, then request only a read-only recheck:
 
 ```sh
-mise run production-k3d restore-recheck "$STATE_DIRECTORY" "RECHECK-RESTORE-$BACKUP_ID"
+mise run production-k3d restore-recheck "$VALUES" "$STATE_DIRECTORY" "RECHECK-RESTORE-$BACKUP_ID"
 ```
 
 An incomplete or uncertain import cannot use this recheck; follow the existing approved reset/restore recovery path. Never import again into populated storage. To reopen writes after operator sign-off, confirm the status identifies the intended target and retained Lease, reports passed read checks, and observes GraphQL maintenance. Read the exact holder from saved state, then separately approve reopening:
 
 ```sh
 HOLDER=$(jq -er .holder "$STATE_DIRECTORY/restore-state.json")
-mise run production-k3d restore-reopen "$STATE_DIRECTORY" "OPEN-RESTORE-$BACKUP_ID-$HOLDER"
+mise run production-k3d restore-reopen "$VALUES" "$STATE_DIRECTORY" "OPEN-RESTORE-$BACKUP_ID-$HOLDER"
 ```
 
 The command records that writes may open before switching GraphQL to production and releases ownership only after successful completion. On failure, interruption or uncertain mode transition, inspect status; do not assume writes stayed blocked, restore the previous backup automatically, delete the Lease, or discard recovery state. Keep or re-establish the access barrier when safe. Operator-directed write checks happen only after sign-off and outside restore.

@@ -472,6 +472,7 @@ recovery_plan() {
   recovery_selected_manifest=$manifest
   restore_state=$state
   connect
+  recovery_command_acquire
   recovery_identity || production_fail "cannot pin configured application storage identities before reset"
   if [[ ! -e $state ]]; then
     mkdir -m 700 "$state"

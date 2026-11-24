@@ -188,9 +188,11 @@ KUBECONFIG="$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
 If restore fails, keep the target isolated and follow the [failure-recovery procedure](production-kubernetes.md#fresh-deployment-restore). Don't copy PVC data, apply rendered manifests, delete data or release a recovery lock manually to force success. A successful command means the restore is awaiting sign-off, not that writes are open:
 
 ```sh
-mise run production-k3d restore-status "$STATE"
+KUBECONFIG="$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
+  mise run production-k3d restore-status "$VALUES" "$STATE"
 HOLDER=$(jq -er .holder "$STATE/restore-state.json")
-mise run production-k3d restore-reopen "$STATE" "OPEN-RESTORE-$BACKUP_ID-$HOLDER"
+KUBECONFIG="$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
+  mise run production-k3d restore-reopen "$VALUES" "$STATE" "OPEN-RESTORE-$BACKUP_ID-$HOLDER"
 ```
 
 Inspect status and approve reopening only after confirming the intended target, retained Lease, passed read checks and observed maintenance mode. If reopening fails or its result is uncertain, inspect status and preserve the state and Lease; do not assume writes stayed blocked or restore the previous backup automatically.
