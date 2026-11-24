@@ -797,8 +797,11 @@ delete_owned_cluster() {
   bash "$driver" delete "$values" "DELETE-$cluster-AND-ALL-DATA" \
     > "$result_directory/logs/$cluster-delete.log" 2>&1 || return 1
   clusters=$(k3d cluster list -o json) || return 1
-  jq -e --arg cluster "$cluster" 'all(.[]; .name != $cluster)' <<< "$clusters" > /dev/null || return 1
+  jq -e --arg cluster "$cluster" 'type == "array" and all(.[]; .name != $cluster)' \
+    <<< "$clusters" > /dev/null || return 1
   containers=$(docker ps -aq --no-trunc --filter "id=$container") || return 1
+  [[ -z $containers ]] || return 1
+  containers=$(docker ps -aq --no-trunc --filter "label=k3d.cluster=$cluster") || return 1
   [[ -z $containers ]] || return 1
   printf -v "$state" '%s' removed
 }
