@@ -1999,9 +1999,10 @@ restore_recheck() {
     || production_fail "passed read-only recheck could not be durably recorded"
   restore_expose_readonly_routes \
     || production_fail "read-only routes could not be exposed; restore remains pending sign-off"
-  restore_graphql 'query { maintenance }' \
-    && jq -e '.data.maintenance == true' "$work/restore-response.json" > /dev/null \
-    || production_fail "GraphQL maintenance could not be reverified after read-only recheck"
+  if ! restore_graphql 'query { maintenance }' \
+    || ! jq -e '.data.maintenance == true' "$work/restore-response.json" > /dev/null; then
+    production_fail "GraphQL maintenance could not be reverified after read-only recheck"
+  fi
   restore_started=false
   printf 'production: read-only recheck passed; restore awaits operator sign-off; Lease holder %s retained\n' "$lock_holder"
 }
@@ -2037,9 +2038,10 @@ restore_reopen() {
   restore_forward deployment/traefik 3000 "$work/restore-forward.log" > "$work/restore-port"
   restore_graphql_port=$(cat "$work/restore-port")
   restore_assert_saved_public_routes
-  restore_graphql 'query { maintenance }' \
-    && jq -e '.data.maintenance == true' "$work/restore-response.json" > /dev/null \
-    || production_fail "GraphQL is not observed in maintenance mode before reopening"
+  if ! restore_graphql 'query { maintenance }' \
+    || ! jq -e '.data.maintenance == true' "$work/restore-response.json" > /dev/null; then
+    production_fail "GraphQL is not observed in maintenance mode before reopening"
+  fi
   locked=true
   retain_lock=true
   restore_started=true
@@ -2055,9 +2057,10 @@ restore_reopen() {
     || production_fail "reopening Lease phase could not be recorded; refusing to change GraphQL mode"
   restore_set_graphql_mode production \
     || production_fail "GraphQL reopening failed; access will be reblocked and ownership retained"
-  restore_graphql 'query { maintenance }' \
-    && jq -e '.data.maintenance == false' "$work/restore-response.json" > /dev/null \
-    || production_fail "GraphQL production mode could not be observed after reopening"
+  if ! restore_graphql 'query { maintenance }' \
+    || ! jq -e '.data.maintenance == false' "$work/restore-response.json" > /dev/null; then
+    production_fail "GraphQL production mode could not be observed after reopening"
+  fi
   restore_assert_saved_public_routes
   restore_state_update --arg at "$exposure_at" '
     .status="succeeded" | .phase="operator-reopened"
@@ -2488,9 +2491,10 @@ restore_run() {
     || production_fail "verified read-only restore could not be durably marked pending sign-off"
   restore_expose_readonly_routes \
     || production_fail "read-only public routes could not be safely exposed; restore remains pending sign-off"
-  restore_graphql 'query { maintenance }' \
-    && jq -e '.data.maintenance == true' "$work/restore-response.json" > /dev/null \
-    || production_fail "GraphQL maintenance could not be reverified after public read-only exposure"
+  if ! restore_graphql 'query { maintenance }' \
+    || ! jq -e '.data.maintenance == true' "$work/restore-response.json" > /dev/null; then
+    production_fail "GraphQL maintenance could not be reverified after public read-only exposure"
+  fi
   restore_guard_check || production_fail "recovery shutdown guard was lost while exposing read-only routes"
   kube patch configmap "$restore_guard_name" --type=merge \
     -p '{"data":{"completionReady":"true"}}' > /dev/null \

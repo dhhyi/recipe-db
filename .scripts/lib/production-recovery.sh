@@ -709,9 +709,10 @@ recovery_validate_pending_restore_handoff() {
     > "$work/pending-restore-port" \
     || production_fail "cannot observe GraphQL mode through the private route"
   restore_graphql_port=$(cat "$work/pending-restore-port")
-  restore_graphql 'query { maintenance }' \
-    && jq -e '.data.maintenance == true' "$work/restore-response.json" > /dev/null \
-    || production_fail "pending restore GraphQL is not observed in maintenance mode"
+  if ! restore_graphql 'query { maintenance }' \
+    || ! jq -e '.data.maintenance == true' "$work/restore-response.json" > /dev/null; then
+    production_fail "pending restore GraphQL is not observed in maintenance mode"
+  fi
 }
 
 recovery_reset() {
