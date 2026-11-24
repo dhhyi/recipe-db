@@ -240,10 +240,15 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
   if [[ $MOCK_RESTORE == true ]]; then
     case "$*" in
       *"get secret recipe-db-runtime -o json")
-        jq -n --arg graphql "$(printf '%043d' 0 | tr 0 a | base64 -w0)" \
+        jq -n --arg auth "$(base64 -w0 auth-accounts.json)" \
+          --arg google "$(base64 -w0 google-oauth-client-secret)" \
+          --arg cookie "$(tr '/+' '_-' < oauth2-cookie-secret | tr -d '=' | base64 -w0)" \
+          --arg graphql "$(printf '%043d' 0 | tr 0 a | base64 -w0)" \
           --arg typesense "$(printf '%064d' 0 | tr 0 a | base64 -w0)" '{
           metadata:{namespace:"recipe-db",labels:{"app.kubernetes.io/part-of":"recipe-db"}},
-          data:{"graphql-ingress-secret":$graphql,"typesense-api-key":$typesense}}'
+          data:{"auth-accounts.json":$auth,"graphql-ingress-secret":$graphql,
+            "typesense-api-key":$typesense,"google-oauth-client-secret":$google,
+            "oauth2-cookie-secret":$cookie}}'
         exit ;;
       *"get rolebinding/recovery-guard-"*)
         exit ;;
