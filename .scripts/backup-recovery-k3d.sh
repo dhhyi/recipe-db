@@ -30,14 +30,10 @@ die() {
 parent=$(dirname "$result_directory")
 [[ -d $parent && $(realpath -e "$parent") == "$parent" ]] \
   || die 'result directory parent must exist without symlink traversal'
-for tool in curl docker jq k3d kubectl openssl oras python3 sha256sum yq; do
+for tool in curl docker jq k3d kubectl openssl oras python3 setsid sha256sum yq; do
   command -v "$tool" > /dev/null || die "required tool not found: $tool"
 done
 
-mkdir -m 700 "$result_directory"
-mkdir -m 700 "$result_directory/secrets" "$result_directory/logs" \
-  "$result_directory/snapshots" "$result_directory/packages" "$result_directory/state" \
-  "$result_directory/uploader-staging" "$result_directory/bin" "$result_directory/fake-remote"
 started=$(date -u +%FT%TZ)
 started_epoch=$(date +%s)
 phase=initialization
@@ -57,15 +53,11 @@ cleanup_succeeded=false
 source_cleanup=not-attempted
 target_cleanup=not-attempted
 files_cleanup=not-attempted
-printf '[]\n' > "$result_directory/phases.json"
-export FAKE_RCLONE_ROOT="$result_directory/fake-remote"
-cp "$root/.scripts/tests/fixtures/rclone-local" "$result_directory/bin/rclone"
-chmod 700 "$result_directory/bin/rclone"
-export PATH="$result_directory/bin:$PATH"
+active_cleanup_pid=''
 
 mark() {
   jq --arg phase "$phase" '. + [$phase]' "$result_directory/phases.json" \
-    > "$result_directory/phases.next"
+    > "$result_directory/phases.next" || return 1
   mv "$result_directory/phases.next" "$result_directory/phases.json"
 }
 
@@ -84,16 +76,19 @@ release_lifecycle() {
 
 write_result() {
   local success=$1 finished elapsed staging_bytes available_bytes
-  finished=$(date -u +%FT%TZ)
-  elapsed=$(($(date +%s) - started_epoch))
+  finished=$(date -u +%FT%TZ) || return 1
+  elapsed=$(date +%s) || return 1
+  elapsed=$((elapsed - started_epoch))
   staging_bytes=0
   for directory in "$result_directory/snapshots" "$result_directory/packages" \
     "$result_directory/uploader-staging"; do
     if [[ -d $directory ]]; then
-      staging_bytes=$((staging_bytes + $(du -sb "$directory" | cut -f1)))
+      local bytes
+      bytes=$(du -sb "$directory" | cut -f1) || return 1
+      staging_bytes=$((staging_bytes + bytes))
     fi
   done
-  available_bytes=$(df -B1 --output=avail "$result_directory" | awk 'NR == 2 {print $1}')
+  available_bytes=$(df -B1 --output=avail "$result_directory" | awk 'NR == 2 {print $1}') || return 1
   jq -n --arg release "$release" --arg candidateRelease "$candidate_release" \
     --arg source "$source_cluster" --arg target "$target_cluster" \
     --arg backupId "$backup_id" --arg revision "$revision" \
@@ -114,8 +109,9 @@ write_result() {
       backupId:$backupId,phases:$phases[0],stagingBytes:$stagingBytes,
       availableBytesAfter:$availableBytes,testRecordCleanupSucceeded:$cleanupSucceeded,
       cleanup:{sourceCluster:$sourceCleanup,targetCluster:$targetCleanup,files:$filesCleanup}}' \
-    > "$result_directory/result.json"
-  chmod 600 "$result_directory/result.json"
+    > "$result_directory/result.next" || return 1
+  chmod 600 "$result_directory/result.next" || return 1
+  mv "$result_directory/result.next" "$result_directory/result.json"
 }
 
 finish() {
@@ -123,9 +119,13 @@ finish() {
   trap - EXIT
   if ((status == 0)); then
     phase=complete
-    mark
+    mark || status=1
   fi
-  write_result "$([[ $status == 0 ]] && echo true || echo false)" || status=1
+  if [[ -f $result_directory/phases.json ]]; then
+    write_result "$([[ $status == 0 ]] && echo true || echo false)" || status=1
+  else
+    status=1
+  fi
   if ((status == 0)); then
     printf 'Backup recovery rehearsal passed; clusters and temporary data removed. Result: %s/result.json\n' \
       "$result_directory"
@@ -137,10 +137,31 @@ finish() {
   fi
   exit "$status"
 }
+interrupt() {
+  local status=$1
+  trap '' INT TERM
+  if [[ -n $active_cleanup_pid ]]; then
+    kill -TERM -- "-$active_cleanup_pid" 2> /dev/null || kill -TERM "$active_cleanup_pid" 2> /dev/null || :
+    kill -KILL -- "-$active_cleanup_pid" 2> /dev/null || kill -KILL "$active_cleanup_pid" 2> /dev/null || :
+    wait "$active_cleanup_pid" 2> /dev/null || :
+    active_cleanup_pid=''
+  fi
+  exit "$status"
+}
+mkdir -m 700 "$result_directory"
 trap finish EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'interrupt 130' INT
+trap 'interrupt 143' TERM
 trap 'printf "Backup recovery rehearsal command failed at line %s during %s\n" "$LINENO" "$phase" >&2' ERR
+
+mkdir -m 700 "$result_directory/secrets" "$result_directory/logs" \
+  "$result_directory/snapshots" "$result_directory/packages" "$result_directory/state" \
+  "$result_directory/uploader-staging" "$result_directory/bin" "$result_directory/fake-remote"
+printf '[]\n' > "$result_directory/phases.json"
+export FAKE_RCLONE_ROOT="$result_directory/fake-remote"
+cp "$root/.scripts/tests/fixtures/rclone-local" "$result_directory/bin/rclone"
+chmod 700 "$result_directory/bin/rclone"
+export PATH="$result_directory/bin:$PATH"
 
 run_id=$(openssl rand -hex 8)
 source_cluster="recipe-db-rehearsal-${run_id:0:8}-s"
@@ -790,11 +811,20 @@ verify_owned_cluster() {
   bash "$driver" verify "$values" > "$result_directory/logs/$cluster-verify.log" 2>&1
 }
 
+run_cleanup_command() {
+  local status
+  setsid "$@" &
+  active_cleanup_pid=$!
+  wait "$active_cleanup_pid" && status=0 || status=$?
+  active_cleanup_pid=''
+  return "$status"
+}
+
 delete_owned_cluster() {
   local cluster=$1 container=$2 values=$3 state=$4 clusters containers
   verify_owned_cluster "$cluster" "$container" "$values" || return 1
   printf -v "$state" '%s' uncertain
-  bash "$driver" delete "$values" "DELETE-$cluster-AND-ALL-DATA" \
+  run_cleanup_command bash "$driver" delete "$values" "DELETE-$cluster-AND-ALL-DATA" \
     > "$result_directory/logs/$cluster-delete.log" 2>&1 || return 1
   clusters=$(k3d cluster list -o json) || return 1
   jq -e --arg cluster "$cluster" 'type == "array" and all(.[]; .name != $cluster)' \
@@ -816,7 +846,7 @@ cleanup_rehearsal() {
   for path in "$result_directory"/* "$result_directory"/.[!.]* "$result_directory"/..?*; do
     [[ -e $path || -L $path ]] || continue
     case ${path##*/} in result.json | phases.json) continue ;; esac
-    rm -rf -- "$path" || return 1
+    run_cleanup_command rm -rf -- "$path" || return 1
   done
   files_cleanup=removed
 }

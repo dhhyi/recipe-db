@@ -178,6 +178,7 @@ driver=driver
 source_cleanup=not-attempted
 target_cleanup=not-attempted
 files_cleanup=not-attempted
+active_cleanup_pid=''
 cleanup_succeeded=true
 phase=test
 started=now
