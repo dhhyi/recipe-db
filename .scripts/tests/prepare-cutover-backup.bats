@@ -437,16 +437,18 @@ PY
 
 @test "verified-unchanged receipt binds the previous package to the retained snapshot contents" {
   local operation_id receipt="$INPUT_DIRECTORY/unchanged-retrieval.json"
-  local fingerprint captured_at invalid_receipt result_directory index=0
+  local fingerprint captured_at baseline_id invalid_receipt result_directory index=0
   operation_id=$(jq -er .backupId "$INPUT_MANIFEST")
   fingerprint=$(jq -er .contentFingerprint "$INPUT_MANIFEST")
   captured_at=$(jq -er .capturedAt "$INPUT_MANIFEST")
+  baseline_id="backup-20261102123456-999"
   jq --arg operationId "$operation_id" --arg fingerprint "$fingerprint" \
-    --arg capturedAt "$captured_at" '
+    --arg capturedAt "$captured_at" --arg baselineId "$baseline_id" '
     .maintenanceOperation.uploadStatus = "verified-unchanged"
     | .maintenanceOperation.backupId = $operationId
     | .maintenanceOperation.capturedAt = $capturedAt
     | .maintenanceOperation.contentFingerprint = $fingerprint
+    | .maintenanceOperation.verifiedBaselineBackupId = $baselineId
   ' "$RETRIEVAL_RECEIPT" > "$receipt"
   chmod 600 "$receipt"
   export RESULT_DIRECTORY="$RESULT_PARENT/result-verified-unchanged"
@@ -454,15 +456,22 @@ PY
     "$receipt" "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY"
   [ "$status" -eq 0 ]
   jq -e '.status == "passed"' "$RESULT_DIRECTORY/result.json"
-  jq -e --arg operationId "$operation_id" '
+  jq -e --arg operationId "$operation_id" --arg baselineId "$baseline_id" \
+    --arg fingerprint "$fingerprint" '
     .maintenanceOperation.backupId == $operationId
     and .maintenanceOperation.packageBackupId == .previousBackup.backupId
     and .maintenanceOperation.capturedAt == .previousBackup.capturedAt
     and .maintenanceOperation.uploadStatus == "verified-unchanged"
+    and .maintenanceOperation.verifiedBaselineBackupId == $baselineId
+    and .maintenanceOperation.contentFingerprint == $fingerprint
   ' "$RESULT_DIRECTORY/provenance.json"
   for filter in \
     '.maintenanceOperation.backupId = "backup-20261102123456-2"' \
-    '.maintenanceOperation.capturedAt = "2026-11-02T12:34:56Z"'; do
+    '.maintenanceOperation.capturedAt = "2026-11-02T12:34:56Z"' \
+    '.maintenanceOperation.verifiedBaselineBackupId = "invalid-id"' \
+    'del(.maintenanceOperation.verifiedBaselineBackupId)' \
+    'del(.maintenanceOperation.contentFingerprint)' \
+    '.maintenanceOperation.contentFingerprint = "0000000000000000000000000000000000000000000000000000000000000000"'; do
     index=$((index + 1))
     invalid_receipt="$INPUT_DIRECTORY/unchanged-retrieval-invalid-$index.json"
     result_directory="$RESULT_PARENT/result-verified-unchanged-invalid-$index"
@@ -473,8 +482,15 @@ PY
     run bash .scripts/prepare-cutover-backup-k3d.sh "$INPUT_MANIFEST" "$INPUT_ARCHIVE" \
       "$invalid_receipt" "$CANDIDATE_RELEASE" "$result_directory"
     [ "$status" -ne 0 ]
-    [[ $output == *"retrieval receipt does not verify this exact final backup"* ]]
-    [ ! -e "$result_directory" ]
+    if [[ $filter == *contentFingerprint* ]]; then
+      [[ $output == *"verified-unchanged retrieval does not match the retained final snapshot contents"* ]]
+      jq -e '.status == "failed" and .phase == "preflight"
+        and (.clusters.source.creationAttempted | not)
+        and (.clusters.target.creationAttempted | not)' "$result_directory/result.json"
+    else
+      [[ $output == *"retrieval receipt does not verify this exact final backup"* ]]
+      [ ! -e "$result_directory" ]
+    fi
     [ ! -s "$MOCK_LOG" ]
   done
 }

@@ -603,6 +603,9 @@ assert operation["capturedAt"] == package["capturedAt"]
 assert operation["contentFingerprint"] == package["contentFingerprint"]
 assert operation["verifiedBaselineBackupId"] == os.environ["PACKAGE_ID"]
 assert package["snapshotManifest"]["backupId"] == os.environ["OPERATION_ID"]
+root = Path(os.environ["REMOTE_ROOT"])
+baseline_archive = next((root / "drive").glob(f"*{os.environ['PACKAGE_ID']}.tar.gz"))
+assert (root / "read-log").read_text().splitlines().count(baseline_archive.name) == 2
 with tarfile.open(result["archive"], "r:gz") as outer:
     snapshot_archive = outer.extractfile("recipes.tar").read()
 with tarfile.open(fileobj=io.BytesIO(snapshot_archive), mode="r:") as inner:

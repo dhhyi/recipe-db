@@ -374,6 +374,7 @@ load production-k3d-restore-setup
   jq -e '.savedProgress.status == "awaiting-signoff"
     and .savedProgress.import.status == "complete"
     and .savedProgress.readChecks.status == "passed"
+    and .savedProgress.writesMayHaveOpened == false
     and .lease.present and .lease.ownedByRestore
     and .lease.phase == "awaiting-signoff"
     and .observed.graphql.mode == "maintenance"
@@ -452,7 +453,7 @@ load production-k3d-restore-setup
   mv "$MOCK_LOG.cluster-restore-state.next" "$MOCK_LOG.cluster-restore-state"
   run bash .scripts/production-k3d.sh restore-status "$VALUES" "$RESTORE_STATE"
   [ "$status" -eq 0 ]
-  jq -e '.savedProgress.writesMayHaveOpened == null
+  jq -e '.savedProgress.writesMayHaveOpened == false
     and .savedStateMatchesCluster == false
     and .observed.graphql.maintenanceVerified
     and .observed.publicRoutes.normalRoutesObserved

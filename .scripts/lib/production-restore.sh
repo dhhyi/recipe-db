@@ -2120,7 +2120,8 @@ restore_status() {
       savedProgress:{backupId:$saved.backupId,status:$saved.status,phase:$saved.phase,
         import:($saved.import // null),readChecks:($saved.readChecks // null),
         publicRoutesMayBeOpen:($saved.publicRoutesMayBeOpen // null),
-        writesMayHaveOpened:($saved.writesMayHaveOpened // null)},
+        writesMayHaveOpened:($saved | if has("writesMayHaveOpened")
+          then .writesMayHaveOpened else null end)},
       lease:{present:($currentLease != null),
         holder:($currentLease.spec.holderIdentity // null),
         phase:($currentLease.metadata.annotations["recipe-db/phase"] // null),

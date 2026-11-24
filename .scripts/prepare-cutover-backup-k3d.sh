@@ -105,7 +105,9 @@ jq -e --arg id "$backup_id" --arg manifest "$input_manifest" --arg archive "$inp
       and .maintenanceOperation.capturedAt == $capturedAt))
   and (.maintenanceOperation.uploadStatus != "verified-unchanged"
     or (.maintenanceOperation.backupId == $id
-      and .maintenanceOperation.capturedAt == $capturedAt))
+      and .maintenanceOperation.capturedAt == $capturedAt
+      and (.maintenanceOperation.verifiedBaselineBackupId |
+        type == "string" and test("^backup-[0-9]+-[0-9]+$"))))
   and .maintenanceOperation.source.artifact == $artifact
   and .maintenanceOperation.source.revision == $revision
 ' "$retrieval_receipt" > /dev/null || fail 'retrieval receipt does not verify this exact final backup'
@@ -516,6 +518,10 @@ jq -n --arg previousId "$backup_id" --arg previousManifestSha "$source_manifest_
   --arg verification "$(jq -er .maintenanceOperation.uploadStatus "$receipt")" \
   --arg maintenanceBackupId "$maintenance_backup_id" \
   --arg maintenanceCapturedAt "$maintenance_captured_at" \
+  --arg verifiedBaselineBackupId \
+  "$(jq -r '.maintenanceOperation.verifiedBaselineBackupId // ""' "$receipt")" \
+  --arg contentFingerprint \
+  "$(jq -r '.maintenanceOperation.contentFingerprint // ""' "$receipt")" \
   --arg cutoverId "$cutover_backup_id" --arg cutoverManifest "$(basename "$package_manifest")" \
   --arg cutoverArchive "$(basename "$package_archive")" \
   --arg cutoverManifestSha "$new_manifest_sha" --arg cutoverArchiveSha "$new_archive_sha" \
@@ -527,7 +533,10 @@ jq -n --arg previousId "$backup_id" --arg previousManifestSha "$source_manifest_
       source:$previous[0].source,
       verifiedUploadStatus:$verification},
     maintenanceOperation:{backupId:$maintenanceBackupId,packageBackupId:$previousId,
-      capturedAt:$maintenanceCapturedAt,uploadStatus:$verification},
+      capturedAt:$maintenanceCapturedAt,uploadStatus:$verification} +
+      (if $verification == "verified-unchanged" then
+        {verifiedBaselineBackupId:$verifiedBaselineBackupId,contentFingerprint:$contentFingerprint}
+       else {} end),
     cutoverBackup:{backupId:$cutoverId,manifest:$cutoverManifest,archive:$cutoverArchive,
       manifestSha256:$cutoverManifestSha,archiveSha256:$cutoverArchiveSha,
       source:$cutover[0].source}}

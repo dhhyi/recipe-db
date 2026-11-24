@@ -75,7 +75,10 @@ try:
             baseline = tool["read_json"](tool["baseline_path"](config))
             names = tool["remote_names"](config)
             if not isinstance(baseline, dict) or baseline.get("fingerprint") != fingerprint \
-                    or not tool["verify_baseline"](config, baseline, names):
+                    or baseline.get("archive") not in names \
+                    or baseline.get("manifest") not in names \
+                    or (sys.argv[1] != "maintenance-snapshot"
+                        and not tool["verify_baseline"](config, baseline, names)):
                 raise ValueError("unchanged maintenance snapshot does not match the verified baseline")
             baseline_backup_id = baseline.get("backupId")
             if not tool["BACKUP_ID_PATTERN"].fullmatch(str(baseline_backup_id or "")):
