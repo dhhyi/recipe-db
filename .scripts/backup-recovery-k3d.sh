@@ -831,7 +831,7 @@ run_cleanup_command() {
   trap 'cleanup_signal=130' INT
   trap 'cleanup_signal=143' TERM
   mkfifo -m 600 "$gate" || return 1
-  exec {gate_fd}<>"$gate"
+  exec {gate_fd}<> "$gate"
   if ((cleanup_signal != 0)); then interrupt "$cleanup_signal"; fi
   setsid bash -c 'IFS= read -r < "$1" || exit 1; shift; "$@"' cleanup-gate "$gate" "$@" &
   active_cleanup_pid=$!

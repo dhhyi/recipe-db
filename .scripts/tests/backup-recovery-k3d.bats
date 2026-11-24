@@ -53,7 +53,10 @@ setup() {
   local driver=driver.sh target_values=target.yaml target_cluster=target
   sed -n '/^phase=nonempty-target-refusal/,/^\[\[ \$source_container !=/p' .scripts/backup-recovery-k3d.sh \
     | sed '$d' > target-cluster-steps.sh
-  run_logged() { shift; "$@"; }
+  run_logged() {
+    shift
+    "$@"
+  }
   bash() { printf '%s\n' "$*" >> "$result_directory/driver-operations"; }
   docker() { printf 'disposable-target-container'; }
   # shellcheck source=/dev/null
@@ -126,7 +129,7 @@ SH
 @test "initialization interruption reports the retained result directory" {
   use_mise_tools
   setup_mock_bin
-  cat > "$FIXTURE_ROOT/bin/mkdir" <<'SH'
+  cat > "$FIXTURE_ROOT/bin/mkdir" << 'SH'
 #!/usr/bin/env bash
 if [[ ${3:-} == */secrets ]]; then
   kill -TERM "$PPID"
@@ -146,7 +149,7 @@ SH
 @test "interruption during result directory creation reports its location" {
   use_mise_tools
   setup_mock_bin
-  cat > "$FIXTURE_ROOT/bin/mkdir" <<'SH'
+  cat > "$FIXTURE_ROOT/bin/mkdir" << 'SH'
 #!/usr/bin/env bash
 /bin/mkdir "$@" || exit
 if [[ ${3:-} == "$result_directory" ]]; then kill -TERM "$PPID"; fi
@@ -219,7 +222,7 @@ prepare_cleanup_harness() {
   printf 'private remote\n' > "$result_directory/fake-remote/data"
   printf 'private log\n' > "$result_directory/logs/data"
   touch "$FIXTURE_ROOT/source-present" "$FIXTURE_ROOT/target-present"
-  cat > cleanup-harness.sh <<'SH'
+  cat > cleanup-harness.sh << 'SH'
 set -Eeuo pipefail
 source_cluster=source
 target_cluster=target
@@ -310,7 +313,7 @@ jq() {
 SH
   sed -n '/^mark() {/,/^}/p; /^write_result() {/,/^}/p; /^finish() {/,/^}/p; /^interrupt() {/,/^}/p; /^verify_owned_cluster() {/,/^}/p; /^run_cleanup_command() {/,/^}/p; /^delete_owned_cluster() {/,/^}/p; /^cleanup_rehearsal() {/,/^}/p' \
     .scripts/backup-recovery-k3d.sh >> cleanup-harness.sh
-  cat >> cleanup-harness.sh <<'SH'
+  cat >> cleanup-harness.sh << 'SH'
 trap finish EXIT
 trap 'interrupt 143' TERM
 if [[ ${EARLY_FAILURE:-} == true ]]; then exit 1; fi
@@ -462,7 +465,7 @@ SH
   use_mise_tools
   export FIXTURE_ROOT
   prepare_cleanup_harness
-  cat > driver <<'SH'
+  cat > driver << 'SH'
 #!/usr/bin/env bash
 echo "$$" > "$FIXTURE_ROOT/deletion-pid"
 touch "$FIXTURE_ROOT/deletion-started"
