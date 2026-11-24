@@ -30,14 +30,10 @@ die() {
 parent=$(dirname "$result_directory")
 [[ -d $parent && $(realpath -e "$parent") == "$parent" ]] \
   || die 'result directory parent must exist without symlink traversal'
-for tool in curl docker jq k3d kubectl openssl oras python3 sha256sum yq; do
+for tool in curl docker jq k3d kubectl mkfifo openssl oras python3 setsid sha256sum yq; do
   command -v "$tool" > /dev/null || die "required tool not found: $tool"
 done
 
-mkdir -m 700 "$result_directory"
-mkdir -m 700 "$result_directory/secrets" "$result_directory/logs" \
-  "$result_directory/snapshots" "$result_directory/packages" "$result_directory/state" \
-  "$result_directory/uploader-staging" "$result_directory/bin" "$result_directory/fake-remote"
 started=$(date -u +%FT%TZ)
 started_epoch=$(date +%s)
 phase=initialization
@@ -54,15 +50,17 @@ recipe_id=''
 tag_id=''
 backup_id=''
 cleanup_succeeded=false
-printf '[]\n' > "$result_directory/phases.json"
-export FAKE_RCLONE_ROOT="$result_directory/fake-remote"
-cp "$root/.scripts/tests/fixtures/rclone-local" "$result_directory/bin/rclone"
-chmod 700 "$result_directory/bin/rclone"
-export PATH="$result_directory/bin:$PATH"
+source_cleanup=not-attempted
+target_cleanup=not-attempted
+files_cleanup=not-attempted
+active_cleanup_pid=''
+result_created=false
+finish_signal=0
+exec {report_fd}>&2
 
 mark() {
   jq --arg phase "$phase" '. + [$phase]' "$result_directory/phases.json" \
-    > "$result_directory/phases.next"
+    > "$result_directory/phases.next" || return 1
   mv "$result_directory/phases.next" "$result_directory/phases.json"
 }
 
@@ -81,16 +79,19 @@ release_lifecycle() {
 
 write_result() {
   local success=$1 finished elapsed staging_bytes available_bytes
-  finished=$(date -u +%FT%TZ)
-  elapsed=$(($(date +%s) - started_epoch))
+  finished=$(date -u +%FT%TZ) || return 1
+  elapsed=$(date +%s) || return 1
+  elapsed=$((elapsed - started_epoch))
   staging_bytes=0
   for directory in "$result_directory/snapshots" "$result_directory/packages" \
     "$result_directory/uploader-staging"; do
     if [[ -d $directory ]]; then
-      staging_bytes=$((staging_bytes + $(du -sb "$directory" | cut -f1)))
+      local bytes
+      bytes=$(du -sb "$directory" | cut -f1) || return 1
+      staging_bytes=$((staging_bytes + bytes))
     fi
   done
-  available_bytes=$(df -B1 --output=avail "$result_directory" | awk 'NR == 2 {print $1}')
+  available_bytes=$(df -B1 --output=avail "$result_directory" | awk 'NR == 2 {print $1}') || return 1
   jq -n --arg release "$release" --arg candidateRelease "$candidate_release" \
     --arg source "$source_cluster" --arg target "$target_cluster" \
     --arg backupId "$backup_id" --arg revision "$revision" \
@@ -101,44 +102,87 @@ write_result() {
     --arg finished "$finished" --argjson elapsedSeconds "$elapsed" \
     --argjson stagingBytes "$staging_bytes" --argjson availableBytes "$available_bytes" \
     --argjson success "$success" --argjson cleanupSucceeded "$cleanup_succeeded" \
+    --arg sourceCleanup "$source_cleanup" --arg targetCleanup "$target_cleanup" \
+    --arg filesCleanup "$files_cleanup" \
     --slurpfile phases "$result_directory/phases.json" \
     '{schemaVersion:1,success:$success,phase:$phase,startedAt:$started,finishedAt:$finished,
       elapsedSeconds:$elapsedSeconds,release:$release,candidateRelease:$candidateRelease,revision:$revision,
       sourceCluster:{name:$source,containerId:$sourceContainer,httpPort:$sourceHttpPort,apiPort:$sourceApiPort},
       targetCluster:{name:$target,containerId:$targetContainer,httpPort:$targetHttpPort,apiPort:$targetApiPort},
       backupId:$backupId,phases:$phases[0],stagingBytes:$stagingBytes,
-      availableBytesAfter:$availableBytes,testRecordCleanupSucceeded:$cleanupSucceeded}' \
-    > "$result_directory/result.json"
-  chmod 600 "$result_directory/result.json"
+      availableBytesAfter:$availableBytes,testRecordCleanupSucceeded:$cleanupSucceeded,
+      cleanup:{sourceCluster:$sourceCleanup,targetCluster:$targetCleanup,files:$filesCleanup}}' \
+    > "$result_directory/result.next" || return 1
+  chmod 600 "$result_directory/result.next" || return 1
+  mv "$result_directory/result.next" "$result_directory/result.json"
 }
 
 finish() {
   local status=$?
   trap - EXIT
+  trap 'finish_signal=130' INT
+  trap 'finish_signal=143' TERM
   if ((status == 0)); then
     phase=complete
-    mark
+    mark || status=1
   fi
-  write_result "$([[ $status == 0 ]] && echo true || echo false)" || status=1
-  if ((status == 0)); then
-    printf 'Backup recovery rehearsal passed; clusters retained. Result: %s/result.json\n' \
-      "$result_directory"
+  if $result_created && [[ -f $result_directory/phases.json ]]; then
+    write_result "$([[ $status == 0 ]] && echo true || echo false)" || status=1
   else
-    printf 'Backup recovery rehearsal stopped during %s; clusters and diagnostics retained at %s\n' \
-      "$phase" "$result_directory" >&2
+    status=1
+  fi
+  if ((finish_signal != 0)); then
+    status=$finish_signal
+    trap '' INT TERM
+    if $result_created && [[ -f $result_directory/phases.json ]]; then
+      write_result false || :
+    fi
+  fi
+  if ((status == 0)); then
+    printf 'Backup recovery rehearsal passed; clusters and temporary data removed. Result: %s/result.json\n' \
+      "$result_directory" >&"$report_fd"
+  else
+    printf 'Backup recovery rehearsal stopped during %s; source %s: %s; target %s: %s; files: %s at %s\n' \
+      "$phase" "$source_cluster" "$source_cleanup" "$target_cluster" "$target_cleanup" \
+      "$files_cleanup" "$result_directory" >&"$report_fd"
+    printf 'Inspect remaining resources and private files before deciding what to remove.\n' >&"$report_fd"
+    printf 'Private driver work may remain under %s/.production-k3d.*; inspect it before removal.\n' \
+      "$root" >&"$report_fd"
+  fi
+  exit "$status"
+}
+interrupt() {
+  local status=$1
+  trap '' INT TERM
+  if [[ -n $active_cleanup_pid ]]; then
+    kill -TERM -- "-$active_cleanup_pid" 2> /dev/null || kill -TERM "$active_cleanup_pid" 2> /dev/null || :
+    kill -KILL -- "-$active_cleanup_pid" 2> /dev/null || kill -KILL "$active_cleanup_pid" 2> /dev/null || :
+    wait "$active_cleanup_pid" 2> /dev/null || :
+    active_cleanup_pid=''
   fi
   exit "$status"
 }
 trap finish EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'interrupt 130' INT
+trap 'interrupt 143' TERM
 trap 'printf "Backup recovery rehearsal command failed at line %s during %s\n" "$LINENO" "$phase" >&2' ERR
 
-run_id=$(openssl rand -hex 4)
-source_cluster="recipe-db-rehearsal-${run_id}-s"
-target_cluster="recipe-db-rehearsal-${run_id}-t"
+mkdir -m 700 "$result_directory"
+result_created=true
+mkdir -m 700 "$result_directory/secrets" "$result_directory/logs" \
+  "$result_directory/snapshots" "$result_directory/packages" "$result_directory/state" \
+  "$result_directory/uploader-staging" "$result_directory/bin" "$result_directory/fake-remote"
+printf '[]\n' > "$result_directory/phases.json"
+export FAKE_RCLONE_ROOT="$result_directory/fake-remote"
+cp "$root/.scripts/tests/fixtures/rclone-local" "$result_directory/bin/rclone"
+chmod 700 "$result_directory/bin/rclone"
+export PATH="$result_directory/bin:$PATH"
+
+run_id=$(openssl rand -hex 8)
+source_cluster="recipe-db-rehearsal-${run_id:0:8}-s"
+target_cluster="recipe-db-rehearsal-${run_id:0:8}-t"
 ((${#source_cluster} <= 32 && ${#target_cluster} <= 32))
-port_offset=$((16#$run_id % 8000))
+port_offset=$((16#${run_id:0:8} % 8000))
 source_http_port=$((20000 + port_offset))
 target_http_port=$((source_http_port + 1))
 source_api_port=$((30000 + port_offset))
@@ -161,6 +205,7 @@ chmod 600 "$result_directory/secrets/"*
 
 write_values() {
   rehearsal_write_values "$root" "$1" "$2" "$3" "$accounts_file" "$4"
+  REHEARSAL_ID="$run_id" yq -i '.rehearsalId = strenv(REHEARSAL_ID)' "$4"
 }
 case "$result_directory/" in
   "$root/.secrets/"* | /var/lib/rancher/*) die 'results cannot be inside credentials or runtime storage' ;;
@@ -195,7 +240,7 @@ PY
 mark
 
 phase=source-cluster
-run_logged "$result_directory/logs/source-create.log" bash "$driver" create "$source_values"
+run_logged "$result_directory/logs/source-create.log" bash "$driver" create-new "$source_values"
 source_container=$(docker inspect --format '{{.Id}}' "k3d-$source_cluster-server-0")
 run_logged "$result_directory/logs/source-deploy.log" bash "$driver" deploy "$source_values" "$release"
 mark
@@ -333,7 +378,7 @@ python3 "$root/.scripts/validate-backup-package.py" "$package_manifest" "$archiv
 mark
 
 phase=nonempty-target-refusal
-run_logged "$result_directory/logs/target-create.log" bash "$driver" create "$target_values"
+run_logged "$result_directory/logs/target-create.log" bash "$driver" create-new "$target_values"
 target_container=$(docker inspect --format '{{.Id}}' "k3d-$target_cluster-server-0")
 [[ $source_container != "$target_container" ]] || die 'source and target are not distinct k3d clusters'
 bash "$driver" kubectl "$target_values" create namespace recipe-db \
@@ -771,4 +816,68 @@ for path in logs_path.rglob("*"):
             raise SystemExit(1)
 PY
 cleanup_succeeded=true
+mark
+
+verify_owned_cluster() {
+  local cluster=$1 container=$2 values=$3 actual
+  [[ -n $container ]] || return 1
+  actual=$(docker inspect --format '{{.Id}}' "k3d-$cluster-server-0") || return 1
+  [[ $actual == "$container" ]] || return 1
+  bash "$driver" verify "$values" > "$result_directory/logs/$cluster-verify.log" 2>&1
+}
+
+run_cleanup_command() {
+  local status cleanup_signal=0 gate="$result_directory/.cleanup-gate" gate_fd
+  trap 'cleanup_signal=130' INT
+  trap 'cleanup_signal=143' TERM
+  mkfifo -m 600 "$gate" || return 1
+  exec {gate_fd}<> "$gate"
+  if ((cleanup_signal != 0)); then interrupt "$cleanup_signal"; fi
+  setsid bash -c 'IFS= read -r < "$1" || exit 1; shift; "$@"' cleanup-gate "$gate" "$@" &
+  active_cleanup_pid=$!
+  trap 'interrupt 130' INT
+  trap 'interrupt 143' TERM
+  if ((cleanup_signal != 0)); then interrupt "$cleanup_signal"; fi
+  printf 'start\n' >&"$gate_fd"
+  wait "$active_cleanup_pid" && status=0 || status=$?
+  active_cleanup_pid=''
+  exec {gate_fd}>&-
+  ((status == 0)) || return "$status"
+  rm -- "$gate" || return 1
+  return "$status"
+}
+
+delete_owned_cluster() {
+  local cluster=$1 container=$2 values=$3 state=$4 clusters containers
+  verify_owned_cluster "$cluster" "$container" "$values" || return 1
+  printf -v "$state" '%s' uncertain
+  run_cleanup_command bash "$driver" delete "$values" "DELETE-$cluster-AND-ALL-DATA" \
+    > "$result_directory/logs/$cluster-delete.log" 2>&1 || return 1
+  clusters=$(k3d cluster list -o json) || return 1
+  jq -e --arg cluster "$cluster" 'type == "array" and all(.[]; .name != $cluster)' \
+    <<< "$clusters" > /dev/null || return 1
+  containers=$(docker ps -aq --no-trunc --filter "id=$container") || return 1
+  [[ -z $containers ]] || return 1
+  containers=$(docker ps -aq --no-trunc --filter "label=k3d.cluster=$cluster") || return 1
+  [[ -z $containers ]] || return 1
+  printf -v "$state" '%s' removed
+}
+
+cleanup_rehearsal() {
+  local path
+  verify_owned_cluster "$source_cluster" "$source_container" "$source_values" || return 1
+  verify_owned_cluster "$target_cluster" "$target_container" "$target_values" || return 1
+  delete_owned_cluster "$source_cluster" "$source_container" "$source_values" source_cleanup || return 1
+  delete_owned_cluster "$target_cluster" "$target_container" "$target_values" target_cleanup || return 1
+  files_cleanup=partial
+  for path in "$result_directory"/* "$result_directory"/.[!.]* "$result_directory"/..?*; do
+    [[ -e $path || -L $path ]] || continue
+    case ${path##*/} in result.json | phases.json) continue ;; esac
+    run_cleanup_command rm -rf -- "$path" || return 1
+  done
+  files_cleanup=removed
+}
+
+phase=rehearsal-cleanup
+cleanup_rehearsal || die 'cleanup incomplete; no further deletion will be attempted'
 mark

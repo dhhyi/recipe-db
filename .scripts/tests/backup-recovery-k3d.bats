@@ -45,7 +45,25 @@ setup() {
   mark() { return 0; }
   # shellcheck source=/dev/null
   source ./source-cluster-steps.sh
-  [ "$(cat "$result_directory/driver-operations")" = $'driver.sh create source.yaml\ndriver.sh deploy source.yaml immutable-release' ]
+  [ "$(cat "$result_directory/driver-operations")" = $'driver.sh create-new source.yaml\ndriver.sh deploy source.yaml immutable-release' ]
+}
+
+@test "target cluster creation refuses existing clusters" {
+  mkdir -p "$result_directory"
+  # shellcheck disable=SC2034
+  local driver=driver.sh target_values=target.yaml target_cluster=target
+  # shellcheck disable=SC2016
+  sed -n '/^phase=nonempty-target-refusal/,/^\[\[ \$source_container !=/p' .scripts/backup-recovery-k3d.sh \
+    | sed '$d' > target-cluster-steps.sh
+  run_logged() {
+    shift
+    "$@"
+  }
+  bash() { printf '%s\n' "$*" >> "$result_directory/driver-operations"; }
+  docker() { printf 'disposable-target-container'; }
+  # shellcheck source=/dev/null
+  source ./target-cluster-steps.sh
+  [ "$(cat "$result_directory/driver-operations")" = 'driver.sh create-new target.yaml' ]
 }
 
 @test "source preflight rejects current-metadata incompatibility before create while historical candidate uses immutable sources" {
@@ -71,7 +89,7 @@ bash() {
     --release-sources-from-git)
       [[ $3 == render && $4 == "$target_values" && $5 == "$candidate_release" ]]
       printf 'immutable-candidate-render\n' >> "$result_directory/driver-operations" ;;
-    create | deploy) printf '%s\n' "$2" >> "$result_directory/driver-operations" ;;
+    create-new | deploy) printf '%s\n' "$2" >> "$result_directory/driver-operations" ;;
     *) return 1 ;;
   esac
 }
@@ -88,7 +106,7 @@ SH
   : > "$result_directory/driver-operations"
   run bash preflight-guards.sh
   [ "$status" -eq 0 ]
-  [ "$(cat "$result_directory/driver-operations")" = $'ordinary-source-render\nimmutable-candidate-render\ncreate\ndeploy' ]
+  [ "$(cat "$result_directory/driver-operations")" = $'ordinary-source-render\nimmutable-candidate-render\ncreate-new\ndeploy' ]
 }
 
 @test "k3d rehearsal rejects mutable artifacts before creating result files or invoking tools" {
@@ -110,12 +128,50 @@ SH
   [ ! -e "$result_directory" ]
 }
 
+@test "initialization interruption reports the retained result directory" {
+  use_mise_tools
+  setup_mock_bin
+  cat > "$FIXTURE_ROOT/bin/mkdir" << 'SH'
+#!/usr/bin/env bash
+if [[ ${3:-} == */secrets ]]; then
+  kill -TERM "$PPID"
+  exit 1
+fi
+exec /bin/mkdir "$@"
+SH
+  chmod +x "$FIXTURE_ROOT/bin/mkdir"
+  local release=ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  local candidate=ghcr.io/dhhyi/recipe-db-releases@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  run bash .scripts/backup-recovery-k3d.sh "$release" "$result_directory" "$candidate"
+  [ "$status" -ne 0 ]
+  [ -d "$result_directory" ]
+  [[ $output == *"stopped during initialization"*"$result_directory"* ]]
+}
+
+@test "interruption during result directory creation reports its location" {
+  use_mise_tools
+  setup_mock_bin
+  cat > "$FIXTURE_ROOT/bin/mkdir" << 'SH'
+#!/usr/bin/env bash
+/bin/mkdir "$@" || exit
+if [[ ${3:-} == "$result_directory" ]]; then kill -TERM "$PPID"; fi
+SH
+  chmod +x "$FIXTURE_ROOT/bin/mkdir"
+  local release=ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  local candidate=ghcr.io/dhhyi/recipe-db-releases@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  run bash .scripts/backup-recovery-k3d.sh "$release" "$result_directory" "$candidate"
+  [ "$status" -ne 0 ]
+  [ -d "$result_directory" ]
+  [[ $output == *"stopped during initialization"*"$result_directory"* ]]
+}
+
 @test "synthetic source and target values satisfy the real token-only production configuration contract" {
   use_mise_tools
   mkdir -p deploy work secrets "$result_directory"
   cp "$BATS_TEST_DIRNAME/../../deploy/local.yaml" deploy/
   cp "$BATS_TEST_DIRNAME/../lib/production-config.sh" .scripts/
-  local root="$FIXTURE_ROOT" work="$FIXTURE_ROOT/work"
+  # shellcheck disable=SC2034
+  local root="$FIXTURE_ROOT" work="$FIXTURE_ROOT/work" run_id=1234567890abcdef
   export accounts_file="$FIXTURE_ROOT/secrets/auth-accounts.json"
   printf '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"owner","secret":"synthetic-token","role":"owner"}],"googleAccounts":{}}\n' > "$accounts_file"
   export oauth_client_secret="$FIXTURE_ROOT/secrets/google-oauth-client-secret"
@@ -124,15 +180,18 @@ SH
   source .scripts/production-config.sh
   # shellcheck source=.scripts/lib/rehearsal-k3d.sh
   source .scripts/lib/rehearsal-k3d.sh
+  sed -n '/^write_values() {/,/^}/p' .scripts/backup-recovery-k3d.sh > write-values.sh
+  # shellcheck source=/dev/null
+  source ./write-values.sh
   local side values
   for side in s t; do
     values="$FIXTURE_ROOT/$side.yaml"
-    rehearsal_write_values "$FIXTURE_ROOT" "recipe-db-rehearsal-regression-$side" \
-      22001 32001 "$accounts_file" "$values"
+    write_values "recipe-db-rehearsal-regression-$side" 22001 32001 "$values"
     run production_config "$values" restore
     [ "$status" -eq 0 ]
     jq -e '.runtime.googleOAuthClientId == null and
       .secrets == {"auth-accounts.json":env.accounts_file} and
+      .rehearsalId == "1234567890abcdef" and
       .infrastructure.oauth2Proxy == null and .infrastructure.redis == null and
       .volumes.redis == null and .cluster == ("recipe-db-rehearsal-regression-" + $side)
       and .context == ("k3d-" + .cluster) and .origin == "http://127.0.0.1:22001"' \
@@ -154,6 +213,313 @@ SH
   run bash privacy-step.sh
   [ "$status" -ne 0 ]
   [[ $output == *"synthetic credential or test data was written to a log"* ]]
+}
+
+prepare_cleanup_harness() {
+  mkdir -p "$result_directory/logs" "$result_directory/secrets" "$result_directory/snapshots" \
+    "$result_directory/packages" "$result_directory/fake-remote"
+  printf '[]\n' > "$result_directory/phases.json"
+  printf 'private credential\n' > "$result_directory/secrets/token"
+  printf 'private data\n' > "$result_directory/snapshots/data"
+  printf 'private package\n' > "$result_directory/packages/data"
+  printf 'private remote\n' > "$result_directory/fake-remote/data"
+  printf 'private log\n' > "$result_directory/logs/data"
+  touch "$FIXTURE_ROOT/source-present" "$FIXTURE_ROOT/target-present"
+  cat > cleanup-harness.sh << 'SH'
+set -Eeuo pipefail
+source_cluster=source
+target_cluster=target
+source_container=id-source
+target_container=id-target
+source_values=source-values
+target_values=target-values
+driver=driver
+root=$FIXTURE_ROOT
+result_created=true
+finish_signal=0
+exec {report_fd}>&2
+source_cleanup=not-attempted
+target_cleanup=not-attempted
+files_cleanup=not-attempted
+active_cleanup_pid=''
+cleanup_succeeded=true
+phase=test
+started=now
+started_epoch=$(date +%s)
+release=release
+candidate_release=candidate
+revision=revision
+backup_id=backup
+source_http_port=0
+target_http_port=0
+source_api_port=0
+target_api_port=0
+docker() {
+  if [[ $1 == inspect ]]; then
+    [[ $2 == --format ]]
+    case $4 in
+      k3d-source-server-0) [[ ${MISMATCH:-} != source ]] && echo id-source || echo foreign ;;
+      k3d-target-server-0) [[ ${MISMATCH:-} != target ]] && echo id-target || echo foreign ;;
+    esac
+  else
+    case "${*: -1}" in
+      id=id-source) [[ ! -e $FIXTURE_ROOT/source-present && ${REMAIN_ID:-} != true ]] || echo id-source ;;
+      id=id-target) [[ ! -e $FIXTURE_ROOT/target-present ]] || echo id-target ;;
+      label=k3d.cluster=source) [[ ! -e $FIXTURE_ROOT/source-present && ${REMAIN_LABEL:-} != true ]] || echo id-source ;;
+      label=k3d.cluster=target) [[ ! -e $FIXTURE_ROOT/target-present ]] || echo id-target ;;
+    esac
+    return 0
+  fi
+}
+k3d() {
+  [[ ${LIST_FAIL:-} != true ]] || return 1
+  jq -n --argjson source "$([[ -e $FIXTURE_ROOT/source-present ]] && echo true || echo false)" \
+    --argjson target "$([[ -e $FIXTURE_ROOT/target-present ]] && echo true || echo false)" \
+    '[if $source then {name:"source"} else empty end, if $target then {name:"target"} else empty end]'
+}
+bash() {
+  [[ $1 == driver ]]
+  local operation=$2 values=$3 cluster=${3%-values}
+  printf '%s %s\n' "$operation" "$cluster" >> "$FIXTURE_ROOT/calls"
+  if [[ ${REAL_SIGNAL:-} == true && $operation == delete ]]; then
+    command bash "$@"
+    return
+  fi
+  if [[ $operation == verify ]]; then
+    [[ ${UNVERIFIED:-} != "$cluster" ]]
+  else
+    [[ $4 == "DELETE-$cluster-AND-ALL-DATA" ]]
+    if [[ ${KILL_DRIVER:-} == "$cluster" ]]; then kill -KILL $$; fi
+    if [[ ${INTERRUPT_DELETE:-} == "$cluster" ]]; then kill -TERM $$; return 1; fi
+    [[ ${FAIL_DELETE:-} != "$cluster" ]] || return 1
+    [[ ${KEEP_CLUSTER:-} == "$cluster" ]] || rm "$FIXTURE_ROOT/$cluster-present"
+  fi
+}
+rm() {
+  if [[ ${1:-} == -rf && ${FAIL_FILE:-} == "${*: -1}" ]]; then return 1; fi
+  command rm "$@"
+}
+if [[ ${SIGNAL_ON_LAUNCH:-} == true ]]; then
+  setsid() { kill -TERM "$$"; exec setsid "$@"; }
+fi
+df() {
+  if [[ ${SIGNAL_RESULT:-} == true ]]; then kill -TERM "$$"; fi
+  command df "$@"
+}
+export -f bash rm
+jq() {
+  if [[ ${FAIL_RESULT:-} == true && ${1:-} == -n && ${2:-} == --arg && ${3:-} == release ]]; then
+    return 1
+  fi
+  command jq "$@"
+}
+SH
+  sed -n '/^mark() {/,/^}/p; /^write_result() {/,/^}/p; /^finish() {/,/^}/p; /^interrupt() {/,/^}/p; /^verify_owned_cluster() {/,/^}/p; /^run_cleanup_command() {/,/^}/p; /^delete_owned_cluster() {/,/^}/p; /^cleanup_rehearsal() {/,/^}/p' \
+    .scripts/backup-recovery-k3d.sh >> cleanup-harness.sh
+  cat >> cleanup-harness.sh << 'SH'
+trap finish EXIT
+trap 'interrupt 143' TERM
+if [[ ${EARLY_FAILURE:-} == true ]]; then exit 1; fi
+if [[ ${EARLY_INTERRUPT:-} == true ]]; then kill -TERM $$; fi
+phase=rehearsal-cleanup
+cleanup_rehearsal
+mark
+SH
+}
+
+@test "successful rehearsal removes verified clusters and all private files" {
+  use_mise_tools
+  export FIXTURE_ROOT
+  prepare_cleanup_harness
+  run bash cleanup-harness.sh
+  [ "$status" -eq 0 ]
+  [ ! -e "$FIXTURE_ROOT/source-present" ]
+  [ ! -e "$FIXTURE_ROOT/target-present" ]
+  [ "$(find "$result_directory" -mindepth 1 -maxdepth 1 | wc -l)" -eq 2 ]
+  jq -e '.success and .cleanup == {sourceCluster:"removed",targetCluster:"removed",files:"removed"}' \
+    "$result_directory/result.json"
+  run ! grep -r 'private' "$result_directory"
+}
+
+@test "failure or interruption before cleanup retains clusters and private files" {
+  use_mise_tools
+  export FIXTURE_ROOT
+  prepare_cleanup_harness
+  for reason in EARLY_FAILURE EARLY_INTERRUPT; do
+    run env "$reason=true" bash cleanup-harness.sh
+    [ "$status" -ne 0 ]
+    [ -e "$FIXTURE_ROOT/source-present" ]
+    [ -e "$FIXTURE_ROOT/target-present" ]
+    [ -e "$result_directory/secrets/token" ]
+    [ ! -e "$FIXTURE_ROOT/calls" ]
+    jq -e '.success == false and .cleanup.files == "not-attempted"' "$result_directory/result.json"
+    [[ $output == *"source source: not-attempted; target target: not-attempted"* ]]
+  done
+}
+
+@test "identity mismatch or failed ownership verification never deletes either cluster" {
+  use_mise_tools
+  export FIXTURE_ROOT
+  prepare_cleanup_harness
+  for reason in MISMATCH UNVERIFIED; do
+    run env "$reason=target" bash cleanup-harness.sh
+    [ "$status" -ne 0 ]
+    [ -e "$FIXTURE_ROOT/source-present" ]
+    [ -e "$FIXTURE_ROOT/target-present" ]
+    [ -e "$result_directory/secrets/token" ]
+    run ! grep -q '^delete ' "$FIXTURE_ROOT/calls"
+  done
+}
+
+@test "failed or interrupted cleanup reports partial state and stops deleting" {
+  use_mise_tools
+  export FIXTURE_ROOT
+  prepare_cleanup_harness
+  for reason in FAIL_DELETE INTERRUPT_DELETE KEEP_CLUSTER; do
+    touch "$FIXTURE_ROOT/source-present" "$FIXTURE_ROOT/target-present"
+    rm -f "$result_directory/.cleanup-gate"
+    run env "$reason=target" bash cleanup-harness.sh
+    [ "$status" -ne 0 ]
+    [ ! -e "$FIXTURE_ROOT/source-present" ]
+    [ -e "$FIXTURE_ROOT/target-present" ]
+    [ -e "$result_directory/secrets/token" ]
+    jq -e '.success == false and .cleanup == {sourceCluster:"removed",targetCluster:"uncertain",files:"not-attempted"}' \
+      "$result_directory/result.json"
+    [[ $output == *"source source: removed; target target: uncertain"* ]]
+  done
+}
+
+@test "first cluster deletion failure does not attempt the second cluster" {
+  use_mise_tools
+  export FIXTURE_ROOT
+  prepare_cleanup_harness
+  run env FAIL_DELETE=source bash cleanup-harness.sh
+  [ "$status" -ne 0 ]
+  [ -e "$FIXTURE_ROOT/source-present" ]
+  [ -e "$FIXTURE_ROOT/target-present" ]
+  [ -e "$result_directory/secrets/token" ]
+  run ! grep -q '^delete target$' "$FIXTURE_ROOT/calls"
+  jq -e '.success == false and .cleanup == {sourceCluster:"uncertain",targetCluster:"not-attempted",files:"not-attempted"}' \
+    "$result_directory/result.json"
+}
+
+@test "killed cleanup driver reports possible retained private work" {
+  use_mise_tools
+  export FIXTURE_ROOT
+  prepare_cleanup_harness
+  run env KILL_DRIVER=source bash cleanup-harness.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"$FIXTURE_ROOT/.production-k3d."* ]]
+  [ -e "$FIXTURE_ROOT/target-present" ]
+  [ -e "$result_directory/secrets/token" ]
+}
+
+@test "unverified container removal stops before deleting the second cluster" {
+  use_mise_tools
+  export FIXTURE_ROOT
+  prepare_cleanup_harness
+  for reason in REMAIN_ID REMAIN_LABEL; do
+    touch "$FIXTURE_ROOT/source-present" "$FIXTURE_ROOT/target-present"
+    rm -f "$result_directory/.cleanup-gate"
+    run env "$reason=true" bash cleanup-harness.sh
+    [ "$status" -ne 0 ]
+    [ -e "$FIXTURE_ROOT/target-present" ]
+    [ -e "$result_directory/secrets/token" ]
+    run ! grep -q '^delete target$' "$FIXTURE_ROOT/calls"
+    jq -e '.success == false and .cleanup.sourceCluster == "uncertain" and .cleanup.targetCluster == "not-attempted"' \
+      "$result_directory/result.json"
+  done
+}
+
+@test "result writing failure cannot report success" {
+  use_mise_tools
+  export FIXTURE_ROOT
+  prepare_cleanup_harness
+  run env FAIL_RESULT=true bash cleanup-harness.sh
+  [ "$status" -ne 0 ]
+  [[ $output != *"rehearsal passed"* ]]
+  [ ! -e "$result_directory/result.json" ]
+}
+
+@test "interruption during final result writing reports failure" {
+  use_mise_tools
+  export FIXTURE_ROOT
+  prepare_cleanup_harness
+  run env SIGNAL_RESULT=true bash cleanup-harness.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"stopped during complete"* ]]
+  jq -e '.success == false and .cleanup.files == "removed"' "$result_directory/result.json"
+}
+
+@test "interruption during cleanup launch cannot start deletion" {
+  use_mise_tools
+  export FIXTURE_ROOT
+  prepare_cleanup_harness
+  run env SIGNAL_ON_LAUNCH=true bash cleanup-harness.sh
+  [ "$status" -ne 0 ]
+  [ -e "$FIXTURE_ROOT/source-present" ]
+  [ -e "$FIXTURE_ROOT/target-present" ]
+  [ -e "$result_directory/secrets/token" ]
+  [[ $output == *"source source: uncertain; target target: not-attempted"* ]]
+  run ! grep -q '^delete ' "$FIXTURE_ROOT/calls"
+}
+
+@test "signal stops an active external deletion process and retains remaining resources" {
+  use_mise_tools
+  export FIXTURE_ROOT
+  prepare_cleanup_harness
+  cat > driver << 'SH'
+#!/usr/bin/env bash
+echo "$$" > "$FIXTURE_ROOT/deletion-pid"
+touch "$FIXTURE_ROOT/deletion-started"
+sleep 30 &
+echo "$!" > "$FIXTURE_ROOT/deletion-child-pid"
+wait
+touch "$FIXTURE_ROOT/deletion-finished"
+SH
+  REAL_SIGNAL=true bash cleanup-harness.sh > "$FIXTURE_ROOT/output" 2>&1 &
+  local pid=$! i
+  for ((i = 0; i < 100; i++)); do
+    [[ -e $FIXTURE_ROOT/deletion-started && -s $FIXTURE_ROOT/deletion-child-pid ]] && break
+    sleep 0.1
+  done
+  if [[ ! -e $FIXTURE_ROOT/deletion-started || ! -s $FIXTURE_ROOT/deletion-child-pid ]]; then
+    kill -TERM "$pid"
+    wait "$pid" || :
+    return 1
+  fi
+  kill -TERM "$pid"
+  local exit_status=0
+  wait "$pid" || exit_status=$?
+  [ "$exit_status" -ne 0 ]
+  [ ! -e "$FIXTURE_ROOT/deletion-finished" ]
+  local process state
+  for process in "$(cat "$FIXTURE_ROOT/deletion-pid")" "$(cat "$FIXTURE_ROOT/deletion-child-pid")"; do
+    if [[ -r /proc/$process/stat ]]; then
+      state=$(awk '{print $3}' "/proc/$process/stat")
+      [ "$state" = Z ]
+    fi
+  done
+  [ -e "$FIXTURE_ROOT/target-present" ]
+  [ -e "$result_directory/secrets/token" ]
+  run ! grep -q '^delete target$' "$FIXTURE_ROOT/calls"
+  jq -e '.success == false and .cleanup.sourceCluster == "uncertain" and .cleanup.targetCluster == "not-attempted"' \
+    "$result_directory/result.json"
+  grep -q 'source source: uncertain; target target: not-attempted' "$FIXTURE_ROOT/output"
+}
+
+@test "file cleanup failure reports partial cleanup after both verified cluster deletions" {
+  use_mise_tools
+  export FIXTURE_ROOT
+  prepare_cleanup_harness
+  run env FAIL_FILE="$result_directory/packages" bash cleanup-harness.sh
+  [ "$status" -ne 0 ]
+  [ ! -e "$FIXTURE_ROOT/source-present" ]
+  [ ! -e "$FIXTURE_ROOT/target-present" ]
+  [ -e "$result_directory/packages/data" ]
+  [ -e "$result_directory/secrets/token" ]
+  jq -e '.success == false and .cleanup == {sourceCluster:"removed",targetCluster:"removed",files:"partial"}' \
+    "$result_directory/result.json"
 }
 
 @test "local fake rclone stores, reads and lists only its isolated remote files" {
