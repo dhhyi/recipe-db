@@ -48,6 +48,19 @@ setup() {
   [ "$(cat "$result_directory/driver-operations")" = $'driver.sh create-new source.yaml\ndriver.sh deploy source.yaml immutable-release' ]
 }
 
+@test "target cluster creation refuses existing clusters" {
+  mkdir -p "$result_directory"
+  local driver=driver.sh target_values=target.yaml target_cluster=target
+  sed -n '/^phase=nonempty-target-refusal/,/^\[\[ \$source_container !=/p' .scripts/backup-recovery-k3d.sh \
+    | sed '$d' > target-cluster-steps.sh
+  run_logged() { shift; "$@"; }
+  bash() { printf '%s\n' "$*" >> "$result_directory/driver-operations"; }
+  docker() { printf 'disposable-target-container'; }
+  # shellcheck source=/dev/null
+  source ./target-cluster-steps.sh
+  [ "$(cat "$result_directory/driver-operations")" = 'driver.sh create-new target.yaml' ]
+}
+
 @test "source preflight rejects current-metadata incompatibility before create while historical candidate uses immutable sources" {
   use_mise_tools
   mkdir -p "$result_directory/logs"
@@ -270,6 +283,7 @@ bash() {
     [[ ${UNVERIFIED:-} != "$cluster" ]]
   else
     [[ $4 == "DELETE-$cluster-AND-ALL-DATA" ]]
+    if [[ ${KILL_DRIVER:-} == "$cluster" ]]; then kill -KILL $$; fi
     if [[ ${INTERRUPT_DELETE:-} == "$cluster" ]]; then kill -TERM $$; return 1; fi
     [[ ${FAIL_DELETE:-} != "$cluster" ]] || return 1
     [[ ${KEEP_CLUSTER:-} == "$cluster" ]] || rm "$FIXTURE_ROOT/$cluster-present"
@@ -383,6 +397,17 @@ SH
     "$result_directory/result.json"
 }
 
+@test "killed cleanup driver reports possible retained private work" {
+  use_mise_tools
+  export FIXTURE_ROOT
+  prepare_cleanup_harness
+  run env KILL_DRIVER=source bash cleanup-harness.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"$FIXTURE_ROOT/.production-k3d."* ]]
+  [ -e "$FIXTURE_ROOT/target-present" ]
+  [ -e "$result_directory/secrets/token" ]
+}
+
 @test "unverified container removal stops before deleting the second cluster" {
   use_mise_tools
   export FIXTURE_ROOT
@@ -449,10 +474,14 @@ SH
   REAL_SIGNAL=true bash cleanup-harness.sh > "$FIXTURE_ROOT/output" 2>&1 &
   local pid=$! i
   for ((i = 0; i < 100; i++)); do
-    [[ -e $FIXTURE_ROOT/deletion-started ]] && break
+    [[ -e $FIXTURE_ROOT/deletion-started && -s $FIXTURE_ROOT/deletion-child-pid ]] && break
     sleep 0.1
   done
-  [ -e "$FIXTURE_ROOT/deletion-started" ]
+  if [[ ! -e $FIXTURE_ROOT/deletion-started || ! -s $FIXTURE_ROOT/deletion-child-pid ]]; then
+    kill -TERM "$pid"
+    wait "$pid" || :
+    return 1
+  fi
   kill -TERM "$pid"
   local exit_status=0
   wait "$pid" || exit_status=$?

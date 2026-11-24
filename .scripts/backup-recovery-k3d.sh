@@ -146,6 +146,8 @@ finish() {
       "$phase" "$source_cluster" "$source_cleanup" "$target_cluster" "$target_cleanup" \
       "$files_cleanup" "$result_directory" >&"$report_fd"
     printf 'Inspect remaining resources and private files before deciding what to remove.\n' >&"$report_fd"
+    printf 'Private driver work may remain under %s/.production-k3d.*; inspect it before removal.\n' \
+      "$root" >&"$report_fd"
   fi
   exit "$status"
 }
@@ -153,8 +155,6 @@ interrupt() {
   local status=$1
   trap '' INT TERM
   if [[ -n $active_cleanup_pid ]]; then
-    printf 'Interrupted cleanup may leave private driver work under %s/.production-k3d.*; inspect it before removal.\n' \
-      "$root" >&"$report_fd"
     kill -TERM -- "-$active_cleanup_pid" 2> /dev/null || kill -TERM "$active_cleanup_pid" 2> /dev/null || :
     kill -KILL -- "-$active_cleanup_pid" 2> /dev/null || kill -KILL "$active_cleanup_pid" 2> /dev/null || :
     wait "$active_cleanup_pid" 2> /dev/null || :
