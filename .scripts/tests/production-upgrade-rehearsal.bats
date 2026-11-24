@@ -112,7 +112,8 @@ load_scenario_functions() {
     deployed_release_images_match_inventory \
     workload_image_inventory_matches_rendered verify_sample \
     run_migration_sequence successful_migration_outcome_is_valid \
-    complete_recovery_state_is_verified delete_scenario_cluster capture_post_release_backup run_scenario \
+    complete_recovery_state_is_verified approve_restore delete_scenario_cluster \
+    capture_post_release_backup run_scenario \
     run_rehearsal_scenarios; do
     sed -n "/^${function_name}() {/,/^}/p" \
       .scripts/production-upgrade-rehearsal-k3d.sh >> "$FIXTURE_ROOT/scenario-functions.sh"
@@ -1264,12 +1265,38 @@ YAML
   load_scenario_functions
   new_cluster() { printf 'create %s\n' "$*" >> "$work/steps"; }
   run_logged() {
+    local log=$1
     shift
+    if [[ $4 == restore-status ]]; then
+      local state=$6 backup_id
+      backup_id=$(jq -er .backupId "$state/restore-state.json")
+      jq -n --arg id "$backup_id" '{
+        savedProgress:{status:"awaiting-signoff",backupId:$id,
+          import:{status:"complete"},readChecks:{status:"passed"}},
+        lease:{ownedByRestore:true},
+        observed:{graphql:{mode:"maintenance",maintenanceQuery:true},
+          publicRoutes:{normalRoutesObserved:true}},
+        writesMayHaveOpened:false
+      }' > "$log"
+    elif [[ $4 == restore-reopen ]]; then
+      local state=$6
+      jq '.status="succeeded" | .phase="operator-reopened" | .writesMayHaveOpened=true' \
+        "$state/restore-state.json" > "$state/restore-state.next"
+      mv "$state/restore-state.next" "$state/restore-state.json"
+    fi
     "$@"
   }
   lifecycle() {
     shift 2
     printf '%s\n' "$*" >> "$work/steps"
+    if [[ $1 == restore ]]; then
+      local backup_id=$5 state=$6
+      mkdir -p "$state"
+      jq -n --arg id "$backup_id" '{backupId:$id,holder:"restore-holder",
+        status:"awaiting-signoff",import:{status:"complete"},
+        readChecks:{status:"passed"},writesMayHaveOpened:false}' \
+        > "$state/restore-state.json"
+    fi
   }
   mark() { :; }
   run_scenario() { printf 'scenario %s\n' "$*" >> "$work/steps"; }
@@ -1279,17 +1306,21 @@ YAML
   run_rehearsal_scenarios source.yaml candidate.yaml cluster.yaml post.yaml post-cluster.yaml
   [ "$(sed -n '1p' "$work/steps")" = 'create r cluster.yaml' ]
   grep -Fq "restore source.yaml manifest.json archive.tar.gz $backup_id $work/state/restore RESTORE-$backup_id" "$work/steps"
-  [ "$(sed -n '3p' "$work/steps")" = 'scenario failure-recovery source.yaml candidate.yaml' ]
+  [ "$(sed -n '3p' "$work/steps")" = "restore-status source.yaml $work/state/restore" ]
+  grep -Fq 'restore-reopen source.yaml' "$work/steps"
+  [ "$(sed -n '5p' "$work/steps")" = 'scenario failure-recovery source.yaml candidate.yaml' ]
   grep -Fq "release-recovery-reopen source.yaml $work/uploader/failure-recovery/maintenance $source_release OPEN-RECOVERY-backup-789-123-$source_revision" "$work/steps"
-  [ "$(sed -n '5p' "$work/steps")" = 'verify source.yaml recovered-source' ]
-  [ "$(sed -n '6p' "$work/steps")" = 'scenario successful-upgrade source.yaml candidate.yaml' ]
-  [ "$(sed -n '7p' "$work/steps")" = 'delete complete' ]
-  [ "$(sed -n '8p' "$work/steps")" = 'create p post-cluster.yaml' ]
+  [ "$(sed -n '7p' "$work/steps")" = 'verify source.yaml recovered-source' ]
+  [ "$(sed -n '8p' "$work/steps")" = 'scenario successful-upgrade source.yaml candidate.yaml' ]
+  [ "$(sed -n '9p' "$work/steps")" = 'delete complete' ]
+  [ "$(sed -n '10p' "$work/steps")" = 'create p post-cluster.yaml' ]
   grep -Fq "restore post.yaml $fake_remote/recipe-db-backups/issue-251-$run_id-successful-upgrade/post.json $fake_remote/recipe-db-backups/issue-251-$run_id-successful-upgrade/post.tar.gz backup-999-888" "$work/steps"
-  [ "$(sed -n '10p' "$work/steps")" = 'verify post.yaml post-release-restore' ]
-  [ "$(sed -n '11p' "$work/steps")" = 'delete post-release' ]
+  [ "$(sed -n '14p' "$work/steps")" = 'verify post.yaml post-release-restore' ]
+  [ "$(sed -n '15p' "$work/steps")" = 'delete post-release' ]
   [ "$post_backup_restore_status" = passed ]
   [ "$(grep -c '^restore ' "$work/steps")" -eq 2 ]
+  [ "$(grep -c '^restore-status ' "$work/steps")" -eq 2 ]
+  [ "$(grep -c '^restore-reopen ' "$work/steps")" -eq 2 ]
 }
 
 @test "recovery removes only stopped candidate-only Deployments with server preconditions" {

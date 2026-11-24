@@ -31,6 +31,47 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
+@test "restore handoff checks status and requires a separate explicit reopening" {
+  mkdir -p "$result_directory/logs" "$result_directory/state"
+  local state="$result_directory/state/restore" calls="$result_directory/calls"
+  mkdir -p "$state"
+  jq -n '{backupId:"backup-123",holder:"restore-holder",
+    status:"awaiting-signoff",import:{status:"complete"},
+    readChecks:{status:"passed"},writesMayHaveOpened:false}' \
+    > "$state/restore-state.json"
+  sed -n '/^approve_restore() {/,/^}/p' .scripts/backup-recovery-k3d.sh \
+    > approve-restore-function.sh
+  # shellcheck source=/dev/null
+  source ./approve-restore-function.sh
+  run_logged() {
+    local log=$1
+    shift
+    printf '%s\n' "$*" >> "$calls"
+    if [[ $2 == restore-status ]]; then
+      jq -n '{
+        savedProgress:{status:"awaiting-signoff",backupId:"backup-123",
+          import:{status:"complete"},readChecks:{status:"passed"}},
+        lease:{ownedByRestore:true},
+        observed:{graphql:{mode:"maintenance",maintenanceQuery:true},
+          publicRoutes:{normalRoutesObserved:true}},
+        writesMayHaveOpened:false
+      }' > "$log"
+    elif [[ $2 == restore-reopen ]]; then
+      jq '.status="succeeded" | .phase="operator-reopened" | .writesMayHaveOpened=true' \
+        "$4/restore-state.json" > "$4/restore-state.next"
+      mv "$4/restore-state.next" "$4/restore-state.json"
+    fi
+  }
+  die() {
+    printf '%s\n' "$*" >&2
+    return 1
+  }
+  approve_restore values.yaml "$state" backup-123 rehearsal
+  grep -Fq "release_lifecycle restore-status values.yaml $state" "$calls"
+  grep -Fq "release_lifecycle restore-reopen values.yaml $state OPEN-RESTORE-backup-123-restore-holder" "$calls"
+  jq -e '.status == "succeeded" and .writesMayHaveOpened' "$state/restore-state.json"
+}
+
 @test "normal source cluster deploy retains its current-checkout contract without immutable-source flag" {
   mkdir -p "$result_directory"
   local driver=driver.sh source_values=source.yaml release=immutable-release

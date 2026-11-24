@@ -30,7 +30,9 @@ values=$2
 shift 2
 if [[ $release_sources_from_git == true ]]; then
   [[ $command == release-* || $command == render || $command == maintenance-enter || $command == backup-enter ||
-    $command == backup-capture || $command == maintenance-restore || $command == backup-run || $command == backup-exit || $command == restore || $command == recovery-* ]] \
+    $command == backup-capture || $command == maintenance-restore || $command == backup-run || $command == backup-exit ||
+    $command == restore || $command == restore-status || $command == restore-recheck ||
+    $command == restore-reopen || $command == recovery-* ]] \
     || production_fail "Git release sources are limited to render, backup operations, restore and guarded release operations"
   tooling_revision=$(git -C "$root" rev-parse HEAD)
   [[ -z $(git -C "$root" status --porcelain --untracked-files=all) ]] \
@@ -69,6 +71,9 @@ case "$command" in
   release-accept) [[ $# = 3 ]] || production_fail "release-accept requires the maintenance state directory, candidate artifact and ACCEPT-<holder> confirmation" ;;
   release-finalize) [[ $# = 4 ]] || production_fail "release-finalize requires the maintenance state directory, candidate artifact, sequential GitHub release tag and PUBLISHED-<holder>-<tag> confirmation" ;;
   restore) [[ $# = 5 ]] || production_fail "restore requires absolute package manifest, archive, expected backup ID, new absolute state directory and RESTORE-<backup-id> confirmation" ;;
+  restore-status) [[ $# = 1 ]] || production_fail "restore-status requires the absolute retained restore state directory" ;;
+  restore-recheck) [[ $# = 2 ]] || production_fail "restore-recheck requires the absolute retained restore state directory and RECHECK-RESTORE-<backup-id> confirmation" ;;
+  restore-reopen) [[ $# = 2 ]] || production_fail "restore-reopen requires the absolute retained restore state directory and OPEN-RESTORE-<backup-id>-<holder> confirmation" ;;
   release-closeout) [[ $# = 3 ]] || production_fail "release-closeout requires release state, exact holder and CLOSEOUT-<holder>" ;;
   recovery-reset) [[ $# = 5 ]] || production_fail "recovery-reset requires manifest, archive, backup ID, private state directory and RESET-<backup-id>" ;;
   recovery-plan) [[ $# = 4 || $# = 5 ]] || production_fail "recovery-plan requires manifest, archive, backup ID, private state directory and optional private verified catalog" ;;
@@ -286,7 +291,7 @@ pull_release() {
   [[ $revision = "$(jq -r '.annotations["org.opencontainers.image.revision"]' "$work/manifest.json")" ]] \
     || production_fail "artifact and inventory revision mismatch"
   case "$command" in
-    backup-run | backup-enter | backup-capture | maintenance-restore | backup-exit | restore | recovery-* | release-closeout | release-migration-recover | release-recovery-reopen)
+    backup-run | backup-enter | backup-capture | maintenance-restore | backup-exit | restore | restore-status | restore-recheck | restore-reopen | recovery-* | release-closeout | release-migration-recover | release-recovery-reopen)
       local inputs=(.scripts/lib/project-metadata.sh
         .scripts/templates/kubernetes-template.yml .scripts/templates/kubernetes.lib.yml
         .scripts/templates/storage-version-gate.sh.ytt .scripts/templates/storage-version-sidecar.sh.ytt
@@ -516,15 +521,18 @@ ensure_namespace() {
       "$work/existing-namespace.json" > /dev/null \
       || production_fail "refusing to adopt an unowned application namespace"
     kube get configmap recipe-db-restore --ignore-not-found -o json > "$work/existing-restore-state.json"
-    if [[ -s $work/existing-restore-state.json ]]; then
-      if [[ ${command:-} == recovery-restore && ${restore_mode:-} == existing-reset ]]; then
-        recovery_validate_namespace_handoff "$work/existing-restore-state.json"
-      else
-        jq -e '.data["restore-state.json"] | fromjson |
-        .status == "succeeded" and .phase == "complete"' \
-          "$work/existing-restore-state.json" > /dev/null \
-          || production_fail "target has unresolved or abandoned restore state; keep it isolated and select a new empty target"
-      fi
+    if [[ ${command:-} == recovery-restore && ${restore_mode:-} == existing-reset ]]; then
+      [[ -s $work/existing-restore-state.json ]] \
+        || production_fail "reset namespace recovery ConfigMap is missing"
+      recovery_validate_namespace_handoff "$work/existing-restore-state.json"
+    elif [[ -s $work/existing-restore-state.json ]]; then
+      jq -e '.data["restore-state.json"] | fromjson |
+      (.status == "succeeded" and .phase == "complete")
+      or (.status == "succeeded" and .phase == "operator-reopened"
+        and .import.status == "complete" and .readChecks.status == "passed"
+        and .writesMayHaveOpened == true)' \
+        "$work/existing-restore-state.json" > /dev/null \
+        || production_fail "target has unresolved or abandoned restore state; keep it isolated and select a new empty target"
     fi
   else
     jq -n --arg ns "$namespace" '{apiVersion:"v1",kind:"Namespace",
@@ -2859,7 +2867,7 @@ release_recovery_reopen() {
     > "$work/recovery-route-port" \
     || production_fail "could not inspect public route convergence; recovery remains blocked"
   restore_graphql_port=$(cat "$work/recovery-route-port")
-  restore_wait_public_routes \
+  restore_wait_public_routes "$work/routes.yml" \
     || production_fail "public recovery routes did not converge; access barrier and Lease are retained"
   release_recovery_state_write recovered migration-reopened \
     "$(jq -cn --arg reopenedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -2950,7 +2958,8 @@ release_recovery_validate_closeout() {
   restore_forward deployment/traefik 3000 "$work/closeout-route-forward.log" \
     > "$work/closeout-route-port" || production_fail "cannot inspect already reopened route convergence"
   restore_graphql_port=$(cat "$work/closeout-route-port")
-  restore_wait_public_routes || production_fail "already reopened public routes have not converged"
+  restore_wait_public_routes "$work/routes.yml" \
+    || production_fail "already reopened public routes have not converged"
 }
 
 release_recovery_closeout_ownership() {
@@ -4876,6 +4885,15 @@ case "$command" in
     ;;
   restore)
     restore_run "$1" "$2" "$3" "$4" "$5"
+    ;;
+  restore-status)
+    restore_status "$1"
+    ;;
+  restore-recheck)
+    restore_recheck "$1" "$2"
+    ;;
+  restore-reopen)
+    restore_reopen "$1" "$2"
     ;;
   release-closeout)
     recovery_release_closeout "$@"

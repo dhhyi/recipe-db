@@ -315,6 +315,33 @@ EOF
 @test "expired guard accepts API defaults but refuses altered runtime identity" {
   printf '{"infrastructure":{"maintenance":"fixture-image"},"volumes":{}}\n' > work/config.json
   printf '[]\n' > work/prior-workloads.json
+  cat > work/restore-barrier-routes.json << 'EOF'
+{
+  "http": {
+    "routers": {
+      "restore-public-barrier": {
+        "rule": "PathPrefix(`/`)",
+        "priority": 2147482647,
+        "entrypoints": ["web"],
+        "service": "restore-maintenance"
+      },
+      "restore-internal-images": {"entrypoints": ["rest-internal"]}
+    },
+    "middlewares": {
+      "graphql-ingress": {
+        "headers": {"customRequestHeaders": {"X-Internal-Ingress-Token": "fixture-token"}}
+      }
+    },
+    "services": {
+      "restore-maintenance": {
+        "loadBalancer": {
+          "servers": [{"url": "http://browse-maintenance.recipe-db.svc.cluster.local:80"}]
+        }
+      }
+    }
+  }
+}
+EOF
   cat > validate-expired.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -327,7 +354,8 @@ jq '.items[] | select(.kind=="Job") | .metadata += {uid:"guard-uid",resourceVers
     | .status.active=1
     | .spec.template.spec.containers[].env[] |=
         (if .value=="" then del(.value) else . end)' "$work/restore-guard.json" > job.json
-jq '.items[] | select(.kind=="ConfigMap") | .data={ready:"true",expired:"true"}' \
+jq '.items[] | select(.kind=="ConfigMap") | .data={ready:"true",expired:"true"}
+    | .metadata += {uid:"configmap-uid",resourceVersion:"1"}' \
   "$work/restore-guard.json" > configmap.json
 jq '{items:[{kind:"Pod",apiVersion:"v1",metadata:(.spec.template.metadata +
     {uid:"pod-uid",namespace:.metadata.namespace,ownerReferences:[
@@ -337,11 +365,45 @@ jq '{items:[{kind:"Pod",apiVersion:"v1",metadata:(.spec.template.metadata +
 jq "$JOB_CHANGE" job.json > actual-job.json
 jq "$POD_CHANGE" pods.json > actual-pods.json
 kube() {
-  case "$2" in
-    job) cat actual-job.json ;;
-    configmap) cat configmap.json ;;
-    deployments) echo '{"items":[]}' ;;
-    pods) cat actual-pods.json ;;
+  local resource_namespace=$namespace
+  if [[ $1 == --namespace ]]; then resource_namespace=$2; shift 2; fi
+  case "$1 $2" in
+    "get job"*) cat actual-job.json ;;
+    "get configmap"*) cat configmap.json ;;
+    "get secret"*)
+      if [[ $3 == recipe-db-routes ]]; then
+        jq -n --rawfile routes "$work/restore-barrier-routes.json" \
+          '{metadata:{labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+            data:{"routes.yml":($routes|@base64)}}'
+      else
+        resource_kind=Secret
+        resource_name=$3
+        jq -e --arg kind "$resource_kind" --arg name "$resource_name" \
+          --arg ns "$resource_namespace" '
+          .items[] | select(.kind == $kind and .metadata.name == $name
+            and .metadata.namespace == $ns)
+          | .metadata += {uid:(.kind | ascii_downcase + "-uid"),resourceVersion:"1"}
+          | .data={routes:(.stringData.routes | @base64)} | del(.stringData)' \
+          "$work/restore-guard.json" | jq "${RESOURCE_CHANGE:-.}"
+      fi ;;
+    "get deployments"*) echo '{"items":[]}' ;;
+    "get pods"*) cat actual-pods.json ;;
+    "get serviceaccount"* | "get role"* | "get rolebinding"*)
+      local resource_kind resource_name
+      case "$2" in
+        serviceaccount) resource_kind=ServiceAccount ;;
+        role) resource_kind=Role ;;
+        rolebinding) resource_kind=RoleBinding ;;
+      esac
+      resource_name=$3
+      jq -e --arg kind "$resource_kind" --arg name "$resource_name" \
+        --arg ns "$resource_namespace" '
+        .items[] | select(.kind == $kind and .metadata.name == $name
+          and .metadata.namespace == $ns)
+        | .metadata += {uid:(.kind | ascii_downcase + "-uid"),resourceVersion:"1"}
+        | if .kind == "Secret" then
+            .data={routes:(.stringData.routes | @base64)} | del(.stringData)
+          else . end' "$work/restore-guard.json" | jq "${RESOURCE_CHANGE:-.}" ;;
     *) return 1 ;;
   esac
 }
@@ -358,6 +420,33 @@ EOF
     bash validate-expired.sh
   [ "$status" -ne 0 ]
   [[ $output == *"guard Pods have drifted"* ]]
+  run env JOB_CHANGE=. POD_CHANGE=. \
+    RESOURCE_CHANGE='.metadata.labels["recipe-db/restore-holder"]="foreign"' \
+    bash validate-expired.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"companion resource serviceaccount/recovery-guard-backup-1 in fixture has drifted"* ]]
+}
+
+@test "guard manifest preserves legacy pending restore state without saved inventory" {
+  printf '{"infrastructure":{"maintenance":"fixture-image"},"volumes":{}}\n' > work/config.json
+  printf '[]\n' > work/prior-workloads.json
+  mkdir state
+  printf '{"status":"awaiting-signoff","phase":"pending-signoff"}\n' > state/restore-state.json
+  local before
+  before=$(sha256sum state/restore-state.json | cut -d ' ' -f 1)
+  cat > legacy-guard.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work=$FIXTURE_ROOT/work
+namespace=fixture backup_id=backup-1
+restore_state=$FIXTURE_ROOT/state
+restore_guard_manifest
+jq -e 'has("restoreGuardInventory") | not' "$restore_state/restore-state.json"
+EOF
+  run bash legacy-guard.sh
+  [ "$status" -eq 0 ]
+  [ "$(sha256sum state/restore-state.json | cut -d ' ' -f 1)" = "$before" ]
 }
 
 @test "active but unresponsive guard terminates the live client" {
@@ -791,16 +880,19 @@ jq '.origin = "https://recipe.test"' "$work/config.json" > "$work/config.next"
 mv "$work/config.next" "$work/config.json"
 restore_graphql() {
   local variables=${2:-'{}'} id
+  if [[ ${RESTORE_EMPTY:-false} == true ]]; then printf '%s\n' "$1" >> "$MOCK_LOG"; fi
   case "$1" in
-    'query { recipes { id name } }')
-      if [[ ${RESTORE_LARGE:-false} == true ]]; then
-        jq -n '{data:{recipes:[range(0;12) | {id:("recipe-" + (if . < 10 then "0" else "" end) + tostring),name:"First"}]}}' \
+    'query { maintenance recipes { id name } }')
+      if [[ ${RESTORE_EMPTY:-false} == true ]]; then
+        printf '{"data":{"maintenance":true,"recipes":[]}}\n' > "$work/restore-response.json"
+      elif [[ ${RESTORE_LARGE:-false} == true ]]; then
+        jq -n '{data:{maintenance:true,recipes:[range(0;12) | {id:("recipe-" + (if . < 10 then "0" else "" end) + tostring),name:"First"}]}}' \
           > "$work/restore-response.json"
       elif [[ ${RESTORE_IMAGE_FREE:-false} == true ]]; then
-        printf '{"data":{"recipes":[{"id":"first","name":"First"},{"id":"second","name":"Second"}]}}\n' \
+        printf '{"data":{"maintenance":true,"recipes":[{"id":"first","name":"First"},{"id":"second","name":"Second"}]}}\n' \
           > "$work/restore-response.json"
       else
-        printf '{"data":{"recipes":[{"id":"recipe-no-image","name":"First"},{"id":"recipe-with-image","name":"Image"}]}}\n' \
+        printf '{"data":{"maintenance":true,"recipes":[{"id":"recipe-no-image","name":"First"},{"id":"recipe-with-image","name":"Image"}]}}\n' \
           > "$work/restore-response.json"
       fi
       ;;
@@ -829,8 +921,15 @@ restore_graphql() {
       fi
       ;;
     *searchRecipes*)
-      jq -n --arg id "$EXPECTED_RECIPE_ID" \
-        '{data:{searchRecipes:{recipes:[{id:$id}],found:1}}}' > "$work/restore-response.json"
+      if [[ ${RESTORE_EMPTY_SEARCH_FAIL:-false} == true ]]; then
+        printf '{"errors":[{"message":"search unavailable"}]}\n' > "$work/restore-response.json"
+        return 1
+      elif [[ ${RESTORE_EMPTY:-false} == true ]]; then
+        printf '{"data":{"searchRecipes":{"recipes":[],"found":0}}}\n' > "$work/restore-response.json"
+      else
+        jq -n --arg id "$EXPECTED_RECIPE_ID" \
+          '{data:{searchRecipes:{recipes:[{id:$id}],found:1}}}' > "$work/restore-response.json"
+      fi
       ;;
     *) return 1 ;;
   esac
@@ -850,7 +949,11 @@ curl() {
         : > "$output"
       fi
       if [[ ${IMAGE_FAILURE:-} == "redirect:${url##*/}" ]]; then printf 302; else printf 200; fi ;;
-    "http://127.0.0.1:4100/recipe/$EXPECTED_RECIPE_ID") printf 'restored recipe page\n' ;;
+    "http://127.0.0.1:4100/recipe/${EXPECTED_RECIPE_ID:-}") printf 'restored recipe page\n' ;;
+    http://127.0.0.1:4100/)
+      [[ ${RESTORE_EMPTY_BROWSE_FAIL:-false} != true ]] || return 1
+      printf '%s\n' "$url" >> "$MOCK_LOG"
+      printf 'restored browse home\n' ;;
     *) return 1 ;;
   esac
 }
@@ -894,6 +997,15 @@ EOF
   done
   run env RESTORE_IMAGE_FREE=true EXPECTED_RECIPE_ID=first bash restore-image-harness.sh
   [ "$status" -eq 0 ]
+  : > "$MOCK_LOG"
+  run env RESTORE_EMPTY=true bash restore-image-harness.sh
+  [ "$status" -eq 0 ]
+  grep -Fq 'searchRecipes' "$MOCK_LOG"
+  grep -Fxq 'http://127.0.0.1:4100/' "$MOCK_LOG"
+  run env RESTORE_EMPTY=true RESTORE_EMPTY_SEARCH_FAIL=true bash restore-image-harness.sh
+  [ "$status" -ne 0 ]
+  run env RESTORE_EMPTY=true RESTORE_EMPTY_BROWSE_FAIL=true bash restore-image-harness.sh
+  [ "$status" -ne 0 ]
   rm -f work/image-samples
   run env RESTORE_LARGE=true EXPECTED_RECIPE_ID=recipe-00 bash restore-image-harness.sh
   [ "$status" -eq 0 ]
@@ -901,152 +1013,37 @@ EOF
   run ! grep -Fxq recipe-11 work/image-samples
 }
 
-@test "restore propagation does not mutate until the GraphQL route is ready" {
-  cat > route-gate.sh << 'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-source "$FIXTURE_ROOT/.scripts/production-restore.sh"
-timeout=0
-restore_graphql() {
-  printf '%s\n' "$1" >> "$MOCK_LOG"
-  return 1
-}
-restore_verify_propagation
-EOF
-  run bash route-gate.sh
-  [ "$status" -ne 0 ]
-  [[ $output == *"GraphQL route did not become ready"* ]]
-  [ "$(cat "$MOCK_LOG")" = 'query { __typename }' ]
-}
-
-@test "restore propagation proves browse invalidation before expiry independently of search" {
-  cat > propagation-cache.sh << 'EOF'
+@test "shared restore read verification is non-mutating" {
+  cat > readonly-verification.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 source "$FIXTURE_ROOT/.scripts/production-restore.sh"
 work="$FIXTURE_ROOT/work"
-timeout=200
-restore_mode=migration-recovery
+timeout=3
+restore_graphql_port=4000
 restore_browse_port=4100
-release_state_write() { :; }
 restore_graphql() {
-  local variables=${2:-'{}'} name
+  printf '%s\n' "$1" >> "$MOCK_LOG"
   case "$1" in
-    'query { __typename }') : ;;
-    *createRecipe*)
-      jq -r .name <<< "$variables" > "$work/probe-name"
-      cp "$work/probe-name" "$work/probe-original"
-      printf '{"data":{"createRecipe":{"id":"probe"}}}\n' > "$work/restore-response.json" ;;
-    *updateRecipe*)
-      name=$(jq -r .name <<< "$variables")
-      if [[ $name == *Primed ]]; then
-        [[ -e $work/fresh-cache ]] || return 1
-      else
-        printf '%s\n' "$name" > "$work/changed-name"
-      fi
-      printf '%s\n' "$name" > "$work/probe-name" ;;
-    *deleteRecipe*) touch "$work/deleted" ;;
+    'query { maintenance recipes { id name } }')
+      printf '{"data":{"maintenance":true,"recipes":[]}}\n' > "$work/restore-response.json" ;;
     *searchRecipes*)
-      name=$(jq -r '.options.q' <<< "$variables")
-      if [[ ${CASE:-} == slow-initial-search && $name != *Changed && $name != "*" ]]; then
-        SECONDS=$((SECONDS + 199))
-      fi
-      if [[ $name == *Changed ]]; then
-        touch "$work/searched-change"
-        if [[ ${CASE:-} == slow-search ]]; then SECONDS=$((SECONDS + 65)); fi
-      fi
-      if [[ -e $work/deleted ]]; then
-        if [[ ${CASE:-} == stale-index ]]; then
-          printf '{"data":{"searchRecipes":{"found":1,"recipes":[null]}}}\n' > "$work/restore-response.json"
-        else
-          printf '{"data":{"searchRecipes":{"found":0}}}\n' > "$work/restore-response.json"
-        fi
-      else
-        jq -n --arg name "$(cat "$work/probe-name")" \
-          '{data:{searchRecipes:{recipes:[{id:"probe",name:$name}]}}}' > "$work/restore-response.json"
-      fi ;;
+      printf '{"data":{"searchRecipes":{"recipes":[],"found":0}}}\n' \
+        > "$work/restore-response.json" ;;
     *) return 1 ;;
   esac
 }
 curl() {
-  if [[ " $* " == *' --write-out '* ]]; then
-    if [[ ${CASE:-} == stale-delete ]]; then printf 200; else printf 404; fi
-  elif [[ ${CASE:-} == outage && $SECONDS -lt 65 ]]; then
-    return 1
-  elif [[ ${CASE:-} == slow-prime && ! -e $work/prime-delayed ]]; then
-    touch "$work/prime-delayed"
-    SECONDS=$((SECONDS + 61))
-    printf 'ETag: "cached"\r\n' > "$work/restore-probe-headers"
-    cat "$work/probe-name"
-  elif [[ ${CASE:-} == slow-initial-search && ! -e $work/prime-delayed ]]; then
-    touch "$work/prime-delayed"
-    return 1
-  elif [[ ${CASE:-} == stale-update && $(cat "$work/probe-name") == *Changed ]]; then
-    cat "$work/probe-original"
-  elif [[ ${CASE:-} == stale-prime-update && $(cat "$work/probe-name") == *Primed ]]; then
-    printf 'ETag: "cached"\r\n' > "$work/restore-probe-headers"
-    cat "$work/changed-name"
-  else
-    if [[ ${CASE:-} != degraded ]] && \
-        [[ ${CASE:-} != degraded-change || $(cat "$work/probe-name") != *Changed ]] && \
-        [[ ${CASE:-} != degraded-primed || $(cat "$work/probe-name") != *Primed ]]; then
-      printf 'ETag: "cached"\r\n' > "$work/restore-probe-headers"
-    else
-      printf 'Cache-Control: no-store\r\n' > "$work/restore-probe-headers"
-    fi
-    if [[ -e $work/searched-change && $(cat "$work/probe-name") == *Changed ]]; then
-      touch "$work/fresh-cache"
-    fi
-    cat "$work/probe-name"
-  fi
+  printf '%s\n' "${*: -1}" >> "$MOCK_LOG"
+  printf 'restored browse home\n'
 }
-sleep() {
-  if [[ $1 == 61 ]]; then touch "$work/cache-expired"; fi
-  SECONDS=$((SECONDS + $1))
-}
-restore_verify_propagation
+restore_wait_reads
 EOF
-  run env CASE=slow-search bash propagation-cache.sh
+  run bash readonly-verification.sh
   [ "$status" -eq 0 ]
-  rm -f work/deleted work/prime-delayed work/searched-change work/fresh-cache
-  run env CASE=slow-initial-search bash propagation-cache.sh
-  [ "$status" -eq 0 ]
-  rm -f work/deleted work/prime-delayed work/searched-change work/fresh-cache work/cache-expired
-  run env CASE=outage bash propagation-cache.sh
-  [ "$status" -eq 0 ]
-  [ -e work/cache-expired ]
-  for case in slow-prime stale-update stale-delete stale-prime-update stale-index degraded degraded-change degraded-primed; do
-    rm -f work/deleted work/prime-delayed work/searched-change work/fresh-cache work/cache-expired
-    run env CASE="$case" bash propagation-cache.sh
-    [ "$status" -ne 0 ]
-  done
-}
-
-@test "migration recovery persists propagation probes in release state rather than standalone restore state" {
-  cat > recovery-probe.sh << 'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-source "$FIXTURE_ROOT/.scripts/production-restore.sh"
-work="$FIXTURE_ROOT/work"
-timeout=1
-restore_mode=migration-recovery
-release_state_write() { printf '%s\n' "$*" >> "$MOCK_LOG"; }
-restore_graphql() {
-  case "$1" in
-    'query { __typename }') return 0 ;;
-    *createRecipe*) printf '{"data":{"createRecipe":{"id":"recovery-probe"}}}\n' \
-      > "$work/restore-response.json" ;;
-    *searchRecipes*) printf '{"data":{"searchRecipes":{"recipes":[]}}}\n' \
-      > "$work/restore-response.json" ;;
-    *) return 1 ;;
-  esac
-}
-timeout=0
-restore_verify_propagation
-EOF
-  run bash recovery-probe.sh
-  [ "$status" -ne 0 ]
-  grep -q 'recovery-probe' "$MOCK_LOG"
+  [ "$(grep -c '^query { maintenance recipes { id name } }$' "$MOCK_LOG")" -eq 1 ]
+  [ "$(grep -c 'searchRecipes' "$MOCK_LOG")" -eq 1 ]
+  run ! grep -Eq 'mutation|createRecipe|updateRecipe|deleteRecipe' "$MOCK_LOG"
   [[ ! -e $FIXTURE_ROOT/restore-state/restore-state.json ]]
 }
 

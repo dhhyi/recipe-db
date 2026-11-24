@@ -168,7 +168,7 @@ First [authorize Drive interactively on the new Pi](google-drive-authorization.m
 
 Set the paths below to your backup manifest and archive. Use a new directory for restore progress. Restore into the empty cluster—**do not deploy the application first**.
 
-Restore blocks application ingress until data and consumer verification succeeds. Do not bypass this barrier or use ordinary deployment to reopen an incomplete restore. HTTPS certificate-challenge access is separate from application access; router forwarding need not be disabled solely to run the guarded restore.
+During import, restore blocks public application routes. After the required non-mutating reads pass, it exposes the public read-only site but leaves GraphQL in maintenance and retains its Lease pending operator sign-off. Do not bypass the barrier or use ordinary deployment to reopen writes. HTTPS certificate-challenge access is separate from application access; router forwarding need not be disabled solely to run the guarded restore.
 
 Traefik's Let's Encrypt HTTPS certificate and ACME account key are stored separately from application backups. Preserve that state separately or allow certificate reissuance; see [HTTPS certificate operations and recovery](production-kubernetes.md#https-certificate-operations-and-recovery).
 
@@ -185,13 +185,27 @@ KUBECONFIG="$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
   "$BACKUP_ID" "$STATE" "RESTORE-$BACKUP_ID"
 ```
 
-If restore fails, keep the target isolated and follow the [failure-recovery procedure](production-kubernetes.md#fresh-deployment-restore). Don't copy PVC data, apply rendered manifests, delete data or release a recovery lock manually to force success.
+If restore fails, keep the target isolated and follow the [failure-recovery procedure](production-kubernetes.md#fresh-deployment-restore). Don't copy PVC data, apply rendered manifests, delete data or release a recovery lock manually to force success. A successful command means the restore is awaiting sign-off, not that writes are open:
 
-After restore, verify:
+```sh
+KUBECONFIG="$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
+  mise run production-k3d restore-status "$VALUES" "$STATE"
+HOLDER=$(jq -er .holder "$STATE/restore-state.json")
+KUBECONFIG="$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
+  mise run production-k3d restore-reopen "$VALUES" "$STATE" "OPEN-RESTORE-$BACKUP_ID-$HOLDER"
+```
+
+Inspect status and approve reopening only after confirming the intended target, retained Lease, passed read checks and observed maintenance mode. If reopening fails or its result is uncertain, inspect status and preserve the state and Lease; do not assume writes stayed blocked or restore the previous backup automatically.
+
+Before sign-off, verify reads:
 
 - Open Recipe DB; view a recipe and its image.
-- Search for a recipe, edit it, and confirm the change appears.
+- Search for a recipe.
 - Verify sign-in if configured.
+
+After separate operator sign-off and reopening, any write check is operator-directed and outside restore. Then verify:
+
+- Edit a recipe and confirm the change appears.
 - Reboot the Pi and confirm Recipe DB becomes accessible again.
 
 ## 8. Configure automated backups

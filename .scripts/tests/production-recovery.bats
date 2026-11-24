@@ -119,7 +119,7 @@ recovery_identity() {
 production_secrets() { :; }
 render() { printf 'kind: Deployment\nmetadata: {name: recipes}\n' > "$work/rendered.yml"; }
 connect() { echo connect >> "$MOCK_LOG"; }
-recovery_command_acquire() { echo claim >> "$MOCK_LOG"; }
+recovery_command_acquire() { echo recovery-command-claim >> "$MOCK_LOG"; }
 restore_guard_remove_expired() { echo expired-guard-checked >> "$MOCK_LOG"; }
 restore_guard_start() { echo guard-start >> "$MOCK_LOG"; }
 restore_guard_check() { echo guard-check >> "$MOCK_LOG"; }

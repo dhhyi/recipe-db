@@ -77,6 +77,30 @@ release_lifecycle() {
   bash "$driver" --release-sources-from-git "$@"
 }
 
+approve_restore() {
+  local values=$1 state=$2 expected_backup=$3 label=$4
+  local status_log="$result_directory/logs/$label-status.log" holder
+  run_logged "$status_log" release_lifecycle restore-status "$values" "$state"
+  jq -e --arg id "$expected_backup" '
+    .savedProgress.status == "awaiting-signoff"
+    and .savedProgress.backupId == $id
+    and .savedProgress.import.status == "complete"
+    and .savedProgress.readChecks.status == "passed"
+    and .lease.ownedByRestore
+    and .observed.graphql.mode == "maintenance"
+    and .observed.graphql.maintenanceQuery == true
+    and .observed.publicRoutes.normalRoutesObserved
+    and (.writesMayHaveOpened | not)
+  ' "$status_log" > /dev/null || die "$label restore status is not safe for operator-approved reopening"
+  holder=$(jq -er .holder "$state/restore-state.json")
+  run_logged "$result_directory/logs/$label-reopen.log" release_lifecycle restore-reopen \
+    "$values" "$state" "OPEN-RESTORE-$expected_backup-$holder"
+  jq -e --arg id "$expected_backup" '.backupId == $id
+    and .status == "succeeded" and .phase == "operator-reopened"
+    and .writesMayHaveOpened == true' "$state/restore-state.json" > /dev/null \
+    || die "$label restore did not record explicit reopening"
+}
+
 write_result() {
   local success=$1 finished elapsed staging_bytes available_bytes
   finished=$(date -u +%FT%TZ) || return 1
@@ -406,6 +430,7 @@ mark
 phase=fresh-target-restore
 run_logged "$result_directory/logs/restore.log" release_lifecycle restore "$target_values" \
   "$package_manifest" "$archive" "$backup_id" "$result_directory/state/restore" "RESTORE-$backup_id"
+approve_restore "$target_values" "$result_directory/state/restore" "$backup_id" fresh-target
 verify_fixture_recipe "$target_values" "$recipe_name"
 mark
 
@@ -631,6 +656,7 @@ phase=idle-site-recovery-restore
 run_logged "$result_directory/logs/idle-recovery-restore.log" \
   release_lifecycle recovery-restore "$target_values" "$reset_state" \
   "$package_manifest" "$archive" "$backup_id" "RESTORE-$backup_id"
+approve_restore "$target_values" "$reset_state" "$backup_id" idle-site-recovery
 verify_fixture_recipe "$target_values" "$recipe_name"
 verify_preserved_storage idle-restored
 mark
@@ -677,6 +703,7 @@ phase=reset-again-recovery-restore
 run_logged "$result_directory/logs/reset-again-recovery-restore.log" \
   release_lifecycle recovery-restore "$target_values" "$reset_state" "$package_manifest" \
   "$archive" "$backup_id" "RESTORE-$backup_id"
+approve_restore "$target_values" "$reset_state" "$backup_id" reset-again-recovery
 verify_fixture_recipe "$target_values" "$recipe_name"
 verify_preserved_storage reset-again-restored
 mark
@@ -775,6 +802,7 @@ phase=after-closeout-recovery-restore
 run_logged "$result_directory/logs/after-closeout-restore.log" \
   release_lifecycle recovery-restore "$target_values" "$reset_state" "$package_manifest" \
   "$archive" "$backup_id" "RESTORE-$backup_id"
+approve_restore "$target_values" "$reset_state" "$backup_id" after-closeout-recovery
 verify_fixture_recipe "$target_values" "$recipe_name"
 verify_preserved_storage after-closeout-restored
 mark

@@ -152,15 +152,38 @@ mise run production-k3d --release-sources-from-git recovery-restore "$VALUES" "$
 
 The handoff runs the existing restore pipeline with its own separate `RESTORE-$BACKUP_ID` approval. Restore still refuses populated storage and never wipes or merges it; ordinary fresh-deployment `restore` is unchanged. A failed import must go through reset again, not a second import.
 
-Require restore to finish successfully: it verifies stored data, search readiness, representative reads and change propagation before reopening access. Then check the normal website, recipe images, search, editing and configured sign-in. A reachable home page alone is not acceptance.
+Require restore to finish in the saved `awaiting-signoff` state. It verifies stored data, search readiness and representative reads while GraphQL stays in maintenance; it does not create, update or delete application records, and read checks do not prove write propagation. Public reads are available, writes remain blocked, and the restore Lease is retained. Inspect the live status before deciding whether to sign off:
+
+```fish
+mise run production-k3d --release-sources-from-git restore-status "$VALUES" "$STATE"
+```
+
+Confirm the saved backup, target, successful read checks, Lease ownership, maintenance mode and public read routes. Then separately approve reopening with the exact saved holder:
+
+```fish
+set -g HOLDER (jq -er .holder "$STATE/restore-state.json")
+mise run production-k3d --release-sources-from-git restore-reopen "$VALUES" "$STATE" \
+  "OPEN-RESTORE-$BACKUP_ID-$HOLDER"
+```
+
+The command records that writes may open before switching GraphQL to production and releases ownership only after success. After sign-off, the operator may perform directed write checks outside restore. A reachable home page alone is not acceptance.
 
 Keep the backup timer disabled. Follow [backup-input installation after standalone restore](production-release-cookbook.md#install-backup-inputs-after-a-standalone-restore) to match the restored release, [sync the backup inputs to private dotfiles](production-backup-dotfiles.md), install the inputs and verify a **fresh off-device backup** before schedule re-enable. This recovery is not a new release: do not run release acceptance, publication or retained-release alignment commands against the closed operation. Preserve an intentionally paused schedule.
 
 ## 5. Recover from a failure
 
-A nonzero exit is not partial success. Leave application access blocked, stop the old operator process, inspect the reported phase and `lock-status`, and keep the original private state directory. After an abrupt interruption, allow at least 45 seconds for the separate recovery-command heartbeat claim to expire before retrying; this never expires or releases the retained operation Lease. Failure handling stops workers and retains the recovery Lease; if the barrier or termination cannot be verified, investigate before attempting another command.
+A nonzero exit is not partial success. Preserve application access controls, stop the old operator process, inspect `restore-status`, the reported phase and `lock-status`, and keep the original private state directory. After an abrupt interruption, allow at least 45 seconds for the separate recovery-command heartbeat claim to expire before retrying; this never expires or releases the retained operation Lease. Failure handling stops workers and retains the recovery Lease; if the barrier or termination cannot be verified, investigate before attempting another command.
 
 Choose one action:
+
+- **Recheck reads:** if import completion is confirmed and only a read check failed, investigate first, then request the read-only recheck. This does not re-import data:
+
+  ```fish
+  mise run production-k3d --release-sources-from-git restore-recheck "$VALUES" "$STATE" \
+    "RECHECK-RESTORE-$BACKUP_ID"
+  ```
+
+- **Select another backup:** while sign-off is pending, do not reopen writes. Preview the alternative package and use the separately confirmed reset procedure in step 3 with the retained state. Reset requires the exact retained Lease and will block access before clearing data. If import completion is uncertain, use this approved reset/restore recovery path rather than rechecking or importing again.
 
 - **Reset again:** collect any remaining evidence by hand, then repeat step 3 with the same pinned values and state directory. If a shutdown guard remains, the reset checks its ownership, runtime settings and expiration, and verifies that all other workers have stopped before removing it. Kubernetes defaults such as omitted empty environment values do not count as changes. Do not remove the guard by hand. Reset discards everything left by the failed attempt. It never resumes or merges an import.
 - **Abandon:** use the separately confirmed abandonment command only after workload isolation and barrier checks. It releases only the exact retained Lease; data stays and access remains blocked. Abandonment does not make storage empty.
