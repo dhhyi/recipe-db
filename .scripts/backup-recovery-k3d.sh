@@ -30,7 +30,7 @@ die() {
 parent=$(dirname "$result_directory")
 [[ -d $parent && $(realpath -e "$parent") == "$parent" ]] \
   || die 'result directory parent must exist without symlink traversal'
-for tool in curl docker jq k3d kubectl openssl oras python3 setsid sha256sum yq; do
+for tool in curl docker jq k3d kubectl mkfifo openssl oras python3 setsid sha256sum yq; do
   command -v "$tool" > /dev/null || die "required tool not found: $tool"
 done
 
@@ -54,6 +54,9 @@ source_cleanup=not-attempted
 target_cleanup=not-attempted
 files_cleanup=not-attempted
 active_cleanup_pid=''
+result_created=false
+finish_signal=0
+exec {report_fd}>&2
 
 mark() {
   jq --arg phase "$phase" '. + [$phase]' "$result_directory/phases.json" \
@@ -117,23 +120,32 @@ write_result() {
 finish() {
   local status=$?
   trap - EXIT
+  trap 'finish_signal=130' INT
+  trap 'finish_signal=143' TERM
   if ((status == 0)); then
     phase=complete
     mark || status=1
   fi
-  if [[ -f $result_directory/phases.json ]]; then
+  if $result_created && [[ -f $result_directory/phases.json ]]; then
     write_result "$([[ $status == 0 ]] && echo true || echo false)" || status=1
   else
     status=1
   fi
+  if ((finish_signal != 0)); then
+    status=$finish_signal
+    trap '' INT TERM
+    if $result_created && [[ -f $result_directory/phases.json ]]; then
+      write_result false || :
+    fi
+  fi
   if ((status == 0)); then
     printf 'Backup recovery rehearsal passed; clusters and temporary data removed. Result: %s/result.json\n' \
-      "$result_directory"
+      "$result_directory" >&"$report_fd"
   else
     printf 'Backup recovery rehearsal stopped during %s; source %s: %s; target %s: %s; files: %s at %s\n' \
       "$phase" "$source_cluster" "$source_cleanup" "$target_cluster" "$target_cleanup" \
-      "$files_cleanup" "$result_directory" >&2
-    printf 'Inspect remaining resources and private files before deciding what to remove.\n' >&2
+      "$files_cleanup" "$result_directory" >&"$report_fd"
+    printf 'Inspect remaining resources and private files before deciding what to remove.\n' >&"$report_fd"
   fi
   exit "$status"
 }
@@ -141,6 +153,8 @@ interrupt() {
   local status=$1
   trap '' INT TERM
   if [[ -n $active_cleanup_pid ]]; then
+    printf 'Interrupted cleanup may leave private driver work under %s/.production-k3d.*; inspect it before removal.\n' \
+      "$root" >&"$report_fd"
     kill -TERM -- "-$active_cleanup_pid" 2> /dev/null || kill -TERM "$active_cleanup_pid" 2> /dev/null || :
     kill -KILL -- "-$active_cleanup_pid" 2> /dev/null || kill -KILL "$active_cleanup_pid" 2> /dev/null || :
     wait "$active_cleanup_pid" 2> /dev/null || :
@@ -148,12 +162,13 @@ interrupt() {
   fi
   exit "$status"
 }
-mkdir -m 700 "$result_directory"
 trap finish EXIT
 trap 'interrupt 130' INT
 trap 'interrupt 143' TERM
 trap 'printf "Backup recovery rehearsal command failed at line %s during %s\n" "$LINENO" "$phase" >&2' ERR
 
+mkdir -m 700 "$result_directory"
+result_created=true
 mkdir -m 700 "$result_directory/secrets" "$result_directory/logs" \
   "$result_directory/snapshots" "$result_directory/packages" "$result_directory/state" \
   "$result_directory/uploader-staging" "$result_directory/bin" "$result_directory/fake-remote"
@@ -812,11 +827,23 @@ verify_owned_cluster() {
 }
 
 run_cleanup_command() {
-  local status
-  setsid "$@" &
+  local status cleanup_signal=0 gate="$result_directory/.cleanup-gate" gate_fd
+  trap 'cleanup_signal=130' INT
+  trap 'cleanup_signal=143' TERM
+  mkfifo -m 600 "$gate" || return 1
+  exec {gate_fd}<>"$gate"
+  if ((cleanup_signal != 0)); then interrupt "$cleanup_signal"; fi
+  setsid bash -c 'IFS= read -r < "$1" || exit 1; shift; "$@"' cleanup-gate "$gate" "$@" &
   active_cleanup_pid=$!
+  trap 'interrupt 130' INT
+  trap 'interrupt 143' TERM
+  if ((cleanup_signal != 0)); then interrupt "$cleanup_signal"; fi
+  printf 'start\n' >&"$gate_fd"
   wait "$active_cleanup_pid" && status=0 || status=$?
   active_cleanup_pid=''
+  exec {gate_fd}>&-
+  ((status == 0)) || return "$status"
+  rm -- "$gate" || return 1
   return "$status"
 }
 
