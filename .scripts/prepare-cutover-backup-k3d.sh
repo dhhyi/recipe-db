@@ -60,7 +60,7 @@ case "$result_directory/" in
     fail 'results must be outside the checkout, operator configuration and runtime storage'
     ;;
 esac
-for tool in git jq k3d kubectl mise openssl oras python3 realpath sha256sum stat tar yq; do
+for tool in git jq k3d kubectl mise openssl oras python3 realpath sha256sum setsid stat tar yq; do
   command -v "$tool" > /dev/null || fail "required tool not found: $tool"
 done
 
@@ -127,6 +127,10 @@ target_cluster_attempted=false
 source_cluster_deleted=false
 target_cluster_deleted=false
 success=false
+active_command_pid=''
+active_command_starting=false
+pending_signal=''
+pending_signal_status=0
 
 write_result() {
   local status=failed finished
@@ -191,19 +195,59 @@ on_exit() {
   exit "$status"
 }
 trap on_exit EXIT
-trap 'failure_reason="interrupted by SIGINT"; exit 130' INT
-trap 'failure_reason="interrupted by SIGTERM"; exit 143' TERM
+
+interrupt_active_command() {
+  local signal=$1 status=$2
+  if [[ $active_command_starting == true && -z $active_command_pid ]]; then
+    pending_signal=$signal
+    pending_signal_status=$status
+    return
+  fi
+  failure_reason="interrupted by SIG$signal"
+  if [[ -n $active_command_pid ]]; then
+    kill -s "$signal" -- "-$active_command_pid" 2> /dev/null || true
+    wait "$active_command_pid" 2> /dev/null || true
+    while kill -0 -- "-$active_command_pid" 2> /dev/null; do sleep 0.1; done
+    active_command_pid=''
+  fi
+  exit "$status"
+}
+trap 'interrupt_active_command INT 130' INT
+trap 'interrupt_active_command TERM 143' TERM
+
+run_active_command() {
+  local log=$1 status signal
+  shift
+  set +m
+  active_command_starting=true
+  setsid --wait "$@" > "$log" 2>&1 &
+  active_command_pid=$!
+  active_command_starting=false
+  if [[ -n $pending_signal ]]; then
+    signal=$pending_signal
+    status=$pending_signal_status
+    pending_signal=''
+    interrupt_active_command "$signal" "$status"
+  fi
+  if wait "$active_command_pid"; then
+    status=0
+  else
+    status=$?
+  fi
+  active_command_pid=''
+  return "$status"
+}
 
 run_production() {
   local log=$1
   shift
-  mise run --raw production-k3d --release-sources-from-git "$@" > "$log" 2>&1
+  run_active_command "$log" mise run --raw production-k3d --release-sources-from-git "$@"
 }
 
 run_cluster_lifecycle() {
   local log=$1
   shift
-  mise run --raw production-k3d "$@" > "$log" 2>&1
+  run_active_command "$log" mise run --raw production-k3d "$@"
 }
 
 manifest="$private/inputs/$(basename "$input_manifest")"

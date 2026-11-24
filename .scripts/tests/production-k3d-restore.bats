@@ -279,6 +279,15 @@ load production-k3d-restore-setup
   [ ! -e "$MOCK_LOG.restore-mutation-attempt" ]
   run ! grep -Eq 'createRecipe|updateRecipe|deleteRecipe|recipe/probe' "$MOCK_LOG"
   [ "$(jq -r '.metadata.annotations["recipe-db/phase"]' "$MOCK_LOG.lease")" = awaiting-signoff ]
+  [ "$(wc -l < "$MOCK_LOG.forward-pids-traefik")" -eq 2 ]
+  [ ! -e "$MOCK_LOG.traefik-forward-overlap" ]
+  local forward_pid
+  while IFS= read -r forward_pid; do
+    run ! kill -0 "$forward_pid" 2> /dev/null
+  done < "$MOCK_LOG.forward-pids-traefik"
+  while IFS= read -r forward_pid; do
+    run ! kill -0 "$forward_pid" 2> /dev/null
+  done < "$MOCK_LOG.forward-pids-browse"
 }
 
 @test "cutover restore rejects a package revision that differs from its immutable source artifact" {

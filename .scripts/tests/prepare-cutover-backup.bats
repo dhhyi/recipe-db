@@ -179,9 +179,16 @@ printf '%s\n' "$operation" >> "$MOCK_LOG"
 cluster=$(yq -r '.cluster' "$values")
 [[ $(yq -r '.target' "$values") == local &&
   ($cluster == recipe-db-rehearsal-*-s || $cluster == recipe-db-rehearsal-*-t) ]] || exit 97
-if [[ ${MOCK_SIGNAL_ON:-} == "$operation" ]]; then
-  kill -TERM "$PPID"
-  exit 0
+if [[ ${MOCK_BLOCK_ON:-} == "$operation" ]]; then
+  (
+    trap 'touch "$MOCK_LOG.active-child-terminated"; exit 0' TERM
+    touch "$MOCK_LOG.active-child-started"
+    while :; do sleep 0.1; done
+  ) &
+  child_pid=$!
+  trap 'kill -TERM "$child_pid" 2>/dev/null || true; wait "$child_pid" 2>/dev/null || true; touch "$MOCK_LOG.active-command-terminated"; exit 143' TERM
+  wait "$child_pid"
+  exit $?
 fi
 if [[ ${MOCK_FAIL_ON:-} == "$operation" && $operation == create-new ]]; then
   touch "$MOCK_LOG.partial-cluster"
@@ -398,10 +405,26 @@ PY
 }
 
 @test "SIGTERM records interruption and retains private state without deleting clusters" {
-  export MOCK_SIGNAL_ON=create-new
-  run bash .scripts/prepare-cutover-backup-k3d.sh "$INPUT_MANIFEST" "$INPUT_ARCHIVE" \
-    "$RETRIEVAL_RECEIPT" "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY"
-  [ "$status" -eq 143 ]
+  export MOCK_BLOCK_ON=create-new
+  local pid deadline=$((SECONDS + 20)) result
+  bash .scripts/prepare-cutover-backup-k3d.sh "$INPUT_MANIFEST" "$INPUT_ARCHIVE" \
+    "$RETRIEVAL_RECEIPT" "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY" \
+    > "$BATS_TEST_TMPDIR/interruption.log" 2>&1 &
+  pid=$!
+  while [[ ! -e "$MOCK_LOG.active-child-started" ]]; do
+    if ! kill -0 "$pid" 2> /dev/null || ((SECONDS >= deadline)); then
+      kill -TERM "$pid" 2> /dev/null || true
+      wait "$pid" 2> /dev/null || true
+      cat "$BATS_TEST_TMPDIR/interruption.log"
+      return 1
+    fi
+    sleep 0.1
+  done
+  kill -TERM "$pid"
+  if wait "$pid"; then result=0; else result=$?; fi
+  [ "$result" -eq 143 ]
+  [ -e "$MOCK_LOG.active-command-terminated" ]
+  [ -e "$MOCK_LOG.active-child-terminated" ]
   jq -e '.status == "failed" and .phase == "create-source-cluster"
     and .failureReason == "interrupted by SIGTERM"
     and .clusters.source.creationAttempted and .clusters.source.created == null

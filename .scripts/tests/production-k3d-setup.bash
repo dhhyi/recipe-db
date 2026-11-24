@@ -596,7 +596,20 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         exit ;;
       *"get pod restore-volume-"*) exit ;;
       *"port-forward "*)
-        if [[ $* == *"service/browse"* ]]; then port=18082; else port=18081; fi
+        if [[ $* == *"service/browse"* ]]; then
+          port=18082
+          forward_kind=browse
+        else
+          port=18081
+          forward_kind=traefik
+          if [[ -s "$MOCK_LOG.forward-pids-traefik" ]]; then
+            previous_pid=$(sed -n '1p' "$MOCK_LOG.forward-pids-traefik")
+            if kill -0 "$previous_pid" 2> /dev/null; then
+              touch "$MOCK_LOG.traefik-forward-overlap"
+            fi
+          fi
+        fi
+        printf '%s\n' "$BASHPID" >> "$MOCK_LOG.forward-pids-$forward_kind"
         printf '%s\n' "$BASHPID" > "$MOCK_LOG.latest-forward-pid"
         echo "Forwarding from 127.0.0.1:$port -> 3000"
         exec sleep 600 3>&- ;;

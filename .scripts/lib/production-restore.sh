@@ -1661,6 +1661,13 @@ restore_reblock_graphql_maintenance() {
     && backup_wait_pods_gone graphql
 }
 
+restore_stop_forward() {
+  [[ -n ${restore_forward_pid:-} ]] || return 0
+  kill "$restore_forward_pid" 2> /dev/null || true
+  wait "$restore_forward_pid" 2> /dev/null || true
+  restore_forward_pid=
+}
+
 restore_forward() {
   local resource=$1 port=$2 file=$3 pid forward_namespace=$namespace deadline=$((SECONDS + timeout))
   [[ $resource != deployment/traefik ]] || forward_namespace=kube-system

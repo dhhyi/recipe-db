@@ -4786,6 +4786,7 @@ cutover_capture_snapshot() {
   local command=backup-run
   local locked=true retain_lock=true
   local cutover_status="$work/cutover-restore-status.json"
+  restore_stop_forward
   restore_status "$state" > "$cutover_status"
   jq -e --arg id "$original_backup_id" '
     .savedProgress.status == "awaiting-signoff"
