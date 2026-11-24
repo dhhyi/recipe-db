@@ -239,6 +239,12 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
   esac
   if [[ $MOCK_RESTORE == true ]]; then
     case "$*" in
+      *"get secret recipe-db-runtime -o json")
+        jq -n --arg graphql "$(printf '%043d' 0 | tr 0 a | base64 -w0)" \
+          --arg typesense "$(printf '%064d' 0 | tr 0 a | base64 -w0)" '{
+          metadata:{namespace:"recipe-db",labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+          data:{"graphql-ingress-secret":$graphql,"typesense-api-key":$typesense}}'
+        exit ;;
       *"get rolebinding/recovery-guard-"*)
         exit ;;
       *"get job recovery-guard-"*"--ignore-not-found"*)
@@ -300,13 +306,13 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         if [[ -f $MOCK_LOG.restore-deployments ]]; then cat "$MOCK_LOG.restore-deployments"
         else echo '{"items":[]}'; fi
         exit ;;
-      *"get secret recipe-db-routes -o json")
+      *"get secret recipe-db-routes"*)
         jq --arg bad "${MOCK_ABANDON_BAD_BARRIER:-false}" '
           if $bad == "true" then .http.routers.graphql={entrypoints:["web"]} else . end |
           {metadata:{labels:{"app.kubernetes.io/part-of":"recipe-db"}},
             data:{"routes.yml":(tojson|@base64)}}' "$MOCK_LOG.restore-routes"
         exit ;;
-      *"get configmap recipe-db-restore --ignore-not-found -o json")
+      *"get configmap recipe-db-restore"*)
         if [[ -f $MOCK_LOG.cluster-restore-state ]]; then
           cat "$MOCK_LOG.cluster-restore-state"
         fi
@@ -325,7 +331,11 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         else echo '{"items":[]}'; fi
         exit ;;
       *"get namespace recipe-db --ignore-not-found -o json")
-        echo '{"metadata":{"labels":{"app.kubernetes.io/part-of":"recipe-db"}}}'; exit ;;
+        echo '{"metadata":{"uid":"namespace-uid","labels":{"app.kubernetes.io/part-of":"recipe-db"}}}'; exit ;;
+      *"get namespace recipe-db -o json")
+        echo '{"metadata":{"name":"recipe-db","uid":"namespace-uid","labels":{"app.kubernetes.io/part-of":"recipe-db"}}}'; exit ;;
+      *"get namespace kube-system -o json")
+        echo '{"metadata":{"name":"kube-system","uid":"system-uid"}}'; exit ;;
       *"get deployment traefik -o json")
         if [[ ${MOCK_HELM_PENDING:-false} == true ]]; then echo '{}'; exit; fi
         if [[ ${MOCK_HELM_DELAYED:-false} == true && ! -f ${MOCK_LOG%/*}/helm-observed ]]; then
@@ -391,13 +401,23 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         jq -n --arg name "$name" --arg drift "${MOCK_RESTORE_PVC_DRIFT:-false}" '
           {metadata:{name:$name,namespace:"recipe-db",uid:(if $drift == "true" then "changed" else $name end),
             labels:{"app.kubernetes.io/part-of":"recipe-db"}},
-            spec:{storageClassName:"local-path",accessModes:["ReadWriteOnce"]},status:{phase:"Bound"}}'
+            spec:{storageClassName:"local-path",accessModes:["ReadWriteOnce"],
+              volumeMode:"Filesystem",volumeName:("pv-" + $name)},
+            status:{phase:"Bound"}}'
         fi
         exit ;;
       *"get pv -o json")
         if [[ ${MOCK_RESTORE_RELEASED:-false} == true ]]; then
           echo '{"items":[{"spec":{"claimRef":{"namespace":"recipe-db"}},"status":{"phase":"Released"}}]}'
-        else echo '{"items":[]}'; fi
+        else
+          jq -n --slurpfile values "$VALUES" --arg drift "${MOCK_RESTORE_PVC_DRIFT:-false}" '
+            {items:[$values[0].volumes | keys[] as $name | {
+              metadata:{name:("pv-" + $name),uid:("pvuid-" + $name)},
+              spec:{claimRef:{namespace:"recipe-db",name:$name,
+                uid:(if $drift == "true" then "changed" else $name end)},
+                persistentVolumeReclaimPolicy:"Delete"},
+              status:{phase:"Bound"}}]}'
+        fi
         exit ;;
       *"create -f "*restore-new-claim.yml) touch "$MOCK_LOG.claims"; exit ;;
       *"create -f "*recovery-image-probe.json)
@@ -512,7 +532,10 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         printf '%s\n' "$BASHPID" > "$MOCK_LOG.latest-forward-pid"
         echo "Forwarding from 127.0.0.1:$port -> 3000"
         exec sleep 600 3>&- ;;
-      *"replace -f "*recipe-db-deploy-update.json) cp "${*: -1}" "$MOCK_LOG.lease"; exit ;;
+      *"replace -f "*recipe-db-deploy-update.json | *"replace -f "*recovery-lease-next.json)
+        [[ $(jq -r '.metadata.annotations["recipe-db/phase"]' "${*: -1}") != reopening ]] \
+          || touch "$MOCK_LOG.reopening"
+        cp "${*: -1}" "$MOCK_LOG.lease"; exit ;;
       *"get lease recipe-db-deploy"*)
         if [[ ${MOCK_RESTORE_LOCK_DRIFT:-false} == true && -e $MOCK_LOG.imported ]]; then
           jq '.spec.holderIdentity="foreign-operation"' "$MOCK_LOG.lease"
@@ -543,6 +566,16 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         mv "$MOCK_LOG.restore-deployments.next" "$MOCK_LOG.restore-deployments"; exit ;;
       *"set env deployment/"*"MODE="*)
         name="${*: -3:1}"; name="${name#deployment/}"; mode="${*: -2:1}"; mode="${mode#MODE=}"
+        if [[ $name == graphql && $mode == production &&
+          ${MOCK_GRAPHQL_REOPEN_FAIL:-false} == true &&
+          -e $MOCK_LOG.reopening && ! -e $MOCK_LOG.reopen-transition-failed ]]; then
+          touch "$MOCK_LOG.reopen-transition-failed"
+          exit 1
+        fi
+        if [[ $name == graphql && $mode == production &&
+          ${MOCK_GRAPHQL_REOPEN_UNCERTAIN:-false} == true && -e $MOCK_LOG.reopening ]]; then
+          touch "$MOCK_LOG.reopen-mode-applied"
+        fi
         if [[ $name == recipes && $mode == production ]]; then touch "$MOCK_LOG.recipes-production"; fi
         selected="${*: -1}"; selected="${selected#--containers=}"
         jq --arg name "$name" --arg mode "$mode" --arg selected "$selected" '
@@ -552,6 +585,14 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
             select(.name == "MODE").value)=$mode' \
           "$MOCK_LOG.restore-deployments" > "$MOCK_LOG.restore-deployments.next"
         mv "$MOCK_LOG.restore-deployments.next" "$MOCK_LOG.restore-deployments"; exit ;;
+      *"rollout status deployment/graphql "*)
+        if [[ ${MOCK_GRAPHQL_REOPEN_UNCERTAIN:-false} == true &&
+          -e $MOCK_LOG.reopen-mode-applied ]] &&
+          jq -e 'any(.items[]; .metadata.name == "graphql" and
+            any(.spec.template.spec.containers[].env[]; .name == "MODE" and .value == "production"))' \
+            "$MOCK_LOG.restore-deployments" > /dev/null; then
+          exit 1
+        fi ;;
       *"rollout status deployment/recipes "*)
         if [[ ${MOCK_RESTORE_PRODUCTION_ROLLOUT_FAIL:-false} == true && -e $MOCK_LOG.recipes-production ]]; then
           exit 1
@@ -1229,6 +1270,23 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
     else
       cat "$MOCK_LOG.lease"
     fi ;;
+  *"create -f "*recovery-command-create.json)
+    jq '.metadata.namespace="kube-system" | .metadata.uid="recovery-command-uid" |
+      .metadata.resourceVersion="1"' "${*: -1}" > "$MOCK_LOG.recovery-command-lease" ;;
+  *"get lease recipe-db-recovery-command"*)
+    [[ ! -f $MOCK_LOG.recovery-command-lease ]] || cat "$MOCK_LOG.recovery-command-lease" ;;
+  *"replace -f "*recovery-heartbeat-next.json)
+    jq -e --slurpfile current "$MOCK_LOG.recovery-command-lease" '
+      .spec.holderIdentity == $current[0].spec.holderIdentity
+      and .metadata.uid == $current[0].metadata.uid
+    ' "${*: -1}" > /dev/null || exit 1
+    jq '.metadata.resourceVersion="2"' "${*: -1}" > "$MOCK_LOG.recovery-command-lease" ;;
+  *"delete --raw /apis/coordination.k8s.io/v1/namespaces/kube-system/leases/recipe-db-recovery-command"*)
+    jq -e --slurpfile current "$MOCK_LOG.recovery-command-lease" '
+      .preconditions.uid == $current[0].metadata.uid and
+      .preconditions.resourceVersion == $current[0].metadata.resourceVersion
+    ' "${*: -1}" > /dev/null || exit 1
+    rm -f "$MOCK_LOG.recovery-command-lease" ;;
   *"delete --raw /apis/coordination.k8s.io/v1/namespaces/kube-system/leases/recipe-db-deploy"*)
     jq -e --slurpfile current "$MOCK_LOG.lease" '
       .preconditions.uid == $current[0].metadata.uid and

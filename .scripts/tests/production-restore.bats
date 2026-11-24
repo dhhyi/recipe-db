@@ -792,15 +792,15 @@ mv "$work/config.next" "$work/config.json"
 restore_graphql() {
   local variables=${2:-'{}'} id
   case "$1" in
-    'query { recipes { id name } }')
+    'query { maintenance recipes { id name } }')
       if [[ ${RESTORE_LARGE:-false} == true ]]; then
-        jq -n '{data:{recipes:[range(0;12) | {id:("recipe-" + (if . < 10 then "0" else "" end) + tostring),name:"First"}]}}' \
+        jq -n '{data:{maintenance:true,recipes:[range(0;12) | {id:("recipe-" + (if . < 10 then "0" else "" end) + tostring),name:"First"}]}}' \
           > "$work/restore-response.json"
       elif [[ ${RESTORE_IMAGE_FREE:-false} == true ]]; then
-        printf '{"data":{"recipes":[{"id":"first","name":"First"},{"id":"second","name":"Second"}]}}\n' \
+        printf '{"data":{"maintenance":true,"recipes":[{"id":"first","name":"First"},{"id":"second","name":"Second"}]}}\n' \
           > "$work/restore-response.json"
       else
-        printf '{"data":{"recipes":[{"id":"recipe-no-image","name":"First"},{"id":"recipe-with-image","name":"Image"}]}}\n' \
+        printf '{"data":{"maintenance":true,"recipes":[{"id":"recipe-no-image","name":"First"},{"id":"recipe-with-image","name":"Image"}]}}\n' \
           > "$work/restore-response.json"
       fi
       ;;
@@ -901,152 +901,26 @@ EOF
   run ! grep -Fxq recipe-11 work/image-samples
 }
 
-@test "restore propagation does not mutate until the GraphQL route is ready" {
-  cat > route-gate.sh << 'EOF'
+@test "shared restore read verification is non-mutating for normal and migration recovery" {
+  cat > readonly-verification.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 source "$FIXTURE_ROOT/.scripts/production-restore.sh"
-timeout=0
+work="$FIXTURE_ROOT/work"
+timeout=3
+restore_graphql_port=4000
 restore_graphql() {
   printf '%s\n' "$1" >> "$MOCK_LOG"
-  return 1
+  printf '{"data":{"maintenance":true,"recipes":[]}}\n' > "$work/restore-response.json"
 }
-restore_verify_propagation
+for restore_mode in standalone migration-recovery; do
+  restore_wait_reads
+done
 EOF
-  run bash route-gate.sh
-  [ "$status" -ne 0 ]
-  [[ $output == *"GraphQL route did not become ready"* ]]
-  [ "$(cat "$MOCK_LOG")" = 'query { __typename }' ]
-}
-
-@test "restore propagation proves browse invalidation before expiry independently of search" {
-  cat > propagation-cache.sh << 'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-source "$FIXTURE_ROOT/.scripts/production-restore.sh"
-work="$FIXTURE_ROOT/work"
-timeout=200
-restore_mode=migration-recovery
-restore_browse_port=4100
-release_state_write() { :; }
-restore_graphql() {
-  local variables=${2:-'{}'} name
-  case "$1" in
-    'query { __typename }') : ;;
-    *createRecipe*)
-      jq -r .name <<< "$variables" > "$work/probe-name"
-      cp "$work/probe-name" "$work/probe-original"
-      printf '{"data":{"createRecipe":{"id":"probe"}}}\n' > "$work/restore-response.json" ;;
-    *updateRecipe*)
-      name=$(jq -r .name <<< "$variables")
-      if [[ $name == *Primed ]]; then
-        [[ -e $work/fresh-cache ]] || return 1
-      else
-        printf '%s\n' "$name" > "$work/changed-name"
-      fi
-      printf '%s\n' "$name" > "$work/probe-name" ;;
-    *deleteRecipe*) touch "$work/deleted" ;;
-    *searchRecipes*)
-      name=$(jq -r '.options.q' <<< "$variables")
-      if [[ ${CASE:-} == slow-initial-search && $name != *Changed && $name != "*" ]]; then
-        SECONDS=$((SECONDS + 199))
-      fi
-      if [[ $name == *Changed ]]; then
-        touch "$work/searched-change"
-        if [[ ${CASE:-} == slow-search ]]; then SECONDS=$((SECONDS + 65)); fi
-      fi
-      if [[ -e $work/deleted ]]; then
-        if [[ ${CASE:-} == stale-index ]]; then
-          printf '{"data":{"searchRecipes":{"found":1,"recipes":[null]}}}\n' > "$work/restore-response.json"
-        else
-          printf '{"data":{"searchRecipes":{"found":0}}}\n' > "$work/restore-response.json"
-        fi
-      else
-        jq -n --arg name "$(cat "$work/probe-name")" \
-          '{data:{searchRecipes:{recipes:[{id:"probe",name:$name}]}}}' > "$work/restore-response.json"
-      fi ;;
-    *) return 1 ;;
-  esac
-}
-curl() {
-  if [[ " $* " == *' --write-out '* ]]; then
-    if [[ ${CASE:-} == stale-delete ]]; then printf 200; else printf 404; fi
-  elif [[ ${CASE:-} == outage && $SECONDS -lt 65 ]]; then
-    return 1
-  elif [[ ${CASE:-} == slow-prime && ! -e $work/prime-delayed ]]; then
-    touch "$work/prime-delayed"
-    SECONDS=$((SECONDS + 61))
-    printf 'ETag: "cached"\r\n' > "$work/restore-probe-headers"
-    cat "$work/probe-name"
-  elif [[ ${CASE:-} == slow-initial-search && ! -e $work/prime-delayed ]]; then
-    touch "$work/prime-delayed"
-    return 1
-  elif [[ ${CASE:-} == stale-update && $(cat "$work/probe-name") == *Changed ]]; then
-    cat "$work/probe-original"
-  elif [[ ${CASE:-} == stale-prime-update && $(cat "$work/probe-name") == *Primed ]]; then
-    printf 'ETag: "cached"\r\n' > "$work/restore-probe-headers"
-    cat "$work/changed-name"
-  else
-    if [[ ${CASE:-} != degraded ]] && \
-        [[ ${CASE:-} != degraded-change || $(cat "$work/probe-name") != *Changed ]] && \
-        [[ ${CASE:-} != degraded-primed || $(cat "$work/probe-name") != *Primed ]]; then
-      printf 'ETag: "cached"\r\n' > "$work/restore-probe-headers"
-    else
-      printf 'Cache-Control: no-store\r\n' > "$work/restore-probe-headers"
-    fi
-    if [[ -e $work/searched-change && $(cat "$work/probe-name") == *Changed ]]; then
-      touch "$work/fresh-cache"
-    fi
-    cat "$work/probe-name"
-  fi
-}
-sleep() {
-  if [[ $1 == 61 ]]; then touch "$work/cache-expired"; fi
-  SECONDS=$((SECONDS + $1))
-}
-restore_verify_propagation
-EOF
-  run env CASE=slow-search bash propagation-cache.sh
+  run bash readonly-verification.sh
   [ "$status" -eq 0 ]
-  rm -f work/deleted work/prime-delayed work/searched-change work/fresh-cache
-  run env CASE=slow-initial-search bash propagation-cache.sh
-  [ "$status" -eq 0 ]
-  rm -f work/deleted work/prime-delayed work/searched-change work/fresh-cache work/cache-expired
-  run env CASE=outage bash propagation-cache.sh
-  [ "$status" -eq 0 ]
-  [ -e work/cache-expired ]
-  for case in slow-prime stale-update stale-delete stale-prime-update stale-index degraded degraded-change degraded-primed; do
-    rm -f work/deleted work/prime-delayed work/searched-change work/fresh-cache work/cache-expired
-    run env CASE="$case" bash propagation-cache.sh
-    [ "$status" -ne 0 ]
-  done
-}
-
-@test "migration recovery persists propagation probes in release state rather than standalone restore state" {
-  cat > recovery-probe.sh << 'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-source "$FIXTURE_ROOT/.scripts/production-restore.sh"
-work="$FIXTURE_ROOT/work"
-timeout=1
-restore_mode=migration-recovery
-release_state_write() { printf '%s\n' "$*" >> "$MOCK_LOG"; }
-restore_graphql() {
-  case "$1" in
-    'query { __typename }') return 0 ;;
-    *createRecipe*) printf '{"data":{"createRecipe":{"id":"recovery-probe"}}}\n' \
-      > "$work/restore-response.json" ;;
-    *searchRecipes*) printf '{"data":{"searchRecipes":{"recipes":[]}}}\n' \
-      > "$work/restore-response.json" ;;
-    *) return 1 ;;
-  esac
-}
-timeout=0
-restore_verify_propagation
-EOF
-  run bash recovery-probe.sh
-  [ "$status" -ne 0 ]
-  grep -q 'recovery-probe' "$MOCK_LOG"
+  [ "$(grep -c '^query { maintenance recipes { id name } }$' "$MOCK_LOG")" -eq 2 ]
+  run ! grep -Eq 'mutation|createRecipe|updateRecipe|deleteRecipe' "$MOCK_LOG"
   [[ ! -e $FIXTURE_ROOT/restore-state/restore-state.json ]]
 }
 

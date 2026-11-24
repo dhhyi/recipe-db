@@ -101,7 +101,9 @@ production_config() {
         or $action == "release-migration-status" or $action == "release-migration-recover-claim"
         or $action == "release-start" or $action == "release-reopen"
         or $action == "release-readonly-result"
-        or $action == "release-disposition" or $action == "restore" or $action == "storage-reattach"
+        or $action == "release-disposition" or $action == "restore"
+        or $action == "restore-status" or $action == "restore-recheck" or $action == "restore-reopen"
+        or $action == "storage-reattach"
         or $action == "release-closeout" or ($action | startswith("recovery-")))
       then has("piStorage")
         and .piStorage.node == .cluster

@@ -30,7 +30,9 @@ values=$2
 shift 2
 if [[ $release_sources_from_git == true ]]; then
   [[ $command == release-* || $command == render || $command == maintenance-enter || $command == backup-enter ||
-    $command == backup-capture || $command == maintenance-restore || $command == backup-run || $command == backup-exit || $command == restore || $command == recovery-* ]] \
+    $command == backup-capture || $command == maintenance-restore || $command == backup-run || $command == backup-exit ||
+    $command == restore || $command == restore-status || $command == restore-recheck ||
+    $command == restore-reopen || $command == recovery-* ]] \
     || production_fail "Git release sources are limited to render, backup operations, restore and guarded release operations"
   tooling_revision=$(git -C "$root" rev-parse HEAD)
   [[ -z $(git -C "$root" status --porcelain --untracked-files=all) ]] \
@@ -69,6 +71,9 @@ case "$command" in
   release-accept) [[ $# = 3 ]] || production_fail "release-accept requires the maintenance state directory, candidate artifact and ACCEPT-<holder> confirmation" ;;
   release-finalize) [[ $# = 4 ]] || production_fail "release-finalize requires the maintenance state directory, candidate artifact, sequential GitHub release tag and PUBLISHED-<holder>-<tag> confirmation" ;;
   restore) [[ $# = 5 ]] || production_fail "restore requires absolute package manifest, archive, expected backup ID, new absolute state directory and RESTORE-<backup-id> confirmation" ;;
+  restore-status) [[ $# = 1 ]] || production_fail "restore-status requires the absolute retained restore state directory" ;;
+  restore-recheck) [[ $# = 2 ]] || production_fail "restore-recheck requires the absolute retained restore state directory and RECHECK-RESTORE-<backup-id> confirmation" ;;
+  restore-reopen) [[ $# = 2 ]] || production_fail "restore-reopen requires the absolute retained restore state directory and OPEN-RESTORE-<backup-id>-<holder> confirmation" ;;
   release-closeout) [[ $# = 3 ]] || production_fail "release-closeout requires release state, exact holder and CLOSEOUT-<holder>" ;;
   recovery-reset) [[ $# = 5 ]] || production_fail "recovery-reset requires manifest, archive, backup ID, private state directory and RESET-<backup-id>" ;;
   recovery-plan) [[ $# = 4 || $# = 5 ]] || production_fail "recovery-plan requires manifest, archive, backup ID, private state directory and optional private verified catalog" ;;
@@ -521,7 +526,10 @@ ensure_namespace() {
         recovery_validate_namespace_handoff "$work/existing-restore-state.json"
       else
         jq -e '.data["restore-state.json"] | fromjson |
-        .status == "succeeded" and .phase == "complete"' \
+        (.status == "succeeded" and .phase == "complete")
+        or (.status == "succeeded" and .phase == "operator-reopened"
+          and .import.status == "complete" and .readChecks.status == "passed"
+          and .writesMayHaveOpened == true)' \
           "$work/existing-restore-state.json" > /dev/null \
           || production_fail "target has unresolved or abandoned restore state; keep it isolated and select a new empty target"
       fi
@@ -4876,6 +4884,15 @@ case "$command" in
     ;;
   restore)
     restore_run "$1" "$2" "$3" "$4" "$5"
+    ;;
+  restore-status)
+    restore_status "$1"
+    ;;
+  restore-recheck)
+    restore_recheck "$1" "$2"
+    ;;
+  restore-reopen)
+    restore_reopen "$1" "$2"
     ;;
   release-closeout)
     recovery_release_closeout "$@"

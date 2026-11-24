@@ -68,6 +68,65 @@ restore_state_write() {
   kube apply -f "$work/restore-state-configmap.json" > /dev/null
 }
 
+restore_state_sync() {
+  [[ ${restore_cluster_state:-false} == true ]] || return 0
+  jq -n --arg ns "$namespace" --rawfile state "$restore_state/restore-state.json" \
+    '{apiVersion:"v1",kind:"ConfigMap",metadata:{name:"recipe-db-restore",namespace:$ns,
+      labels:{"app.kubernetes.io/part-of":"recipe-db"}},data:{"restore-state.json":$state}}' \
+    > "$work/restore-state-configmap.json" || return 1
+  kube apply -f "$work/restore-state-configmap.json" > /dev/null
+}
+
+restore_state_update() {
+  local update jq_args=()
+  while [[ ${1:-} == --arg || ${1:-} == --argjson ]]; do
+    jq_args+=("$1" "$2" "$3")
+    shift 3
+  done
+  update=$1
+  jq "${jq_args[@]}" --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "$update | .updatedAt=\$updatedAt" \
+    "$restore_state/restore-state.json" > "$restore_state/restore-state.next" \
+    && mv "$restore_state/restore-state.next" "$restore_state/restore-state.json" \
+    && restore_state_sync
+}
+
+restore_record_read_check() {
+  local result=$1
+  jq --arg result "$result" --arg checkedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+    .readChecks = {
+      status:$result,method:"read-only",checkedAt:$checkedAt,
+      attempts:((.readChecks.attempts // []) + [{status:$result,checkedAt:$checkedAt}])
+    }' "$restore_state/restore-state.json" > "$work/restore-state-read-check.json" \
+    && mv "$work/restore-state-read-check.json" "$restore_state/restore-state.json" \
+    && restore_state_sync
+}
+
+restore_record_import_complete() {
+  local completed_at
+  completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
+    release_recovery_state_write recovery-required migration-recovery-import-complete \
+      "$(jq -cn --arg completedAt "$completed_at" \
+        '{migrationRecovery:{importStatus:"complete",importCompletedAt:$completedAt}}')"
+    return
+  fi
+  recovery_identity || return 1
+  jq --arg completedAt "$completed_at" --slurpfile identity "$work/reset-identity.json" '
+    .import={status:"complete",completedAt:$completedAt}
+    | .restoreIdentity=$identity[0]
+  ' "$restore_state/restore-state.json" > "$work/restore-state-import.json" \
+    && mv "$work/restore-state-import.json" "$restore_state/restore-state.json" \
+    && restore_state_sync
+}
+
+restore_mark_pending_signoff() {
+  restore_state_update '
+    .status="awaiting-signoff" | .phase="pending-signoff"
+    | .publicRoutesMayBeOpen=true | .writesMayHaveOpened=(.writesMayHaveOpened // false)
+  ' && cluster_operation_lock_update awaiting-signoff
+}
+
 restore_phase() {
   restore_current_phase=$1
   if [[ ${restore_guard_started:-false} == true &&
@@ -228,13 +287,15 @@ restore_preflight_workload_images() {
 }
 
 restore_cleanup() {
-  local result=$1 pid retry_safe=true failure_reason
+  local result=$1 pid retry_safe=true failure_reason preserve_readable=false
   for pid in "${restore_forward_pid:-}" "${restore_browse_pid:-}"; do
     [[ -n $pid ]] || continue
     kill "$pid" 2> /dev/null || true
     wait "$pid" 2> /dev/null || true
   done
-  [[ (${command:-} == restore || ${command:-} == recovery-restore || ${command:-} == release-migration-recover) &&
+  [[ (${command:-} == restore || ${command:-} == recovery-restore ||
+    ${command:-} == restore-recheck || ${command:-} == restore-reopen ||
+    ${command:-} == release-migration-recover) &&
     $result != 0 && ${restore_started:-false} == true ]] || return 0
   # Never roll a partial import back by deleting data, or treat it as a resumable merge.
   retain_lock=true
@@ -284,19 +345,44 @@ restore_cleanup() {
     restore_routes_apply "$work/restore-barrier-routes.json" \
       || printf 'production: could not reassert public restore barrier; isolate ingress immediately\n' >&2
     if [[ ${restore_application_installed:-false} == true ]]; then
-      backup_reblock_graphql \
-        || printf 'production: could not reblock GraphQL; isolate ingress immediately\n' >&2
+      if [[ ${command:-} == restore-reopen || ${command:-} == restore-recheck ||
+        ${restore_current_phase:-} == verifying-reads ]]; then
+        restore_reblock_graphql_maintenance \
+          || printf 'production: could not reassert GraphQL maintenance; isolate ingress immediately\n' >&2
+      else
+        backup_reblock_graphql \
+          || printf 'production: could not reblock GraphQL; isolate ingress immediately\n' >&2
+      fi
     fi
   fi
-  recovery_stop_workers \
-    || printf 'production: could not stop every restore worker; isolate application storage\n' >&2
+  if [[ (${command:-} == restore || ${command:-} == restore-recheck) &&
+    ${restore_current_phase:-} == verifying-reads &&
+    -f ${restore_state:-}/restore-state.json ]] \
+    && jq -e '.import.status == "complete" and (.writesMayHaveOpened // false) == false' \
+      "$restore_state/restore-state.json" > /dev/null \
+    && restore_reblock_graphql_maintenance \
+    && restore_verify_graphql_mode maintenance; then
+    preserve_readable=true
+    restore_record_read_check failed \
+      || printf 'production: failed read-check result could not be recorded; inspect state before retrying\n' >&2
+  else
+    recovery_stop_workers \
+      || printf 'production: could not stop every restore worker; isolate application storage\n' >&2
+  fi
   restore_guard_stop \
     || printf 'production: could not remove shutdown guard; inspect it before another attempt\n' >&2
   restore_state_write recovery-required "${restore_current_phase:-interrupted}" \
     || printf 'production: could not update durable restore recovery state\n' >&2
+  cluster_operation_lock_update recovery-required \
+    || printf 'production: could not mark the retained restore Lease as recovery-required\n' >&2
   printf 'production: restore FAILED; no success recorded; Lease holder %s retained\n' "$lock_holder" >&2
   printf 'production: recovery state: %s/restore-state.json (also ConfigMap recipe-db-restore when created)\n' "$restore_state" >&2
-  printf 'production: inspect lock-status, workloads and helper Pods; keep public ingress blocked. Do not rerun import into these volumes. Preserve partial data for investigation. For planned existing-cluster recovery, run recovery-plan again then recovery-reset with the same state and backup-bound confirmation. Otherwise stop every workload and use restore-abandon with this saved state, exact holder and ABANDON-<holder>-AFTER-ISOLATION; select new empty storage or reflash.\n' >&2
+  if [[ $preserve_readable == true ]]; then
+    printf 'production: import is complete and writes remain blocked; investigate the read failure, then use restore-recheck with RECHECK-RESTORE-%s or preview/reset to select another backup. Do not re-import.\n' \
+      "$backup_id" >&2
+  else
+    printf 'production: inspect lock-status, workloads and helper Pods; keep public ingress blocked. Do not rerun import into these volumes. Preserve partial data for investigation. For planned existing-cluster recovery, run recovery-plan again then recovery-reset with the same state and backup-bound confirmation. Otherwise stop every workload and use restore-abandon with this saved state, exact holder and ABANDON-<holder>-AFTER-ISOLATION; select new empty storage or reflash.\n' >&2
+  fi
 }
 
 restore_abandon() {
@@ -1468,6 +1554,32 @@ restore_start_production_backends() {
     "$work/restore-mode-deployments.json")
 }
 
+restore_set_graphql_mode() {
+  local mode=$1
+  kube set env deployment/graphql "MODE=$mode" --containers=graphql > /dev/null || return 1
+  kube rollout status deployment/graphql --timeout="${timeout}s" || return 1
+  restore_verify_graphql_mode "$mode"
+}
+
+restore_verify_graphql_mode() {
+  local mode=$1
+  kube get deployments -o json > "$work/restore-graphql-mode.json" || return 1
+  jq -e --arg mode "$mode" '
+    any(.items[]; .metadata.name == "graphql"
+      and (.status.readyReplicas // 0) == (.spec.replicas // 1)
+      and any(.spec.template.spec.containers[];
+        .name == "graphql" and any(.env[]?; .name == "MODE" and .value == $mode)))
+  ' "$work/restore-graphql-mode.json" > /dev/null
+}
+
+restore_reblock_graphql_maintenance() {
+  if restore_set_graphql_mode maintenance; then return 0; fi
+  printf 'production: GraphQL maintenance rollout failed; applying the full backup barrier\n' >&2
+  if backup_reblock_graphql; then return 0; fi
+  kube scale deployment/graphql --replicas=0 > /dev/null \
+    && backup_wait_pods_gone graphql
+}
+
 restore_forward() {
   local resource=$1 port=$2 file=$3 pid forward_namespace=$namespace deadline=$((SECONDS + timeout))
   [[ $resource != deployment/traefik ]] || forward_namespace=kube-system
@@ -1493,7 +1605,7 @@ restore_graphql() {
   jq -n --arg query "$query" --argjson variables "$variables" \
     '{query:$query,variables:$variables}' > "$work/restore-request.json" || return 1
   curl --silent --show-error --connect-timeout 5 --max-time "$timeout" \
-    --config "$work/restore-curl.conf" --header 'Content-Type: application/json' \
+    --header 'Content-Type: application/json' \
     --data-binary "@$work/restore-request.json" \
     "http://127.0.0.1:$restore_graphql_port/graphql" > "$work/restore-response.json" \
     2> "$work/restore-request-error" || return 1
@@ -1531,9 +1643,9 @@ PY
 # black-box only; use application interfaces, not stored data formats or application internals
 restore_verify_reads() {
   local recipe candidate id name encoded url request_url status
-  restore_graphql 'query { recipes { id name } }' || return 1
-  jq -e '.data.recipes | type == "array" and
-    all(.[]; (.id | type == "string" and length > 0) and (.name | type == "string"))' \
+  restore_graphql 'query { maintenance recipes { id name } }' || return 1
+  jq -e '.data.maintenance == true and (.data.recipes | type == "array" and
+    all(.[]; (.id | type == "string" and length > 0) and (.name | type == "string")))' \
     "$work/restore-response.json" > /dev/null || return 1
   jq -c '.data.recipes | sort_by(.id) | .[:10][]' "$work/restore-response.json" \
     > "$work/restore-recipe-sample.jsonl" || return 1
@@ -1580,156 +1692,22 @@ restore_verify_reads() {
     > "$work/restore-browse.html" 2> "$work/restore-request-error" || return 1
 }
 
-restore_browse_cached_page() {
-  local url=$1 expected=$2
-  curl --silent --show-error --fail --max-time "$timeout" \
-    --dump-header "$work/restore-probe-headers" "$url" > "$work/restore-probe.html" \
-    2> "$work/restore-request-error" \
-    && grep -Eiq '^etag:[[:space:]]*[^[:space:]]' "$work/restore-probe-headers" \
-    && grep -Fq "$expected" "$work/restore-probe.html"
-}
-
 restore_wait_reads() {
   local deadline=$((SECONDS + timeout))
   until restore_verify_reads; do
     if ((SECONDS >= deadline)); then
       printf 'production: restored data did not pass application-interface read verification\n' >&2
-      return 1
-    fi
-    sleep 2
-  done
-}
-
-restore_verify_propagation() {
-  local id encoded deadline cache_deadline prime_started changed_started changed_observed probe
-  local browse_url prime_retry=false
-  probe="RestoreProbe$(date -u +%Y%m%d%H%M%S)$$"
-  deadline=$((SECONDS + timeout))
-  until restore_graphql 'query { __typename }'; do
-    if ((SECONDS >= deadline)); then
-      printf 'production: GraphQL route did not become ready for restore propagation checks\n' >&2
-      return 1
-    fi
-    sleep 2
-  done
-  restore_graphql 'mutation($name:String!) { createRecipe(value:{name:$name}) { id } }' \
-    "$(jq -cn --arg name "$probe" '{name:$name}')" || return 1
-  id=$(jq -er '.data.createRecipe.id | select(type == "string" and length > 0)' \
-    "$work/restore-response.json") || return 1
-  if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
-    release_state_write recovery-required migration-recovery-verifying-propagation \
-      "$(jq -cn --arg id "$id" '{migrationRecovery:{probeRecipeId:$id}}')" || return 1
-  else
-    jq --arg id "$id" '.probeRecipeId=$id' "$restore_state/restore-state.json" \
-      > "$restore_state/restore-state.next" && mv "$restore_state/restore-state.next" \
-      "$restore_state/restore-state.json" || return 1
-  fi
-  encoded=$(jq -rn --arg id "$id" '$id | @uri')
-  browse_url="http://127.0.0.1:$restore_browse_port/recipe/$encoded"
-  deadline=$((SECONDS + timeout))
-  while :; do
-    if restore_graphql 'query($options:JSON!) { searchRecipes(options:$options) { recipes { id name } } }' \
-      "$(jq -cn --arg name "$probe" '{options:{q:$name,query_by:"name"}}')" \
-      && jq -e --arg id "$id" 'any(.data.searchRecipes.recipes[]; .id == $id)' \
-        "$work/restore-response.json" > /dev/null; then break; fi
-    ((SECONDS < deadline)) || return 1
-    sleep 2
-  done
-  deadline=$((SECONDS + timeout))
-  while :; do
-    prime_started=$SECONDS
-    if restore_browse_cached_page "$browse_url" "$probe"; then
-      if ! $prime_retry; then
-        cache_deadline=$((prime_started + 60))
-        ((SECONDS < cache_deadline)) || return 1
-        break
+      if [[ ${restore_mode:-standalone} != migration-recovery &&
+        -f ${restore_state:-}/restore-state.json ]]; then
+        restore_record_read_check failed || return 1
       fi
-      # A failed request may have populated the cache; let this response expire too.
-      sleep 61
-      prime_retry=false
-      continue
-    fi
-    ((SECONDS < deadline)) || return 1
-    prime_retry=true
-    sleep 2
-  done
-  changed_started=$SECONDS
-  restore_graphql 'mutation($id:ID!,$name:String!) { updateRecipe(id:$id,value:{name:$name}) { id } }' \
-    "$(jq -cn --arg id "$id" --arg name "${probe}Changed" '{id:$id,name:$name}')" || return 1
-  while :; do
-    ((SECONDS < cache_deadline)) || return 1
-    if restore_browse_cached_page "$browse_url" "${probe}Changed"; then
-      ((SECONDS < cache_deadline)) || return 1
-      changed_observed=$SECONDS
-      break
+      return 1
     fi
     sleep 2
   done
-  deadline=$((SECONDS + timeout))
-  while :; do
-    if restore_graphql 'query($options:JSON!) { searchRecipes(options:$options) { recipes { id name } } }' \
-      "$(jq -cn --arg name "${probe}Changed" '{options:{q:$name,query_by:"name"}}')" \
-      && jq -e --arg id "$id" --arg name "${probe}Changed" \
-        'any(.data.searchRecipes.recipes[]; .id == $id and .name == $name)' \
-        "$work/restore-response.json" > /dev/null; then break; fi
-    ((SECONDS < deadline)) || return 1
-    sleep 2
-  done
-  cache_deadline=$((changed_started + 60))
-  if ((SECONDS >= cache_deadline)); then
-    # A slow search wait may have expired the observed cache; establish a fresh one.
-    while ((SECONDS < changed_observed + 61)); do
-      sleep "$((changed_observed + 61 - SECONDS))"
-    done
-    cache_deadline=$((SECONDS + 60))
-  fi
-  while :; do
-    ((SECONDS < cache_deadline)) || return 1
-    if restore_browse_cached_page "$browse_url" "${probe}Changed"; then
-      ((SECONDS < cache_deadline)) || return 1
-      break
-    fi
-    sleep 2
-  done
-  prime_started=$SECONDS
-  restore_graphql 'mutation($id:ID!,$name:String!) { updateRecipe(id:$id,value:{name:$name}) { id } }' \
-    "$(jq -cn --arg id "$id" --arg name "${probe}Primed" '{id:$id,name:$name}')" || return 1
-  while :; do
-    ((SECONDS < cache_deadline)) || return 1
-    if restore_browse_cached_page "$browse_url" "${probe}Primed"; then
-      ((SECONDS < cache_deadline)) || return 1
-      break
-    fi
-    sleep 2
-  done
-  cache_deadline=$((prime_started + 60))
-  restore_graphql 'mutation($id:ID!) { deleteRecipe(id:$id) }' \
-    "$(jq -cn --arg id "$id" '{id:$id}')" || return 1
-  while :; do
-    ((SECONDS < cache_deadline)) || return 1
-    if [[ $(curl --silent --show-error --max-time "$timeout" --output "$work/restore-probe.html" \
-      --write-out '%{http_code}' "http://127.0.0.1:$restore_browse_port/recipe/$encoded" \
-      2> "$work/restore-request-error") == 404 ]]; then
-      ((SECONDS < cache_deadline)) || return 1
-      break
-    fi
-    sleep 2
-  done
-  deadline=$((SECONDS + timeout))
-  while :; do
-    if restore_graphql 'query($options:JSON!) { searchRecipes(options:$options) { found } }' \
-      "$(jq -cn --arg id "$id" '{options:{q:"*",query_by:"name",filter_by:("id:=`"+$id+"`")}}')" \
-      && jq -e '.data.searchRecipes.found == 0' \
-        "$work/restore-response.json" > /dev/null; then break; fi
-    ((SECONDS < deadline)) || return 1
-    sleep 2
-  done
-  if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
-    release_state_write recovery-required migration-recovery-verifying-propagation \
-      '{"migrationRecovery":{"probeRecipeId":null}}'
-  else
-    jq 'del(.probeRecipeId)' "$restore_state/restore-state.json" > "$restore_state/restore-state.next" \
-      && mv "$restore_state/restore-state.next" "$restore_state/restore-state.json"
+  if [[ ${restore_mode:-standalone} != migration-recovery &&
+    -f ${restore_state:-}/restore-state.json ]]; then
+    restore_record_read_check passed
   fi
 }
 
@@ -1746,6 +1724,324 @@ restore_wait_public_routes() {
     ((SECONDS < deadline)) || return 1
     sleep 2
   done
+}
+
+restore_expose_readonly_routes() {
+  guard_ingress_service
+  kube --namespace kube-system patch service recipe-db-internal --type=strategic \
+    -p '{"spec":{"ports":[{"port":80,"targetPort":8000}]}}' > /dev/null || return 1
+  restore_routes_apply "$work/restore-final-routes.json" || return 1
+  restore_wait_public_routes
+}
+
+restore_load_saved_operation() {
+  local state=$1 current lease_uid
+  recovery_private_state "$state"
+  restore_state=$state
+  restore_cluster_state=true
+  jq -e --arg target "$target" --arg cluster "$cluster" --arg context "$context" \
+    --arg ns "$namespace" --arg configSha256 "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" '
+    .version == 1 and .target == $target and .cluster == $cluster
+    and .context == $context and .namespace == $ns and .configSha256 == $configSha256
+    and (.backupId | type == "string" and test("^backup-[0-9]{14}-[0-9]+$"))
+    and (.holder | type == "string" and length > 0)
+    and (.artifact | type == "string" and
+      test("^ghcr[.]io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}$"))
+    and (.revision | type == "string" and test("^[0-9a-f]{40}$"))
+    and ((.restoreMode == "standalone" or .restoreMode == "existing-reset")
+      and ((.leaseUid // .reset.leaseUid) | type == "string" and length > 0))
+  ' "$restore_state/restore-state.json" > /dev/null \
+    || production_fail "saved restore state or target does not match; preserve its state and Lease and inspect it before any action"
+  jq -e '(.probeRecipeId // null) == null' "$restore_state/restore-state.json" > /dev/null \
+    || production_fail "retained write-probe identity requires operator investigation; preserve the state and Lease"
+  backup_id=$(jq -er .backupId "$restore_state/restore-state.json")
+  lock_holder=$(jq -er .holder "$restore_state/restore-state.json")
+  cluster_operation_lock_holder=$lock_holder
+  artifact=$(jq -er .artifact "$restore_state/restore-state.json")
+  restore_mode=$(jq -er .restoreMode "$restore_state/restore-state.json")
+  lease_uid=$(jq -er '.leaseUid // .reset.leaseUid' "$restore_state/restore-state.json")
+  connect
+  current=$(cluster_operation_lock_status) || production_fail "cannot inspect the retained restore Lease"
+  jq -e --arg holder "$lock_holder" --arg uid "$lease_uid" --arg artifact "$artifact" '
+    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.uid == $uid and .spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/operation"] == "restore"
+    and .metadata.annotations["recipe-db/release"] == $artifact
+    and .metadata.annotations["recipe-db/phase"] != "acquired"
+  ' <<< "$current" > /dev/null \
+    || production_fail "saved restore does not own the exact recorded Lease; inspect status and do not reopen"
+  recovery_identity || production_fail "cannot verify the saved restore target identity"
+  jq -e --slurpfile actual "$work/reset-identity.json" \
+    '.restoreIdentity == $actual[0]' "$restore_state/restore-state.json" > /dev/null \
+    || production_fail "restore target PVC/PV or cluster identity changed; preserve access barriers and investigate"
+  jq -e '(.migrationRecovery.probeRecipeId // null) == null' \
+    "$restore_state/restore-state.json" > /dev/null \
+    || production_fail "retained write-probe identity requires operator investigation; preserve the state and Lease"
+}
+
+restore_prepare_saved_release() {
+  local saved_revision
+  saved_revision=$(jq -er .revision "$restore_state/restore-state.json")
+  pull_release "$artifact"
+  [[ $revision == "$saved_revision" ]] \
+    || production_fail "saved restore release revision differs from its immutable artifact"
+  production_secrets
+  kube get secret recipe-db-runtime -o json > "$work/restore-runtime-secret.json" \
+    || production_fail "cannot inspect the retained runtime Secret for saved restore operations"
+  jq -e --arg ns "$namespace" '.metadata.namespace == $ns
+    and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"' \
+    "$work/restore-runtime-secret.json" > /dev/null \
+    || production_fail "retained runtime Secret is not owned by this application namespace"
+  jq -er '.data["graphql-ingress-secret"] | @base64d |
+    select(test("^[A-Za-z0-9_-]{43}$"))' "$work/restore-runtime-secret.json" \
+    > "$work/graphql-ingress-secret" \
+    || production_fail "retained GraphQL ingress credential is invalid; preserve the barrier and investigate"
+  jq -er '.data["typesense-api-key"] | @base64d |
+    select(test("^[0-9a-f]{64}$"))' "$work/restore-runtime-secret.json" \
+    > "$work/typesense-api-key" \
+    || production_fail "retained Typesense credential is invalid; preserve the barrier and investigate"
+  render
+  application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
+  yq -o=json -I=0 'select(.kind == "Deployment")' "$work/rendered.yml" | jq -s \
+    '[.[] | {name:.metadata.name,replicas:1,release:.spec.template.metadata.annotations["recipe-db/release"]}]' \
+    > "$work/prior-workloads.json"
+  jq -sc '[.[] | select(.category == "api" or .category == "backend" or .name == "browse") |
+    .name | select(. != "graphql")]' "$work/projects.jsonl" \
+    > "$work/maintenance-workloads.json"
+  routes
+  cp "$work/routes.yml" "$work/restore-final-routes.json"
+  image_port=$(jq -er 'select(.name == "images") | .devcontainer.ports[0]' "$work/projects.jsonl")
+  restore_build_public_barrier_routes "$work/routes.yml" \
+    "$work/restore-barrier-routes.json" "$image_port" \
+    || production_fail "could not rebuild the saved restore access barrier"
+  restore_validate_public_barrier "$work/restore-barrier-routes.json" \
+    || production_fail "rebuilt restore public routes are not a complete barrier"
+  annotate_credentials
+}
+
+restore_assert_saved_public_routes() {
+  curl --silent --show-error --fail --connect-timeout 5 --max-time "$timeout" \
+    "http://127.0.0.1:$restore_graphql_port/api/http/routers" \
+    > "$work/restore-observed-routers.json" 2> "$work/restore-request-error" \
+    || production_fail "cannot observe public routes through the configured ingress"
+  jq -e 'type == "array" and
+    all(.[]; .name != "restore-public-barrier@file") and
+    any(.[]; .name == "graphql@file" and .status == "enabled")' \
+    "$work/restore-observed-routers.json" > /dev/null \
+    || production_fail "public routes are blocked or do not match the saved restore"
+}
+
+restore_status() {
+  local state=$1 graphql_mode=unknown maintenance_query=null route_config=null routers=null
+  local lease=null observed_deployments target_matches=false configmap=null current
+  recovery_private_state "$state"
+  [[ -f $state/restore-state.json ]] \
+    || production_fail "restore status requires the retained restore-state.json"
+  restore_state=$state
+  restore_cluster_state=true
+  jq -e '.version == 1 and (.holder | type == "string" and length > 0)' \
+    "$state/restore-state.json" > /dev/null \
+    || production_fail "saved restore state is malformed; preserve it and inspect the target"
+  connect
+  current=$(cluster_operation_lock_status) || current=
+  if [[ -n $current ]]; then lease=$current; fi
+  if kube get deployments -o json > "$work/restore-status-deployments.json" 2> /dev/null; then
+    observed_deployments=$work/restore-status-deployments.json
+    graphql_mode=$(jq -r '[.items[] | select(.metadata.name == "graphql") |
+      .spec.template.spec.containers[] | select(.name == "graphql") |
+      .env[]? | select(.name == "MODE") | .value][0] // "unknown"' "$observed_deployments")
+  else
+    observed_deployments=/dev/null
+  fi
+  kube --namespace kube-system get secret recipe-db-routes --ignore-not-found -o json \
+    > "$work/restore-status-routes-secret.json" 2> /dev/null || true
+  if jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and (.data["routes.yml"] | type == "string")' \
+    "$work/restore-status-routes-secret.json" > /dev/null 2>&1; then
+    jq -er '.data["routes.yml"] | @base64d' "$work/restore-status-routes-secret.json" \
+      > "$work/restore-status-routes.json"
+    route_config=$(jq -c '[.http.routers | to_entries[] |
+      select(any(.value.entrypoints[]?; . == "web" or . == "websecure")) | .key]' \
+      "$work/restore-status-routes.json")
+  fi
+  if restore_forward deployment/traefik 3000 "$work/restore-status-forward.log" \
+    > "$work/restore-status-port" 2> /dev/null; then
+    restore_graphql_port=$(cat "$work/restore-status-port")
+    if curl --silent --show-error --fail --connect-timeout 5 --max-time "$timeout" \
+      "http://127.0.0.1:$restore_graphql_port/api/http/routers" \
+      > "$work/restore-status-observed-routers.json" 2> /dev/null; then
+      routers=$(jq -c '[.[] | select(.name | endswith("@file")) |
+        {name,status,rule,entryPoints}]' "$work/restore-status-observed-routers.json")
+    fi
+    if restore_graphql 'query { maintenance }'; then
+      maintenance_query=$(jq -c '.data.maintenance // null' "$work/restore-response.json")
+    fi
+  fi
+  if [[ $graphql_mode == maintenance && $maintenance_query == true ]]; then target_matches=true; fi
+  kube get configmap recipe-db-restore --ignore-not-found -o json \
+    > "$work/restore-status-configmap.json" 2> /dev/null || true
+  if jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and (.data["restore-state.json"] | type == "string")' \
+    "$work/restore-status-configmap.json" > /dev/null 2>&1; then
+    configmap=$(jq -er '.data["restore-state.json"] | fromjson' \
+      "$work/restore-status-configmap.json")
+  fi
+  jq -n --slurpfile state "$state/restore-state.json" \
+    --argjson lease "${lease:-null}" --argjson configmap "$configmap" \
+    --arg graphqlMode "$graphql_mode" --argjson maintenanceQuery "$maintenance_query" \
+    --argjson routes "$route_config" --argjson routers "$routers" \
+    --argjson maintenanceVerified "$target_matches" '
+    ($state[0]) as $saved |
+    ($lease // null) as $currentLease |
+    {
+      savedProgress:{status:$saved.status,phase:$saved.phase,
+        import:($saved.import // null),readChecks:($saved.readChecks // null),
+        publicRoutesMayBeOpen:($saved.publicRoutesMayBeOpen // null),
+        writesMayHaveOpened:($saved.writesMayHaveOpened // null)},
+      lease:{present:($currentLease != null),
+        holder:($currentLease.spec.holderIdentity // null),
+        phase:($currentLease.metadata.annotations["recipe-db/phase"] // null),
+        ownedByRestore:($currentLease.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+          and $currentLease.spec.holderIdentity == $saved.holder
+          and $currentLease.metadata.uid == ($saved.leaseUid // $saved.reset.leaseUid)
+          and $currentLease.metadata.annotations["recipe-db/operation"] == "restore"
+          and $currentLease.metadata.annotations["recipe-db/release"] == $saved.artifact)},
+      observed:{graphql:{mode:(if $graphqlMode == "unknown" then null else $graphqlMode end),
+          maintenanceQuery:$maintenanceQuery,maintenanceVerified:$maintenanceVerified},
+        publicRoutes:{configured:$routes,active:$routers,
+          barrierConfigured:($routes != null and ($routes | index("restore-public-barrier") != null)),
+          normalRoutesObserved:($routes != null and ($routes | index("restore-public-barrier") == null)
+            and $routers != null and
+            any($routers[]; .name == "graphql@file" and .status == "enabled"))}},
+      writesMayHaveOpened:(($saved.writesMayHaveOpened // false)
+        or ($saved.status == "awaiting-signoff" and
+          ($graphqlMode != "maintenance" or $maintenanceQuery != true))),
+      nextAction:(if ($saved.writesMayHaveOpened // false)
+        or ($saved.status == "awaiting-signoff" and
+          ($graphqlMode != "maintenance" or $maintenanceQuery != true))
+        then "Inspect this status and recent application writes; explicitly close access or reconcile the transition. Do not retry restore or assume no writes occurred."
+        elif $saved.status == "awaiting-signoff" and $maintenanceVerified
+          and $currentLease.spec.holderIdentity == $saved.holder
+          then "Operator may approve reopening separately with restore-reopen."
+        elif $saved.import.status == "complete" and $saved.readChecks.status == "failed"
+          and $graphqlMode == "maintenance"
+          then "Investigate the read failure; request restore-recheck or use the separately approved recovery-plan/reset path."
+        else "Inspect saved progress, actual access mode/routes, and Lease; choose the next action explicitly." end),
+      savedClusterState:($configmap | if . == null then null else
+        {status:.status,phase:.phase,updatedAt:.updatedAt} end)
+    }'
+}
+
+restore_recheck() {
+  local state=$1 confirmation=$2
+  recovery_private_state "$state"
+  connect
+  recovery_command_acquire
+  restore_load_saved_operation "$state"
+  [[ $confirmation == "RECHECK-RESTORE-$backup_id" ]] \
+    || production_fail "read-only recheck requires RECHECK-RESTORE-<backup-id> confirmation"
+  jq -e '.status == "recovery-required" and .phase == "verifying-reads"
+    and .import.status == "complete" and .readChecks.status == "failed"
+    and (.writesMayHaveOpened // false) == false' \
+    "$restore_state/restore-state.json" > /dev/null \
+    || production_fail "read-only recheck requires a confirmed complete import with failed reads and no recorded reopen attempt"
+  jq -e '.metadata.annotations["recipe-db/phase"] == "recovery-required"' \
+    <<< "$(cluster_operation_lock_status)" > /dev/null \
+    || production_fail "read-only recheck requires the exact recovery-required Lease phase"
+  restore_prepare_saved_release
+  restore_verify_installed_public_barrier
+  restore_verify_graphql_mode maintenance \
+    || production_fail "GraphQL is not ready in maintenance mode; preserve the barrier and investigate"
+  backup_verify_recovered_workloads "$(jq -c '[.[].name]' "$work/prior-workloads.json")" maintenance \
+    || production_fail "restored workloads are not ready for a read-only recheck"
+  locked=true
+  retain_lock=true
+  restore_started=true
+  restore_application_installed=true
+  restore_barrier=true
+  restore_current_phase=verifying-reads
+  restore_forward deployment/traefik 3000 "$work/restore-forward.log" > "$work/restore-port"
+  restore_graphql_port=$(cat "$work/restore-port")
+  restore_forward service/browse 3000 "$work/restore-browse-forward.log" > "$work/restore-browse-port"
+  restore_browse_port=$(cat "$work/restore-browse-port")
+  restore_mode=$(jq -er .restoreMode "$restore_state/restore-state.json")
+  restore_current_phase=verifying-reads
+  restore_wait_reads || production_fail "read-only recheck failed; restore remains blocked and requires operator investigation"
+  restore_mark_pending_signoff \
+    || production_fail "passed read-only recheck could not be durably recorded"
+  restore_expose_readonly_routes \
+    || production_fail "read-only routes could not be exposed; restore remains pending sign-off"
+  restore_graphql 'query { maintenance }' \
+    && jq -e '.data.maintenance == true' "$work/restore-response.json" > /dev/null \
+    || production_fail "GraphQL maintenance could not be reverified after read-only recheck"
+  restore_started=false
+  printf 'production: read-only recheck passed; restore awaits operator sign-off; Lease holder %s retained\n' "$lock_holder"
+}
+
+restore_reopen() {
+  local state=$1 confirmation=$2 exposure_at
+  recovery_private_state "$state"
+  connect
+  recovery_command_acquire
+  restore_load_saved_operation "$state"
+  jq -e '.status == "awaiting-signoff" and .phase == "pending-signoff"
+    and .import.status == "complete" and .readChecks.status == "passed"
+    and (.writesMayHaveOpened // false) == false' \
+    "$restore_state/restore-state.json" > /dev/null \
+    || production_fail "reopening requires a verified pending restore with no previous reopen attempt; inspect restore-status"
+  [[ $confirmation == "OPEN-RESTORE-$backup_id-$lock_holder" ]] \
+    || production_fail "reopening requires OPEN-RESTORE-<backup-id>-<holder> confirmation"
+  jq -e '.metadata.annotations["recipe-db/phase"] == "awaiting-signoff"' \
+    <<< "$(cluster_operation_lock_status)" > /dev/null \
+    || production_fail "reopening requires the exact pending-sign-off Lease phase"
+  restore_prepare_saved_release
+  restore_barrier=true
+  restore_verify_graphql_mode maintenance \
+    || production_fail "reopening requires GraphQL already observed in maintenance mode"
+  kube get deployments -o json > "$work/restore-reopen-deployments.json" \
+    || production_fail "cannot inspect restored workloads before reopening"
+  backup_validate_workload_images "$work/restore-reopen-deployments.json" \
+    || production_fail "restore workloads changed before reopening"
+  backup_verify_recovered_workloads "$(jq -c '[.[].name]' "$work/prior-workloads.json")" maintenance \
+    || production_fail "restored workloads are not ready in read-only maintenance"
+  restore_forward deployment/traefik 3000 "$work/restore-forward.log" > "$work/restore-port"
+  restore_graphql_port=$(cat "$work/restore-port")
+  restore_assert_saved_public_routes
+  restore_graphql 'query { maintenance }' \
+    && jq -e '.data.maintenance == true' "$work/restore-response.json" > /dev/null \
+    || production_fail "GraphQL is not observed in maintenance mode before reopening"
+  locked=true
+  retain_lock=true
+  restore_started=true
+  restore_application_installed=true
+  restore_barrier=true
+  restore_current_phase=reopening
+  exposure_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  restore_state_update --arg at "$exposure_at" '
+    .status="reopening" | .phase="reopening"
+    | .writesMayHaveOpened=true | .reopeningStartedAt=$at
+  ' || production_fail "possible write exposure could not be durably recorded; refusing to change GraphQL mode"
+  cluster_operation_lock_update reopening \
+    || production_fail "reopening Lease phase could not be recorded; refusing to change GraphQL mode"
+  restore_set_graphql_mode production \
+    || production_fail "GraphQL reopening failed; access will be reblocked and ownership retained"
+  restore_graphql 'query { maintenance }' \
+    && jq -e '.data.maintenance == false' "$work/restore-response.json" > /dev/null \
+    || production_fail "GraphQL production mode could not be observed after reopening"
+  restore_assert_saved_public_routes
+  restore_state_update --arg at "$exposure_at" '
+    .status="succeeded" | .phase="operator-reopened"
+    | .operatorApprovedAt=$at | .accessOpenedAt=$at
+  ' || production_fail "reopening succeeded but completion could not be durably recorded; inspect status and retain the Lease"
+  cluster_operation_lock_update operator-reopened \
+    || production_fail "reopening succeeded but Lease closeout could not be recorded; inspect status and retain ownership"
+  cluster_operation_lock_release "$lock_holder" \
+    || production_fail "reopening succeeded but the exact Lease could not be released; inspect status and reconcile explicitly"
+  locked=false
+  retain_lock=false
+  restore_started=false
+  printf 'production: GraphQL writes may now be open by explicit operator approval; restore state retained at %s/restore-state.json\n' "$state"
+  printf 'Read checks do not prove write propagation. Perform any desired write checks separately under operator direction.\n'
 }
 
 restore_run() {
@@ -1767,6 +2063,10 @@ restore_run() {
       [[ $confirmation == "RESTORE-$expected" ]] || production_fail "restore requires RESTORE-<backup-id>"
       recovery_private_state "$state"
       [[ -f $state/restore-state.json ]] || production_fail "restore requires reset state"
+      jq -e '(.probeRecipeId // null) == null
+        and (.migrationRecovery.probeRecipeId // null) == null' \
+        "$state/restore-state.json" > /dev/null \
+        || production_fail "retained write-probe identity requires operator investigation; preserve the state and Lease, and use the existing isolated reset/abandon recovery path"
       ;;
     standalone)
       [[ $confirmation == "RESTORE-$expected" ]] \
@@ -1809,6 +2109,10 @@ restore_run() {
           or (.phase == "migration-recovered" and .migrationRecovery.status == "verified"))
       ' "$state/backup-state.json" > /dev/null \
         || production_fail "migration recovery requires the same failed step-6 operation before reopening"
+      jq -e '(.probeRecipeId // null) == null
+        and (.migrationRecovery.probeRecipeId // null) == null' \
+        "$state/backup-state.json" > /dev/null \
+        || production_fail "retained write-probe identity requires operator investigation; preserve the release state and Lease, and use the existing migration-recovery procedure"
       [[ -f $state/manifest.json && ! -L $state/manifest.json &&
         $(stat -c %u "$state/manifest.json") == "$EUID" &&
         $((8#$(stat -c %a "$state/manifest.json") & 077)) == 0 ]] \
@@ -1868,12 +2172,6 @@ restore_run() {
   if [[ $mode == migration-recovery ]]; then
     restore_validate_migration_secrets
   fi
-  # A real mutation, through normal trusted GraphQL ingress, is required to prove propagation.
-  jq -er '[.tokens[]? | select(.role == "owner") | .secret][0] |
-    select(type == "string" and test("^[A-Za-z0-9._~+/-]+=*$"))' \
-    "$work/auth-accounts.json" > "$work/restore-owner-token" \
-    || production_fail "restore verification requires an explicit owner token in auth-accounts.json"
-  printf 'header = "%s: %s %s"\n' Authorization Bearer "$(cat "$work/restore-owner-token")" > "$work/restore-curl.conf"
   render
   if [[ $mode == migration-recovery &&
     $recovery_state_phase != migration-failed && $recovery_state_phase != migration-uncertain ]]; then
@@ -1965,12 +2263,19 @@ restore_run() {
     jq -n --arg backupId "$expected" --arg holder "$lock_holder" --arg target "$target" \
       --arg cluster "$cluster" --arg context "$context" --arg ns "$namespace" --arg artifact "$artifact" \
       --arg revision "$revision" --arg configSha256 "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" \
+      --arg leaseUid "$restore_operation_lease_uid" \
       '{version:1,backupId:$backupId,holder:$holder,target:$target,cluster:$cluster,context:$context,
         namespace:$ns,artifact:$artifact,revision:$revision,configSha256:$configSha256,
+        restoreMode:"standalone",leaseUid:$leaseUid,writesMayHaveOpened:false,
+        publicRoutesMayBeOpen:false,
         status:"in-progress",phase:"prepared",recovery:"Keep ingress isolated and workers stopped; never merge or overwrite a partial import. Investigate then select a new empty target."}' \
       > "$state/restore-state.json"
   fi
+  if [[ $mode == existing-reset ]]; then
+    restore_state_update '.restoreMode="existing-reset" | .leaseUid=.reset.leaseUid'
+  fi
   restore_started=true
+  retain_lock=true
   restore_phase preparing-target
   if [[ $mode == standalone || $mode == existing-reset ]]; then
     ensure_namespace
@@ -2086,9 +2391,18 @@ restore_run() {
     done < <(jq -r '.volumes | keys[]' "$work/config.json")
   fi
   restore_import || production_fail "complete backup import failed; partial data must be cleared before retry"
+  restore_record_import_complete \
+    || production_fail "complete import could not be durably recorded; preserve the target and use the approved reset path"
   restore_current_phase=rebuilding
   restore_phase "$restore_current_phase"
   restore_start
+  restore_start_production_backends \
+    || production_fail "restored backends could not be switched to production; public ingress remains blocked"
+  restore_set_graphql_mode maintenance \
+    || production_fail "GraphQL could not be verified in read-only maintenance; public ingress remains blocked"
+  backup_projection_route 4000
+  backup_verify_recovered_workloads "$(jq -c '[.[].name]' "$work/prior-workloads.json")" maintenance \
+    || production_fail "restored workloads are not ready in read-only maintenance"
   restore_current_phase=verifying-reads
   restore_phase "$restore_current_phase"
   # Store PIDs in this shell rather than a command-substitution subshell.
@@ -2097,20 +2411,9 @@ restore_run() {
   restore_forward service/browse 3000 "$work/restore-browse-forward.log" > "$work/restore-browse-port"
   restore_browse_port=$(cat "$work/restore-browse-port")
   restore_wait_reads
-  restore_start_production_backends \
-    || production_fail "restored backends could not be switched to production; public ingress remains blocked"
-  restore_current_phase=verifying-propagation
-  restore_phase "$restore_current_phase"
-  backup_projection_route 4000
-  kube set env deployment/graphql MODE=production --containers=graphql > /dev/null
-  kube rollout status deployment/graphql --timeout="${timeout}s"
-  restore_verify_propagation \
-    || production_fail "restored recipe changes did not propagate through search and browse"
   if [[ $mode == migration-recovery ]]; then
-    kube set env deployment/graphql MODE=backup --containers=graphql > /dev/null \
+    restore_set_graphql_mode backup \
       || production_fail "restored previous release could not reassert the GraphQL access barrier"
-    kube rollout status deployment/graphql --timeout="${timeout}s" \
-      || production_fail "previous-release GraphQL barrier did not become ready"
     kube get deployments -o json > "$work/recovered-workloads.json" \
       || production_fail "cannot verify restored previous-release readiness"
     backup_validate_workload_images "$work/recovered-workloads.json" \
@@ -2131,6 +2434,7 @@ restore_run() {
     release_recovery_state_write recovered migration-recovered \
       "$(jq -cn --arg completedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
         {migrationRecovery:{status:"verified",phase:"complete",candidateAborted:true,
+          readChecks:{status:"passed",method:"read-only"},
           completedAt:$completedAt}}')" \
       || production_fail "restore verified but migration-recovery completion could not be recorded"
     restore_guard_stop \
@@ -2149,33 +2453,32 @@ restore_run() {
       "$(release_migration_shell_quote "OPEN-RECOVERY-$backup_id-$source_revision")"
     return 0
   fi
-  backup_verify_recovered_workloads "$(jq -c '[.[].name]' "$work/prior-workloads.json")"
-  restore_wait_reads
-  if [[ $mode != migration-recovery ]]; then
-    restore_guard_check || production_fail "recovery shutdown guard was lost during restore"
-  fi
-  restore_current_phase=opening-public-ingress
-  restore_phase "$restore_current_phase"
-  guard_ingress_service
-  kube --namespace kube-system patch service recipe-db-internal --type=strategic \
-    -p '{"spec":{"ports":[{"port":80,"targetPort":8000}]}}' > /dev/null
-  restore_routes_apply "$work/restore-final-routes.json"
-  restore_wait_public_routes
-  if [[ $mode != migration-recovery ]]; then
-    restore_guard_check || production_fail "recovery shutdown guard was lost while reopening"
-  fi
-  restore_state_write succeeded complete
-  if [[ $mode != migration-recovery ]]; then
-    kube patch configmap "$restore_guard_name" --type=merge \
-      -p '{"data":{"completionReady":"true"}}' > /dev/null \
-      || production_fail "cannot durably authorize completed restore guard shutdown"
-    restore_guard_check || production_fail "recovery shutdown guard was lost before ownership release"
-  fi
-  cluster_operation_lock_release "$lock_holder"
-  locked=false
-  retain_lock=false
+  restore_guard_check || production_fail "recovery shutdown guard was lost during restore"
+  restore_mark_pending_signoff \
+    || production_fail "verified read-only restore could not be durably marked pending sign-off"
+  restore_expose_readonly_routes \
+    || production_fail "read-only public routes could not be safely exposed; restore remains pending sign-off"
+  restore_graphql 'query { maintenance }' \
+    && jq -e '.data.maintenance == true' "$work/restore-response.json" > /dev/null \
+    || production_fail "GraphQL maintenance could not be reverified after public read-only exposure"
+  restore_guard_check || production_fail "recovery shutdown guard was lost while exposing read-only routes"
+  kube patch configmap "$restore_guard_name" --type=merge \
+    -p '{"data":{"completionReady":"true"}}' > /dev/null \
+    || production_fail "cannot durably authorize completed restore guard shutdown"
+  restore_guard_check || production_fail "recovery shutdown guard was lost before handoff"
+  restore_guard_stop || production_fail "restore is pending sign-off but the recovery guard could not be stopped"
   restore_started=false
   recovery_started=false
-  if [[ $mode != migration-recovery ]]; then restore_guard_stop; fi
-  printf 'production: restore %s verified; public ingress reopened; state %s/restore-state.json\n' "$expected" "$state"
+  $release_sources_from_git && source_flag="--release-sources-from-git "
+  printf 'production: restore %s verified with read-only checks; awaiting operator sign-off; GraphQL remains in maintenance and public reads are available; writes have not been opened by this operation; state %s/restore-state.json; Lease holder %s retained\n' \
+    "$expected" "$state" "$lock_holder"
+  printf 'Inspect status, then explicitly approve reopening:\n'
+  printf '  mise run production-k3d %srestore-status %s %s\n' \
+    "$source_flag" "$(release_migration_shell_quote "$values")" \
+    "$(release_migration_shell_quote "$state")"
+  printf '  mise run production-k3d %srestore-reopen %s %s %s\n' \
+    "$source_flag" \
+    "$(release_migration_shell_quote "$values")" \
+    "$(release_migration_shell_quote "$state")" \
+    "$(release_migration_shell_quote "OPEN-RESTORE-$expected-$lock_holder")"
 }
