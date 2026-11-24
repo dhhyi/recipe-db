@@ -50,7 +50,9 @@ setup() {
 
 @test "target cluster creation refuses existing clusters" {
   mkdir -p "$result_directory"
+  # shellcheck disable=SC2034
   local driver=driver.sh target_values=target.yaml target_cluster=target
+  # shellcheck disable=SC2016
   sed -n '/^phase=nonempty-target-refusal/,/^\[\[ \$source_container !=/p' .scripts/backup-recovery-k3d.sh \
     | sed '$d' > target-cluster-steps.sh
   run_logged() {
@@ -168,6 +170,7 @@ SH
   mkdir -p deploy work secrets "$result_directory"
   cp "$BATS_TEST_DIRNAME/../../deploy/local.yaml" deploy/
   cp "$BATS_TEST_DIRNAME/../lib/production-config.sh" .scripts/
+  # shellcheck disable=SC2034
   local root="$FIXTURE_ROOT" work="$FIXTURE_ROOT/work" run_id=1234567890abcdef
   export accounts_file="$FIXTURE_ROOT/secrets/auth-accounts.json"
   printf '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"owner","secret":"synthetic-token","role":"owner"}],"googleAccounts":{}}\n' > "$accounts_file"
@@ -335,7 +338,7 @@ SH
   [ "$(find "$result_directory" -mindepth 1 -maxdepth 1 | wc -l)" -eq 2 ]
   jq -e '.success and .cleanup == {sourceCluster:"removed",targetCluster:"removed",files:"removed"}' \
     "$result_directory/result.json"
-  ! grep -r 'private' "$result_directory"
+  run ! grep -r 'private' "$result_directory"
 }
 
 @test "failure or interruption before cleanup retains clusters and private files" {
@@ -364,7 +367,7 @@ SH
     [ -e "$FIXTURE_ROOT/source-present" ]
     [ -e "$FIXTURE_ROOT/target-present" ]
     [ -e "$result_directory/secrets/token" ]
-    ! grep -q '^delete ' "$FIXTURE_ROOT/calls"
+    run ! grep -q '^delete ' "$FIXTURE_ROOT/calls"
   done
 }
 
@@ -395,7 +398,7 @@ SH
   [ -e "$FIXTURE_ROOT/source-present" ]
   [ -e "$FIXTURE_ROOT/target-present" ]
   [ -e "$result_directory/secrets/token" ]
-  ! grep -q '^delete target$' "$FIXTURE_ROOT/calls"
+  run ! grep -q '^delete target$' "$FIXTURE_ROOT/calls"
   jq -e '.success == false and .cleanup == {sourceCluster:"uncertain",targetCluster:"not-attempted",files:"not-attempted"}' \
     "$result_directory/result.json"
 }
@@ -422,7 +425,7 @@ SH
     [ "$status" -ne 0 ]
     [ -e "$FIXTURE_ROOT/target-present" ]
     [ -e "$result_directory/secrets/token" ]
-    ! grep -q '^delete target$' "$FIXTURE_ROOT/calls"
+    run ! grep -q '^delete target$' "$FIXTURE_ROOT/calls"
     jq -e '.success == false and .cleanup.sourceCluster == "uncertain" and .cleanup.targetCluster == "not-attempted"' \
       "$result_directory/result.json"
   done
@@ -457,8 +460,8 @@ SH
   [ -e "$FIXTURE_ROOT/source-present" ]
   [ -e "$FIXTURE_ROOT/target-present" ]
   [ -e "$result_directory/secrets/token" ]
-  ! grep -q '^delete ' "$FIXTURE_ROOT/calls"
   [[ $output == *"source source: uncertain; target target: not-attempted"* ]]
+  run ! grep -q '^delete ' "$FIXTURE_ROOT/calls"
 }
 
 @test "signal stops an active external deletion process and retains remaining resources" {
@@ -499,7 +502,7 @@ SH
   done
   [ -e "$FIXTURE_ROOT/target-present" ]
   [ -e "$result_directory/secrets/token" ]
-  ! grep -q '^delete target$' "$FIXTURE_ROOT/calls"
+  run ! grep -q '^delete target$' "$FIXTURE_ROOT/calls"
   jq -e '.success == false and .cleanup.sourceCluster == "uncertain" and .cleanup.targetCluster == "not-attempted"' \
     "$result_directory/result.json"
   grep -q 'source source: uncertain; target target: not-attempted' "$FIXTURE_ROOT/output"
