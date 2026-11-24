@@ -2010,7 +2010,8 @@ restore_status() {
       writesMayHaveOpened:(($saved.writesMayHaveOpened // false)
         or ($configmap.writesMayHaveOpened // false)
         or $graphqlMode != "maintenance" or $maintenanceQuery != true
-        or ($routesMatchSaved | not) or ($activeRoutesMatch | not)),
+        or ($routesMatchSaved | not) or ($activeRoutesMatch | not)
+        or $configmap != $saved),
       savedStateMatchesCluster:($configmap != null and $configmap == $saved),
       nextAction:(if ($saved.writesMayHaveOpened // false)
         or ($configmap.writesMayHaveOpened // false)

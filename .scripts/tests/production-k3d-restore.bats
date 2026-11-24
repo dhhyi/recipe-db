@@ -245,6 +245,23 @@ load production-k3d-restore-setup
     and (.nextAction | contains("Inspect this status and recent application writes"))' <<< "$output"
 }
 
+@test "restore status treats local and durable state mismatch as possible write exposure" {
+  restore_fixture
+  run_restore
+  [ "$status" -eq 0 ]
+  jq '.data["restore-state.json"] |= (fromjson | .phase="inconsistent" | tojson)' \
+    "$MOCK_LOG.cluster-restore-state" > "$MOCK_LOG.cluster-restore-state.next"
+  mv "$MOCK_LOG.cluster-restore-state.next" "$MOCK_LOG.cluster-restore-state"
+  run bash .scripts/production-k3d.sh restore-status "$VALUES" "$RESTORE_STATE"
+  [ "$status" -eq 0 ]
+  jq -e '.savedProgress.writesMayHaveOpened == null
+    and .savedStateMatchesCluster == false
+    and .observed.graphql.maintenanceVerified
+    and .observed.publicRoutes.normalRoutesObserved
+    and .writesMayHaveOpened == true
+    and (.nextAction | contains("Inspect this status and recent application writes"))' <<< "$output"
+}
+
 @test "restore reopening refuses local state that differs from durable cluster state" {
   restore_fixture
   run_restore
