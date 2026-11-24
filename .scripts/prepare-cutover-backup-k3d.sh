@@ -24,9 +24,8 @@ result_directory=$5
   || fail 'cutover release must be an immutable recipe-db release artifact'
 [[ $input_manifest == /* && $input_archive == /* && $retrieval_receipt == /* ]] \
   || fail 'backup inputs and retrieval receipt must be absolute paths'
-[[ $(dirname "$input_manifest") == "$(dirname "$input_archive")" &&
-$(dirname "$input_manifest") == "$(dirname "$retrieval_receipt")" ]] \
-  || fail 'backup manifest, archive and retrieval receipt must be together in a private directory'
+[[ $(dirname "$input_manifest") == "$(dirname "$input_archive")" ]] \
+  || fail 'backup manifest and archive must be together in a private directory'
 [[ $(basename "$input_manifest") == "$(basename "${input_archive%.tar.gz}").manifest.json" ]] \
   || fail 'backup manifest must be the sibling manifest for the supplied archive'
 
@@ -285,9 +284,17 @@ run_production "$private/logs/source-restore.log" cutover-restore "$source_value
   "CUTOVER-RESTORE-$backup_id"
 phase=verify-cutover-read-checks
 run_production "$private/source-restore-status.json" restore-status "$source_values" "$source_state"
-jq -e '.status == "awaiting-signoff" and .phase == "pending-signoff"
-  and .writesMayHaveOpened == false and .readChecks.status == "passed"
-  and .publicRoutesMayBeOpen == true' "$private/source-restore-status.json" > /dev/null \
+jq -e '.savedProgress.status == "awaiting-signoff"
+  and .savedProgress.phase == "pending-signoff"
+  and .savedProgress.writesMayHaveOpened == false
+  and .savedProgress.readChecks.status == "passed"
+  and .savedProgress.publicRoutesMayBeOpen == true
+  and .writesMayHaveOpened == false
+  and .lease.ownedByRestore == true and .lease.phase == "awaiting-signoff"
+  and .observed.graphql.mode == "maintenance"
+  and .observed.graphql.maintenanceQuery == true
+  and .observed.publicRoutes.normalRoutesObserved == true' \
+  "$private/source-restore-status.json" > /dev/null \
   || fail 'cutover restore did not complete read-only verification under the retained write barrier'
 
 phase=package-cutover-backup
@@ -320,9 +327,17 @@ run_production "$private/logs/target-restore.log" restore "$target_values" \
   "RESTORE-$cutover_backup_id"
 phase=verify-restored-read-checks
 run_production "$private/target-restore-status.json" restore-status "$target_values" "$target_state"
-jq -e '.status == "awaiting-signoff" and .phase == "pending-signoff"
-  and .writesMayHaveOpened == false and .readChecks.status == "passed"
-  and .publicRoutesMayBeOpen == true' "$private/target-restore-status.json" > /dev/null \
+jq -e '.savedProgress.status == "awaiting-signoff"
+  and .savedProgress.phase == "pending-signoff"
+  and .savedProgress.writesMayHaveOpened == false
+  and .savedProgress.readChecks.status == "passed"
+  and .savedProgress.publicRoutesMayBeOpen == true
+  and .writesMayHaveOpened == false
+  and .lease.ownedByRestore == true and .lease.phase == "awaiting-signoff"
+  and .observed.graphql.mode == "maintenance"
+  and .observed.graphql.maintenanceQuery == true
+  and .observed.publicRoutes.normalRoutesObserved == true' \
+  "$private/target-restore-status.json" > /dev/null \
   || fail 'new package restore did not complete read-only verification under the retained write barrier'
 
 phase=write-provenance

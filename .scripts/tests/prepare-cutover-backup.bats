@@ -114,7 +114,8 @@ PY
   )
   INPUT_MANIFEST=${input_files[0]}
   INPUT_ARCHIVE=${input_files[1]}
-  RETRIEVAL_RECEIPT=${input_files[2]}
+  RETRIEVAL_RECEIPT="$INPUT_DIRECTORY/maintenance-retrieval.json"
+  mv "${input_files[2]}" "$RETRIEVAL_RECEIPT"
   chmod 600 "$INPUT_MANIFEST" "$INPUT_ARCHIVE" "$RETRIEVAL_RECEIPT"
   export RESULT_PARENT="$BATS_TEST_TMPDIR/results"
   mkdir -m 700 "$RESULT_PARENT"
@@ -213,7 +214,15 @@ case "$operation" in
       > "$state/restore-state.json"
     ;;
   restore-status)
-    printf '{"status":"awaiting-signoff","phase":"pending-signoff","writesMayHaveOpened":false,"readChecks":{"status":"passed"},"publicRoutesMayBeOpen":true}\n'
+    jq -nc '{
+      savedProgress:{status:"awaiting-signoff",phase:"pending-signoff",
+        writesMayHaveOpened:false,readChecks:{status:"passed"},
+        publicRoutesMayBeOpen:true},
+      writesMayHaveOpened:false,
+      lease:{present:true,ownedByRestore:true,phase:"awaiting-signoff"},
+      observed:{graphql:{mode:"maintenance",maintenanceQuery:true},
+        publicRoutes:{normalRoutesObserved:true}}
+    }'
     ;;
   *) ;;
 esac
@@ -259,6 +268,22 @@ PY
   chmod 700 build-snapshot.py
   git add -f build-snapshot.py
   git commit -qm 'Add test snapshot fixture'
+}
+
+@test "unverified or mismatched retrieval receipts are rejected before creating clusters" {
+  local invalid_receipt="$INPUT_DIRECTORY/invalid-retrieval.json" filter
+  for filter in \
+    '.maintenanceOperation.uploadStatus = "pending"' \
+    '.backupId = "backup-20261101123456-99"'; do
+    jq "$filter" "$RETRIEVAL_RECEIPT" > "$invalid_receipt"
+    chmod 600 "$invalid_receipt"
+    run bash .scripts/prepare-cutover-backup-k3d.sh "$INPUT_MANIFEST" "$INPUT_ARCHIVE" \
+      "$invalid_receipt" "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY"
+    [ "$status" -ne 0 ]
+    [[ $output == *"retrieval receipt does not verify this exact final backup"* ]]
+    [ ! -e "$RESULT_DIRECTORY" ]
+    [ ! -s "$MOCK_LOG" ]
+  done
 }
 
 @test "successful local preparation retains truthful package provenance and removes both clusters" {

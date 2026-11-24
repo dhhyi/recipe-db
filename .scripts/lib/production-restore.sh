@@ -2365,6 +2365,9 @@ restore_run() {
     python3 "$root/.scripts/validate-backup-package.py" "$manifest" "$archive" \
       "$source_validation_dir" "$work/source-projects.jsonl" "$expected" \
       > "$work/source-restore-manifest.json"
+    jq -e --arg revision "$source_revision" '.source.revision == $revision' \
+      "$work/source-restore-manifest.json" > /dev/null \
+      || production_fail "backup source revision differs from the immutable release artifact"
     [[ $source_artifact != "$recovery_candidate" ]] \
       || production_fail "cutover release must differ from the original backup release"
     pull_release "$recovery_candidate"
@@ -2382,9 +2385,10 @@ restore_run() {
     python3 "$root/.scripts/validate-backup-package.py" "$manifest" "$archive" \
       "$work/validated" "$work/projects.jsonl" "$expected" > "$work/restore-manifest.json"
     artifact=$(jq -er .source.artifact "$work/restore-manifest.json")
+    jq -e --arg revision "$source_revision" '.source.revision == $revision' \
+      "$work/restore-manifest.json" > /dev/null \
+      || production_fail "backup source revision differs from the immutable release artifact"
   fi
-  [[ $mode == cutover || $revision == "$source_revision" ]] \
-    || production_fail "backup source revision differs from the immutable release artifact"
   if [[ $mode == migration-recovery ]]; then
     jq -e --arg id "$expected" --arg target "$target" --arg cluster "$cluster" \
       --arg context "$context" --arg namespace "$namespace" --arg artifact "$artifact" \

@@ -201,6 +201,21 @@ load production-k3d-restore-setup
   run ! grep -q private-restore-token "$MOCK_LOG"
 }
 
+@test "restore rejects a package revision that differs from its immutable source artifact" {
+  restore_fixture
+  printf 'different source artifact revision\n' > source-revision.txt
+  git add -f source-revision.txt
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Different immutable source revision'
+  export MOCK_SOURCE_REVISION
+  MOCK_SOURCE_REVISION=$(git rev-parse HEAD)
+
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"backup source revision differs from the immutable release artifact"* ]]
+  [ ! -e "$MOCK_LOG.imported" ]
+  [ ! -e "$RESTORE_STATE/restore-state.json" ]
+}
+
 @test "cutover restore imports the unchanged backup into candidate volumes and captures that release without opening writes" {
   restore_fixture
   export MOCK_CUTOVER_CAPTURE=true
@@ -264,6 +279,41 @@ load production-k3d-restore-setup
   [ ! -e "$MOCK_LOG.restore-mutation-attempt" ]
   run ! grep -Eq 'createRecipe|updateRecipe|deleteRecipe|recipe/probe' "$MOCK_LOG"
   [ "$(jq -r '.metadata.annotations["recipe-db/phase"]' "$MOCK_LOG.lease")" = awaiting-signoff ]
+}
+
+@test "cutover restore rejects a package revision that differs from its immutable source artifact" {
+  restore_fixture
+  printf '*\n' > .gitignore
+  git add -f .gitignore
+  git add -A
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Clean cutover fixture baseline'
+  local original_revision source_revision candidate candidate_revision cutover_state cutover_snapshot
+  original_revision=$(git rev-parse HEAD)
+  printf 'different source artifact revision\n' > source-revision.txt
+  git add -f source-revision.txt
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Different immutable source revision'
+  source_revision=$(git rev-parse HEAD)
+  printf '\n# candidate release fixture\n' >> .scripts/templates/kubernetes-template.yml
+  git add -f .scripts/templates/kubernetes-template.yml
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Candidate cutover release'
+  candidate_revision=$(git rev-parse HEAD)
+  candidate="ghcr.io/dhhyi/recipe-db-releases@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  export MOCK_SOURCE_REVISION="$source_revision" MOCK_REVISION="$candidate_revision"
+  jq --arg revision "$original_revision" '
+    .source += {target:"pi",cluster:"recipe-db-pi",context:"recipe-db-pi",namespace:"recipe-db"}
+    | .source.revision=$revision
+  ' "$RESTORE_MANIFEST" > "$FIXTURE_ROOT/cutover-package.json"
+  mv "$FIXTURE_ROOT/cutover-package.json" "$RESTORE_MANIFEST"
+  cutover_state="$FIXTURE_ROOT/backups/cutover-restore"
+  cutover_snapshot="$FIXTURE_ROOT/backups/cutover-snapshot"
+
+  run bash .scripts/production-k3d.sh --release-sources-from-git cutover-restore "$VALUES" \
+    "$RESTORE_MANIFEST" "$RESTORE_ARCHIVE" "$RESTORE_ID" "$cutover_state" \
+    "$candidate" "$cutover_snapshot" "CUTOVER-RESTORE-$RESTORE_ID"
+  [ "$status" -ne 0 ]
+  [[ $output == *"backup source revision differs from the immutable release artifact"* ]]
+  [ ! -e "$MOCK_LOG.imported" ]
+  [ ! -e "$cutover_state/restore-state.json" ]
 }
 
 @test "restore accepts a valid empty dataset without creating an application record" {
