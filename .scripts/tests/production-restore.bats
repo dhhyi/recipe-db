@@ -932,6 +932,7 @@ source "$FIXTURE_ROOT/.scripts/production-restore.sh"
 work="$FIXTURE_ROOT/work"
 timeout=3
 restore_graphql_port=4000
+restore_browse_port=4100
 restore_graphql() {
   printf '%s\n' "$1" >> "$MOCK_LOG"
   case "$1" in
@@ -942,6 +943,10 @@ restore_graphql() {
         > "$work/restore-response.json" ;;
     *) return 1 ;;
   esac
+}
+curl() {
+  printf '%s\n' "${*: -1}" >> "$MOCK_LOG"
+  printf 'restored browse home\n'
 }
 for restore_mode in standalone migration-recovery; do
   restore_wait_reads
