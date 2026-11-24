@@ -28,6 +28,11 @@ description = "Rehearse a production backup upgrade and complete recovery in iso
 run = "bash .scripts/production-upgrade-rehearsal-k3d.sh"
 raw_args = true
 
+[prepare-cutover-backup-k3d]
+description = "Prepare and restore-verify a cutover-release backup in isolated local k3d clusters"
+run = "bash .scripts/prepare-cutover-backup-k3d.sh"
+raw_args = true
+
 [test-auth-ingress]
 description = "Verify production ingress token routing and configuration isolation with real Traefik"
 env = { TEST_AUTH_INGRESS = "true" }

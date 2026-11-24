@@ -425,7 +425,15 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       *"get pvc "*"-o json")
         name="${*: -3:1}"
         if [[ $* == *"--ignore-not-found"* && ! -e $MOCK_LOG.claims ]]; then exit; fi
-        if [[ -f ${STATE:-}/backup-state.json ]]; then
+        if [[ ${MOCK_CUTOVER_CAPTURE:-false} == true && -e $MOCK_LOG.imported ]]; then
+          jq -n --arg name "$name" '{
+            metadata:{name:$name,namespace:"recipe-db",uid:$name,
+              labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+            spec:{storageClassName:"local-path",accessModes:["ReadWriteOnce"],
+              volumeMode:"Filesystem",volumeName:("pv-"+$name),
+              resources:{requests:{storage:"1Gi"}}},
+            status:{phase:"Bound",capacity:{storage:"1Gi"}}}'
+        elif [[ -f ${STATE:-}/backup-state.json ]]; then
           jq -n --arg name "$name" --arg drift "${MOCK_RESTORE_PVC_DRIFT:-false}" \
             --slurpfile state "$STATE/backup-state.json" --slurpfile values "$VALUES" '
             ([$state[0].selectedPVCs[]? | select(.pvc == $name)][0] // {}) as $selected |
@@ -487,12 +495,24 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         exit ;;
       *"get pods -o json")
         guard_pod='[]'
+        deployment_pods='[]'
         if [[ -f $MOCK_LOG.expired-guard-pod ]]; then
           guard_pod=$(jq -c '[.]' "$MOCK_LOG.expired-guard-pod")
         fi
-        jq -s --argjson guardPod "$guard_pod" \
+        if [[ ${MOCK_CUTOVER_CAPTURE:-false} == true && -f $MOCK_LOG.restore-deployments ]]; then
+          deployment_pods=$(jq -c '
+            [.items[] as $deployment |
+              range($deployment.spec.replicas // 0) |
+              {metadata:{name:($deployment.metadata.name+"-"+tostring),
+                uid:($deployment.metadata.name+"-"+tostring),
+                labels:{"app.kubernetes.io/name":$deployment.metadata.name}},
+               status:{phase:"Running"},spec:{volumes:$deployment.spec.template.spec.volumes}}]
+          ' "$MOCK_LOG.restore-deployments")
+        fi
+        jq -s --argjson guardPod "$guard_pod" --argjson deploymentPods "$deployment_pods" \
           --arg linger "$(cat "$MOCK_LOG.lingering-worker" 2>/dev/null || true)" '
-          {items:(. + $guardPod + (if $linger == "" then [] else [{
+          {metadata:{resourceVersion:"1"},
+           items:(. + $guardPod + $deploymentPods + (if $linger == "" then [] else [{
             metadata:{name:"graphql-lingering",
               deletionTimestamp:(if $linger == "terminating" then "now" else null end)},
             status:{phase:"Running"},spec:{volumes:[]}}] end))}' "$MOCK_LOG.restore-pods"; exit ;;
@@ -537,7 +557,11 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         name="${*: -8:1}"
         name="${name#restore-volume-}"
         mkdir -p "$FIXTURE_ROOT/imported/$name"
-        tar -xpkf - -C "$FIXTURE_ROOT/imported/$name"
+        if [[ $EUID -eq 0 ]]; then
+          tar --numeric-owner -xpkf - -C "$FIXTURE_ROOT/imported/$name"
+        else
+          tar --numeric-owner --no-same-owner -xpkf - -C "$FIXTURE_ROOT/imported/$name"
+        fi
         touch "$MOCK_LOG.imported"
         exit ;;
       *"exec restore-volume-"*"-- tar -C /data -cf - .")
@@ -591,6 +615,19 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         done
         echo '{"kind":"Secret"}'; exit ;;
       *"get deployments -o json") cat "$MOCK_LOG.restore-deployments"; exit ;;
+      *"get deployment "*"-o json")
+        name="${*: -3:1}"
+        jq --arg name "$name" '.items[] | select(.metadata.name == $name)' "$MOCK_LOG.restore-deployments"
+        exit ;;
+      *"get configmap recipe-db-release -o json")
+        release_artifact=$(jq -r '.items[0].spec.template.metadata.annotations["recipe-db/release"]' \
+          "$MOCK_LOG.restore-deployments")
+        jq -n --arg artifact "$release_artifact" --arg revision "$MOCK_REVISION" \
+          '{data:{artifact:$artifact,revision:$revision}}'
+        exit ;;
+      *"get service graphql-projection -o json")
+        echo '{"spec":{"type":"ClusterIP","selector":{"app.kubernetes.io/name":"graphql"},"ports":[{"name":"graphql","port":4000,"targetPort":4000,"protocol":"TCP"}]}}'
+        exit ;;
       *"get service recipe-db-internal -o json")
         jq -n --argjson port "$(cat "$MOCK_LOG.internal-port" 2>/dev/null || printf 3000)" \
           '{metadata:{labels:{"app.kubernetes.io/part-of":"recipe-db"}},
@@ -604,6 +641,14 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         name="${*: -2:1}"; name="${name#deployment/}"; replicas="${*: -1}"; replicas="${replicas#--replicas=}"
         jq -e --arg name "$name" 'any(.items[]; .metadata.name == $name)' \
           "$MOCK_LOG.restore-deployments" > /dev/null || exit 1
+        if [[ ${MOCK_CUTOVER_CAPTURE:-false} == true ]]; then
+          jq -c --arg name "$name" '
+            .items[] | select(.metadata.name == $name) as $deployment |
+            range($deployment.spec.replicas // 0) |
+            {type:"DELETED",object:{metadata:{uid:($deployment.metadata.name+"-"+tostring)},
+              status:{containerStatuses:[{state:{terminated:{exitCode:0,signal:15,reason:"Completed"}}}]}}}
+          ' "$MOCK_LOG.restore-deployments" >> "$MOCK_LOG.events"
+        fi
         jq --arg name "$name" --argjson replicas "$replicas" '
           (.items[] | select(.metadata.name == $name)) |= (.spec.replicas=$replicas | .status.readyReplicas=$replicas)' \
           "$MOCK_LOG.restore-deployments" > "$MOCK_LOG.restore-deployments.next"
@@ -1005,7 +1050,11 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         handled=true ;;
       *" get deployment "*"-o json"*)
         name="${*: -3:1}"
-        jq --arg name "$name" '.items[] | select(.metadata.name == $name)' "$MOCK_LOG.deployments"
+        deployment_file="$MOCK_LOG.deployments"
+        if [[ ${MOCK_RESTORE:-false} == true && -f $MOCK_LOG.restore-deployments ]]; then
+          deployment_file="$MOCK_LOG.restore-deployments"
+        fi
+        jq --arg name "$name" '.items[] | select(.metadata.name == $name)' "$deployment_file"
         handled=true ;;
       *" get configmap recipe-db-release -o json"*)
         release_artifact=$(jq -r '.items[0].spec.template.metadata.annotations["recipe-db/release"]' \
@@ -1049,7 +1098,15 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         handled=true ;;
       *" get pvc "*"-o json"*)
         pvc="${*: -3:1}"
-        if [[ -f $MOCK_LOG.pvcs ]]; then
+        if [[ ${MOCK_CUTOVER_CAPTURE:-false} == true && -e $MOCK_LOG.imported ]]; then
+          jq -n --arg pvc "$pvc" '{
+            metadata:{uid:("claim-"+$pvc),namespace:"recipe-db",
+              labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+            status:{phase:"Bound",capacity:{storage:"1Gi"}},
+            spec:{volumeName:("pv-"+$pvc),storageClassName:"local-path",
+              accessModes:["ReadWriteOnce"],volumeMode:"Filesystem",
+              resources:{requests:{storage:"1Gi"}}}}'
+        elif [[ -f $MOCK_LOG.pvcs ]]; then
           jq --arg name "$pvc" --arg drift "${MOCK_PVC_DRIFT:-false}" '
             .items[] | select(.metadata.name == $name) |
             (.metadata.uid //= ("claim-"+$name)) |
@@ -1546,6 +1603,7 @@ EOF
 #!/usr/bin/env bash
 printf 'ytt %s\n' "$*" >> "$MOCK_LOG"
 while [[ $1 != --data-values-file ]]; do shift; done
+if jq -e 'has("artifact")' "$2" > /dev/null; then jq -r '.artifact' "$2" >> "$MOCK_LOG.rendered-artifacts"; fi
 if jq -e 'has("config")' "$2" > /dev/null; then
   jq -e 'keys == ["artifact","config","files","projects","release"]
     and (.files | keys) == ["designNginx","maintenanceHtml","maintenanceNginx","nats","oauthConfig"]' "$2" > /dev/null || exit 1
@@ -1554,21 +1612,27 @@ if jq -e 'has("config")' "$2" > /dev/null; then
       (["graphql","recipes","images","tags","search","browse","nats","typesense","browse-maintenance"] +
         (if .config.runtime.googleOAuthClientId then ["redis","oauth2-proxy"] else [] end))[] |
       . as $name | select($name != (env.MOCK_RESTORE_MISSING_WORKLOAD // "")) |
+      ($input.config.volumes | has($name)) as $durable |
       {apiVersion:"apps/v1",kind:"Deployment",metadata:{name:$name,namespace:"recipe-db",
         labels:{"app.kubernetes.io/part-of":"recipe-db"}},
-      spec:{replicas:1,template:{metadata:{annotations:{"recipe-db/release":$input.artifact}},
-      spec:({containers:([{name:$name,image:($input.release.images[$name] // "infrastructure"),
-        env:([{name:"MODE",value:"production"}] +
-          (if $name == "browse" then [{name:"GRAPHQL_URL",value:"http://traefik/graphql"}] else [] end))}] +
-        (if env.MOCK_RESTORE_STORAGE_HELPERS == "true" and (["recipes","images","tags"] | index($name)) then
-          [{name:"storage-version",image:"infrastructure",env:[{name:"MODE",value:"production"}]}]
-        else [] end))} +
-        (if env.MOCK_RESTORE_STORAGE_HELPERS == "true" and (["recipes","images","tags"] | index($name)) then
-          {initContainers:[{name:"storage-version-gate",image:"infrastructure",env:[{name:"MODE",value:"production"}]},
-            {name:"unrelated",image:"infrastructure",env:[{name:"MODE",value:"custom"}]}]}
-        elif env.MOCK_RESTORE_UNRELATED_INIT == "true" and $name == "recipes" then
-          {initContainers:[{name:"unrelated",image:"infrastructure",env:[{name:"MODE",value:"custom"}]}]}
-        else {} end))}}}' "$2" | while IFS= read -r doc; do
+        spec:{replicas:1,template:{metadata:{annotations:{"recipe-db/release":$input.artifact}},
+          spec:{containers:([{name:$name,image:($input.release.images[$name] // "infrastructure"),
+            env:([{name:"MODE",value:"production"}] +
+              (if $name == "browse" then [{name:"GRAPHQL_URL",value:"http://traefik/graphql"}] else [] end))}] +
+            (if env.MOCK_RESTORE_STORAGE_HELPERS == "true" and (["recipes","images","tags"] | index($name)) then
+              [{name:"storage-version",image:"infrastructure",env:[{name:"MODE",value:"production"}]}]
+             else [] end)),volumes:[]}}}} |
+      if $durable then
+        .spec.template.spec.containers[0].volumeMounts=[{name:"data",mountPath:"/data"}]
+        | .spec.template.spec.volumes=[{name:"data",persistentVolumeClaim:{claimName:$name}}]
+      else . end |
+      if env.MOCK_RESTORE_STORAGE_HELPERS == "true" and (["recipes","images","tags"] | index($name)) then
+        .spec.template.spec.initContainers=[
+          {name:"storage-version-gate",image:"infrastructure",env:[{name:"MODE",value:"production"}]},
+          {name:"unrelated",image:"infrastructure",env:[{name:"MODE",value:"custom"}]}]
+      elif env.MOCK_RESTORE_UNRELATED_INIT == "true" and $name == "recipes" then
+        .spec.template.spec.initContainers=[{name:"unrelated",image:"infrastructure",env:[{name:"MODE",value:"custom"}]}]
+      else . end' "$2" | while IFS= read -r doc; do
         printf '%s\n---\n' "$doc"
       done
     if [[ ${MOCK_PI:-false} != true ]]; then
@@ -1578,6 +1642,7 @@ if jq -e 'has("config")' "$2" > /dev/null; then
         done
     fi
     printf 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: nats-init\n  namespace: recipe-db\n  labels:\n    app.kubernetes.io/part-of: recipe-db\nspec:\n  template:\n    spec:\n      containers:\n        - name: provision\n          image: ghcr.io/dhhyi/recipe-db-graphql@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n          args: [provision-events]\n      volumes: []\n---\n'
+    printf 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: backup-cleanup\n  namespace: recipe-db\n  labels:\n    app.kubernetes.io/part-of: recipe-db\nspec:\n  suspend: true\n---\n'
   elif [[ $MOCK_RELEASE_LIFECYCLE = true ]]; then
     jq -c '. as $input |
       (["graphql","recipes","images","tags","search","browse","nats","typesense","browse-maintenance"])[] |

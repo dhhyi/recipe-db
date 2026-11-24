@@ -31,7 +31,7 @@ shift 2
 if [[ $release_sources_from_git == true ]]; then
   [[ $command == release-* || $command == render || $command == maintenance-enter || $command == backup-enter ||
     $command == backup-capture || $command == maintenance-restore || $command == backup-run || $command == backup-exit ||
-    $command == restore || $command == restore-status || $command == restore-recheck ||
+    $command == restore || $command == cutover-restore || $command == restore-status || $command == restore-recheck ||
     $command == restore-reopen || $command == recovery-* ]] \
     || production_fail "Git release sources are limited to render, backup operations, restore and guarded release operations"
   tooling_revision=$(git -C "$root" rev-parse HEAD)
@@ -71,6 +71,7 @@ case "$command" in
   release-accept) [[ $# = 3 ]] || production_fail "release-accept requires the maintenance state directory, candidate artifact and ACCEPT-<holder> confirmation" ;;
   release-finalize) [[ $# = 4 ]] || production_fail "release-finalize requires the maintenance state directory, candidate artifact, sequential GitHub release tag and PUBLISHED-<holder>-<tag> confirmation" ;;
   restore) [[ $# = 5 ]] || production_fail "restore requires absolute package manifest, archive, expected backup ID, new absolute state directory and RESTORE-<backup-id> confirmation" ;;
+  cutover-restore) [[ $# = 7 ]] || production_fail "cutover-restore requires absolute package manifest, archive, expected backup ID, new absolute state directory, immutable cutover release artifact, new absolute snapshot directory and CUTOVER-RESTORE-<backup-id> confirmation" ;;
   restore-status) [[ $# = 1 ]] || production_fail "restore-status requires the absolute retained restore state directory" ;;
   restore-recheck) [[ $# = 2 ]] || production_fail "restore-recheck requires the absolute retained restore state directory and RECHECK-RESTORE-<backup-id> confirmation" ;;
   restore-reopen) [[ $# = 2 ]] || production_fail "restore-reopen requires the absolute retained restore state directory and OPEN-RESTORE-<backup-id>-<holder> confirmation" ;;
@@ -291,7 +292,7 @@ pull_release() {
   [[ $revision = "$(jq -r '.annotations["org.opencontainers.image.revision"]' "$work/manifest.json")" ]] \
     || production_fail "artifact and inventory revision mismatch"
   case "$command" in
-    backup-run | backup-enter | backup-capture | maintenance-restore | backup-exit | restore | restore-status | restore-recheck | restore-reopen | recovery-* | release-closeout | release-migration-recover | release-recovery-reopen)
+    backup-run | backup-enter | backup-capture | maintenance-restore | backup-exit | restore | cutover-restore | restore-status | restore-recheck | restore-reopen | recovery-* | release-closeout | release-migration-recover | release-recovery-reopen)
       local inputs=(.scripts/lib/project-metadata.sh
         .scripts/templates/kubernetes-template.yml .scripts/templates/kubernetes.lib.yml
         .scripts/templates/storage-version-gate.sh.ytt .scripts/templates/storage-version-sidecar.sh.ytt
@@ -362,7 +363,7 @@ render() {
     -f "$release_root/.scripts/templates/kubernetes.lib.yml" \
     "${storage_inputs[@]}" \
     --data-values-file "$work/template-values.json" > "$work/rendered-base.yml"
-  if [[ $command == restore || $command == recovery-* || $command == release-migration-recover ]]; then
+  if [[ $command == restore || $command == cutover-restore || $command == recovery-* || $command == release-migration-recover ]]; then
     restore_ingress_values
   fi
   yq '(select(.kind == "HelmChartConfig").metadata.labels."app.kubernetes.io/part-of") = "recipe-db"' \
@@ -586,7 +587,7 @@ wait_deployments() {
 
 backup_state_write() {
   local status=$1 phase=$2
-  if [[ $command == restore || $command == recovery-* ]]; then
+  if [[ $command == restore || $command == cutover-restore || $command == recovery-* ]]; then
     restore_state_write in-progress "$phase"
     return
   fi
@@ -724,12 +725,13 @@ backup_validate_workload_images() {
 }
 
 backup_capture_workloads() {
-  local artifact=$1
+  local artifact=$1 allow_readonly_graphql=${2:-false}
   kube get deployments -o json > "$work/deployments.json" \
     || production_fail "cannot inspect workload release and replicas"
   backup_validate_workload_images "$work/deployments.json" \
     || production_fail "refusing backup of a different workload version"
-  jq -e --arg artifact "$artifact" --slurpfile projects "$work/projects.jsonl" '
+  jq -e --arg artifact "$artifact" --argjson readonlyGraphql "$allow_readonly_graphql" \
+    --slurpfile projects "$work/projects.jsonl" '
     . as $deployments |
     any($deployments.items[]; .metadata.name == "graphql")
     and all($deployments.items[];
@@ -740,7 +742,9 @@ backup_capture_workloads() {
         $deployment.metadata.name == $project.name and
         ([$deployment.spec.template.spec.containers[] |
           select(.name == $project.name) | .env[]? |
-          select(.name == "MODE") | .value] == ["production"])))
+          select(.name == "MODE") | .value] ==
+            (if $readonlyGraphql and $project.name == "graphql" then ["maintenance"]
+             else ["production"] end))))
   ' "$work/deployments.json" > /dev/null \
     || production_fail "all workloads must be production mode at the requested immutable release"
   jq -c '[.items[] | {
@@ -4736,6 +4740,114 @@ backup_run_locked() {
   backup_capture || return 1
 }
 
+cutover_capture_snapshot() {
+  local state=$1 destination=$2 target_artifact=$3 target_revision=$4
+  local parent canonical_parent current status_file original_backup_id capture_id snapshot
+  [[ $target == local ]] || production_fail "cutover capture is restricted to an isolated local cluster"
+  [[ $destination = /* && ! -e $destination && ! -L $destination ]] \
+    || production_fail "cutover snapshot must be a new absolute directory"
+  parent=$(dirname "$destination")
+  canonical_parent=$(realpath -e "$parent") || production_fail "cutover snapshot parent is inaccessible"
+  [[ -d $parent && $canonical_parent == "$parent" && $(stat -c %u "$parent") == "$EUID" &&
+  $((8#$(stat -c %a "$parent") & 077)) == 0 ]] \
+    || production_fail "cutover snapshot parent must be an operator-owned private directory"
+  case "$destination/" in
+    "$root/.secrets/"* | /var/lib/rancher/*)
+      production_fail "cutover snapshot must be outside credentials, runtime and production storage"
+      ;;
+  esac
+  if [[ -n ${storage_data_root:-} ]]; then
+    case "$destination/" in
+      "$storage_data_root/"*)
+        production_fail "cutover snapshot must be outside credentials, runtime and production storage"
+        ;;
+    esac
+  fi
+  [[ -f $state/restore-state.json && ! -L $state/restore-state.json ]] \
+    || production_fail "cutover capture requires the retained read-only restore state"
+  jq -e --arg artifact "$target_artifact" --arg revision "$target_revision" '
+    .target == "local" and .artifact == $artifact and .revision == $revision
+    and .status == "awaiting-signoff" and .phase == "pending-signoff"
+    and .import.status == "complete" and .readChecks.status == "passed"
+    and .writesMayHaveOpened == false
+    and .cutover.sourceRelease != null and .cutover.sourceRevision != null
+  ' "$state/restore-state.json" > /dev/null \
+    || production_fail "cutover capture requires a complete, verified read-only import"
+  original_backup_id=$(jq -er .backupId "$state/restore-state.json")
+  lock_holder=$(jq -er .holder "$state/restore-state.json")
+  cluster_operation_lock_holder=$lock_holder
+  restore_state=$state
+  restore_operation_lease_uid=$(jq -er .leaseUid "$state/restore-state.json")
+  artifact=$target_artifact
+  revision=$target_revision
+  snapshot=$destination
+  capture_id="backup-$(date -u +%Y%m%d%H%M%S)-$$"
+  local backup_id=$capture_id
+  local command=backup-run
+  local locked=true retain_lock=true
+  local cutover_status="$work/cutover-restore-status.json"
+  restore_status "$state" > "$cutover_status"
+  jq -e --arg id "$original_backup_id" '
+    .savedProgress.status == "awaiting-signoff"
+    and .savedProgress.backupId == $id
+    and .savedProgress.import.status == "complete"
+    and .savedProgress.readChecks.status == "passed"
+    and .lease.ownedByRestore and .lease.phase == "awaiting-signoff"
+    and .observed.graphql.mode == "maintenance"
+    and .observed.graphql.maintenanceQuery == true
+    and .observed.publicRoutes.normalRoutesObserved
+    and (.writesMayHaveOpened | not)
+  ' "$cutover_status" > /dev/null \
+    || production_fail "cutover capture requires verified maintenance, public read-only access and the original restore Lease"
+  current=$(cluster_operation_lock_status) || production_fail "cannot inspect the retained restore Lease"
+  jq -e --arg holder "$lock_holder" --arg artifact "$target_artifact" \
+    --arg uid "$restore_operation_lease_uid" '
+    .metadata.uid == $uid and .spec.holderIdentity == $holder
+    and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.annotations["recipe-db/operation"] == "restore"
+    and .metadata.annotations["recipe-db/release"] == $artifact
+    and .metadata.annotations["recipe-db/phase"] == "awaiting-signoff"
+  ' <<< "$current" > /dev/null \
+    || production_fail "cutover capture no longer owns the verified restore Lease"
+  copy_image=$(jq -r '.infrastructure.maintenance' "$work/config.json")
+  backup_role_inventory
+  backup_capture_workloads "$target_artifact" true
+  backup_check_capacity "$parent"
+  mkdir -m 700 -- "$snapshot" || production_fail "could not create private cutover snapshot directory"
+  jq -n --arg id "$capture_id" --arg target "$target" --arg cluster "$cluster" \
+    --arg context "$context" --arg ns "$namespace" --arg artifact "$target_artifact" \
+    --arg revision "$target_revision" --arg startedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --slurpfile workloads "$work/prior-workloads.json" \
+    --slurpfile pvcs "$work/backup-pvcs.jsonl" \
+    --slurpfile maintenance "$work/maintenance-workloads.json" \
+    --arg configSha256 "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" \
+    '{stateVersion:2,backupId:$id,status:"in-progress",phase:"prepared",startedAt:$startedAt,
+      source:{target:$target,cluster:$cluster,context:$context,namespace:$ns,
+        artifact:$artifact,revision:$revision},
+      configSha256:$configSha256,priorWorkloads:$workloads[0],
+      maintenanceWorkloads:$maintenance[0],selectedPVCs:$pvcs}' \
+    > "$snapshot/backup-state.json" || production_fail "could not persist cutover capture state"
+  backup_run_locked "$target_artifact" \
+    || production_fail "cutover backup capture failed; retain the local cluster and its restore Lease"
+  backup_write_manifest || production_fail "cutover snapshot capture did not produce a verified manifest"
+  backup_restore_maintenance \
+    || production_fail "cutover backup was captured but read-only maintenance could not be restored"
+  restore_mark_pending_signoff \
+    || production_fail "captured cluster did not return to a durable read-only sign-off state"
+  restore_expose_readonly_routes \
+    || production_fail "captured cluster could not retain read-only public routes"
+  restore_graphql 'query { maintenance }' \
+    || production_fail "captured cluster GraphQL maintenance could not be verified"
+  jq -e '.data.maintenance == true' "$work/restore-response.json" > /dev/null \
+    || production_fail "captured cluster is not in GraphQL maintenance"
+  cluster_operation_lock_update awaiting-signoff \
+    || production_fail "captured cluster restore Lease could not return to awaiting-signoff"
+  rm -f -- "$snapshot/backup-state.json" \
+    || production_fail "captured cutover snapshot state cleanup failed"
+  printf 'production: cutover backup captured from the verified read-only target at %s/manifest.json; writes remain blocked\n' \
+    "$snapshot"
+}
+
 case "$command" in
   create | create-new)
     [[ $target = local ]] || production_fail "Pi cluster lifecycle is never managed"
@@ -4885,6 +4997,9 @@ case "$command" in
     ;;
   restore)
     restore_run "$1" "$2" "$3" "$4" "$5"
+    ;;
+  cutover-restore)
+    restore_run "$1" "$2" "$3" "$4" "$7" cutover "$5" "$6"
     ;;
   restore-status)
     restore_status "$1"

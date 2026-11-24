@@ -293,7 +293,7 @@ restore_cleanup() {
     kill "$pid" 2> /dev/null || true
     wait "$pid" 2> /dev/null || true
   done
-  [[ (${command:-} == restore || ${command:-} == recovery-restore ||
+  [[ (${command:-} == restore || ${command:-} == cutover-restore || ${command:-} == recovery-restore ||
     ${command:-} == restore-recheck || ${command:-} == restore-reopen ||
     ${command:-} == release-migration-recover) &&
     $result != 0 && ${restore_started:-false} == true ]] || return 0
@@ -355,7 +355,7 @@ restore_cleanup() {
       fi
     fi
   fi
-  if [[ (${command:-} == restore || ${command:-} == restore-recheck ||
+  if [[ (${command:-} == restore || ${command:-} == cutover-restore || ${command:-} == restore-recheck ||
     ${command:-} == recovery-restore) &&
     ${restore_current_phase:-} == verifying-reads &&
     -f ${restore_state:-}/restore-state.json ]] \
@@ -2244,8 +2244,9 @@ restore_reopen() {
 
 restore_run() {
   local manifest=$1 archive=$2 expected=$3 state=$4 confirmation=$5
-  local mode=${6:-standalone} recovery_candidate=${7:-}
+  local mode=${6:-standalone} recovery_candidate=${7:-} cutover_snapshot=${8:-}
   local parent key name image_port artifact source_artifact source_revision current source_flag=
+  local cutover_revision='' source_validation_dir="$work/source-validated"
   local routes_sha256
   local recovery_state_phase='' recovery_attempt='' recovery_attempts=''
   restore_mode=$mode
@@ -2272,6 +2273,18 @@ restore_run() {
         || production_fail "restore requires the exact expected backup identity and RESTORE-<backup-id> confirmation"
       [[ $state == /* && ! -e $state && ! -L $state ]] \
         || production_fail "restore state must be a new absolute directory"
+      ;;
+    cutover)
+      [[ $target == local ]] \
+        || production_fail "cutover preparation is available only on an isolated local target"
+      [[ $confirmation == "CUTOVER-RESTORE-$expected" ]] \
+        || production_fail "cutover restore requires CUTOVER-RESTORE-<backup-id>"
+      [[ $state == /* && ! -e $state && ! -L $state ]] \
+        || production_fail "cutover restore state must be a new absolute directory"
+      [[ $cutover_snapshot == /* && ! -e $cutover_snapshot && ! -L $cutover_snapshot ]] \
+        || production_fail "cutover snapshot must be a new absolute directory"
+      [[ $recovery_candidate =~ ^ghcr[.]io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}$ ]] \
+        || production_fail "cutover release must be an immutable recipe-db release artifact"
       ;;
     migration-recovery)
       [[ $state == /* && -d $state && ! -L $state && $(realpath -e "$state") == "$state" &&
@@ -2322,7 +2335,7 @@ restore_run() {
   parent=$(dirname "$state")
   [[ -d $parent && $(realpath -e "$parent") == "$parent" ]] \
     || production_fail "restore state parent must exist without symlink traversal"
-  if [[ $mode == standalone ]]; then
+  if [[ $mode == standalone || $mode == cutover ]]; then
     [[ $(basename "$state") =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]] \
       || production_fail "restore state directory name must be a safe token"
   fi
@@ -2346,12 +2359,31 @@ restore_run() {
     restore_expected_graphql
   fi
   pull_release "$source_artifact"
-  application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
-  python3 "$root/.scripts/validate-backup-package.py" "$manifest" "$archive" \
-    "$work/validated" "$work/projects.jsonl" "$expected" > "$work/restore-manifest.json"
-  artifact=$(jq -er .source.artifact "$work/restore-manifest.json")
-  source_revision=$(jq -er .source.revision "$work/restore-manifest.json")
-  [[ $revision == "$source_revision" ]] \
+  source_revision=$revision
+  application_project_metadata_to_jsonl "$release_root" "$work/source-projects.jsonl"
+  if [[ $mode == cutover ]]; then
+    python3 "$root/.scripts/validate-backup-package.py" "$manifest" "$archive" \
+      "$source_validation_dir" "$work/source-projects.jsonl" "$expected" \
+      > "$work/source-restore-manifest.json"
+    [[ $source_artifact != "$recovery_candidate" ]] \
+      || production_fail "cutover release must differ from the original backup release"
+    pull_release "$recovery_candidate"
+    cutover_revision=$revision
+    application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
+    python3 "$root/.scripts/validate-backup-package.py" "$manifest" "$archive" \
+      "$work/validated" "$work/projects.jsonl" "$expected" > "$work/restore-manifest.json"
+    jq -e --slurpfile source "$work/source-restore-manifest.json" '
+      . == $source[0]
+    ' "$work/restore-manifest.json" > /dev/null \
+      || production_fail "cutover validation changed the original backup identity or content"
+    artifact=$recovery_candidate
+  else
+    application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
+    python3 "$root/.scripts/validate-backup-package.py" "$manifest" "$archive" \
+      "$work/validated" "$work/projects.jsonl" "$expected" > "$work/restore-manifest.json"
+    artifact=$(jq -er .source.artifact "$work/restore-manifest.json")
+  fi
+  [[ $mode == cutover || $revision == "$source_revision" ]] \
     || production_fail "backup source revision differs from the immutable release artifact"
   if [[ $mode == migration-recovery ]]; then
     jq -e --arg id "$expected" --arg target "$target" --arg cluster "$cluster" \
@@ -2401,7 +2433,7 @@ restore_run() {
     locked=true
     retain_lock=true
     ensure_namespace
-  elif [[ $mode == standalone ]]; then
+  elif [[ $mode == standalone || $mode == cutover ]]; then
     connect
     lock_holder="restore-$expected-$$"
     cluster_operation_lock_acquire "$lock_holder" restore "$artifact"
@@ -2437,7 +2469,7 @@ restore_run() {
     recovery_stop_workers || production_fail "reset handoff workloads are not stopped"
     recovery_assert_identity
     production_ephemeral_secrets
-  elif [[ $mode == standalone ]]; then
+  elif [[ $mode == standalone || $mode == cutover ]]; then
     restore_fresh_target
     production_ephemeral_secrets
   else
@@ -2458,7 +2490,7 @@ restore_run() {
   annotate_credentials
   if [[ $mode == existing-reset ]]; then
     restore_state=$state
-  elif [[ $mode == standalone ]]; then
+  elif [[ $mode == standalone || $mode == cutover ]]; then
     mkdir -m 700 "$state"
     restore_state=$state
     jq -n --arg backupId "$expected" --arg holder "$lock_holder" --arg target "$target" \
@@ -2470,7 +2502,10 @@ restore_run() {
         restoreMode:"standalone",leaseUid:$leaseUid,routesSha256:$routesSha256,
         writesMayHaveOpened:false,
         publicRoutesMayBeOpen:false,
-        status:"in-progress",phase:"prepared",recovery:"Keep ingress isolated and workers stopped; never merge or overwrite a partial import. Investigate then select a new empty target."}' \
+        status:"in-progress",phase:"prepared",recovery:"Keep ingress isolated and workers stopped; never merge or overwrite a partial import. Investigate then select a new empty target."}
+        + (if $cutover then {cutover:{sourceRelease:$sourceArtifact,sourceRevision:$sourceRevision}} else {} end)' \
+      --arg sourceArtifact "$source_artifact" --arg sourceRevision "$source_revision" \
+      --argjson cutover "$([[ $mode == cutover ]] && echo true || echo false)" \
       > "$state/restore-state.json"
   fi
   if [[ $mode == existing-reset ]]; then
@@ -2487,8 +2522,8 @@ restore_run() {
   restore_started=true
   retain_lock=true
   restore_phase preparing-target
-  if [[ $mode == standalone || $mode == existing-reset ]]; then
-    if [[ $mode == standalone ]]; then ensure_namespace; fi
+  if [[ $mode == standalone || $mode == existing-reset || $mode == cutover ]]; then
+    if [[ $mode == standalone || $mode == cutover ]]; then ensure_namespace; fi
     restore_cluster_state=true
   else
     release_recovery_state_write recovery-required migration-recovery-preflight \
@@ -2541,7 +2576,7 @@ restore_run() {
   fi
   copy_image=$(jq -r '.infrastructure.maintenance' "$work/config.json")
   yq 'select(.kind == "PersistentVolumeClaim")' "$work/rendered.yml" > "$work/restore-claims.yml"
-  if [[ $mode == standalone || $mode == existing-reset ]]; then
+  if [[ $mode == standalone || $mode == existing-reset || $mode == cutover ]]; then
     # Create missing claims only; never replace or resize an operator's existing claim.
     while IFS= read -r name; do
       kube get pvc "$name" --ignore-not-found -o json > "$work/restore-claim.json"
@@ -2678,6 +2713,11 @@ restore_run() {
     || production_fail "cannot durably authorize completed restore guard shutdown"
   restore_guard_check || production_fail "recovery shutdown guard was lost before handoff"
   restore_guard_stop || production_fail "restore is pending sign-off but the recovery guard could not be stopped"
+  if [[ $mode == cutover ]]; then
+    restore_current_phase=cutover-backup-capture
+    snapshot=$cutover_snapshot
+    cutover_capture_snapshot "$state" "$cutover_snapshot" "$artifact" "$cutover_revision"
+  fi
   restore_started=false
   recovery_started=false
   $release_sources_from_git && source_flag="--release-sources-from-git "

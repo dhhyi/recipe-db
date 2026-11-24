@@ -201,6 +201,71 @@ load production-k3d-restore-setup
   run ! grep -q private-restore-token "$MOCK_LOG"
 }
 
+@test "cutover restore imports the unchanged backup into candidate volumes and captures that release without opening writes" {
+  restore_fixture
+  export MOCK_CUTOVER_CAPTURE=true
+  export MOCK_BACKUP=true
+  local original_revision original_manifest_sha original_archive_sha candidate candidate_revision path
+  printf '*\n' > .gitignore
+  git add -f .gitignore
+  git add -A
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Clean cutover fixture baseline'
+  original_revision=$(git rev-parse HEAD)
+  candidate="ghcr.io/dhhyi/recipe-db-releases@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  jq --arg revision "$original_revision" '
+    .source += {target:"pi",cluster:"recipe-db-pi",context:"recipe-db-pi",namespace:"recipe-db"}
+    | .source.revision=$revision | .contentFingerprint="original-content-fingerprint"
+  ' "$RESTORE_MANIFEST" > "$FIXTURE_ROOT/cutover-package.json"
+  mv "$FIXTURE_ROOT/cutover-package.json" "$RESTORE_MANIFEST"
+  printf '\n# candidate release fixture\n' >> .scripts/templates/kubernetes-template.yml
+  git add -f .scripts/templates/kubernetes-template.yml
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Candidate cutover release'
+  candidate_revision=$(git rev-parse HEAD)
+  export MOCK_SOURCE_REVISION="$original_revision" MOCK_REVISION="$candidate_revision"
+  original_manifest_sha=$(sha256sum "$RESTORE_MANIFEST" | cut -d ' ' -f 1)
+  original_archive_sha=$(sha256sum "$RESTORE_ARCHIVE" | cut -d ' ' -f 1)
+  local cutover_state="$FIXTURE_ROOT/backups/cutover-restore"
+  local cutover_snapshot="$FIXTURE_ROOT/backups/cutover-snapshot"
+  chmod 700 "$FIXTURE_ROOT/backups"
+
+  run bash .scripts/production-k3d.sh --release-sources-from-git cutover-restore "$VALUES" \
+    "$RESTORE_MANIFEST" "$RESTORE_ARCHIVE" "$RESTORE_ID" "$cutover_state" \
+    "$candidate" "$cutover_snapshot" "CUTOVER-RESTORE-$RESTORE_ID"
+  [ "$status" -eq 0 ]
+  [ "$(sha256sum "$RESTORE_MANIFEST" | cut -d ' ' -f 1)" = "$original_manifest_sha" ]
+  [ "$(sha256sum "$RESTORE_ARCHIVE" | cut -d ' ' -f 1)" = "$original_archive_sha" ]
+  jq -e --arg candidate "$candidate" --arg revision "$candidate_revision" '
+    .backupId == "backup-20261031123456-42"
+    and .artifact == $candidate and .revision == $revision
+    and .cutover.sourceRelease == "ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    and .cutover.sourceRevision != $revision
+    and .status == "awaiting-signoff" and .phase == "pending-signoff"
+    and .import.status == "complete" and .readChecks.status == "passed"
+    and .writesMayHaveOpened == false
+  ' "$cutover_state/restore-state.json"
+  jq -e --arg candidate "$candidate" --arg revision "$candidate_revision" '
+    .source.target == "local" and .source.cluster == "recipe-db-rehearsal"
+    and .source.context == "k3d-recipe-db-rehearsal" and .source.artifact == $candidate
+    and .source.revision == $revision and .backupId != "backup-20261031123456-42"
+  ' "$cutover_snapshot/manifest.json"
+  [ ! -e "$cutover_snapshot/backup-state.json" ]
+  cmp "$FIXTURE_ROOT/tar-data/recipes/nested/data.bin" \
+    "$FIXTURE_ROOT/imported/recipes/nested/data.bin"
+  tar --numeric-owner -tvf "$FIXTURE_ROOT/recipes.tar" | grep -Fq '1001/1002'
+  [ "$(id -u)" != 1001 ] && [ "$(id -g)" != 1002 ]
+  grep -Fq 'tar -xpkf - --numeric-owner' "$MOCK_LOG"
+  for path in recipes/nested recipes/nested/data.bin; do
+    [ "$(stat -c '%a:%Y' "$FIXTURE_ROOT/tar-data/$path")" = \
+      "$(stat -c '%a:%Y' "$FIXTURE_ROOT/imported/$path")" ]
+    if [[ $EUID -eq 0 ]]; then
+      [ "$(stat -c '%u:%g' "$FIXTURE_ROOT/imported/$path")" = "1001:1002" ]
+    fi
+  done
+  [ ! -e "$MOCK_LOG.restore-mutation-attempt" ]
+  run ! grep -Eq 'createRecipe|updateRecipe|deleteRecipe|recipe/probe' "$MOCK_LOG"
+  [ "$(jq -r '.metadata.annotations["recipe-db/phase"]' "$MOCK_LOG.lease")" = awaiting-signoff ]
+}
+
 @test "restore accepts a valid empty dataset without creating an application record" {
   restore_fixture
   export MOCK_RESTORE_EMPTY=true

@@ -11,6 +11,8 @@ restore_fixture() {
   mkdir -p "$FIXTURE_ROOT/tar-data/recipes/nested"
   printf '\000opaque recipe volume data\n' \
     > "$FIXTURE_ROOT/tar-data/recipes/nested/data.bin"
+  chmod 751 "$FIXTURE_ROOT/tar-data/recipes/nested"
+  chmod 640 "$FIXTURE_ROOT/tar-data/recipes/nested/data.bin"
   if [[ ${MOCK_RESTORE_IMAGE:-false} == true ]]; then
     printf 'restored-full-image\n' > image-full
     printf 'restored-thumbnail\n' > image-thumb
@@ -19,7 +21,8 @@ restore_fixture() {
   fi
   : > restore-archives.jsonl
   for name in recipes images tags; do
-    tar -C "$FIXTURE_ROOT/tar-data/$name" -cf "$FIXTURE_ROOT/$name.tar" .
+    tar --owner=1001 --group=1002 --numeric-owner \
+      -C "$FIXTURE_ROOT/tar-data/$name" -cf "$FIXTURE_ROOT/$name.tar" .
     python3 .scripts/validate-backup-snapshot.py "$FIXTURE_ROOT/$name.tar" > "$name-files.json"
     jq -cn --arg name "$name" --slurpfile files "$name-files.json" \
       '{service:$name,archive:($name+".tar"),files:$files[0]}' >> restore-archives.jsonl

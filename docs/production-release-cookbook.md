@@ -8,9 +8,13 @@ Before starting step 1, finish testing the intended candidate website on demo da
 
 The cookbook includes an isolated production-backup upgrade rehearsal, but it does not authorize a release or replace the independent production guards below. A passing result applies only to its exact backup and candidate; do not deploy the candidate until the rehearsal and all later step conditions are satisfied.
 
+For the first cutover only, [#447: Prepare a cutover backup locally](https://github.com/dhhyi/recipe-db/issues/447) is a separate workstation-only preparation after Pi writes have been blocked and the final previous-release backup has been verified. It does not enter maintenance, retrieve data from, or otherwise operate the Pi; Pi-side preparation and erasure remain separately authorized work.
+
 For current capabilities and limits, see the [release capability overview](production-kubernetes.md#release-capability-inventory). The agreed sequence and remaining work are tracked in [#143: Define a release process with better gates](https://github.com/dhhyi/recipe-db/issues/143).
 
 **Table of contents**
+
+- [First-cutover local preparation](#first-cutover-local-preparation)
 
 1. [Prepare the candidate](#1-prepare-the-candidate)
 2. [Enter read-only maintenance](#2-enter-read-only-maintenance)
@@ -23,6 +27,36 @@ For current capabilities and limits, see the [release capability overview](produ
 9. [Explicitly reopen application access](#9-explicitly-reopen-application-access)
 10. [Check writes after reopening](#10-check-writes-after-reopening)
 11. [Align backups and record the result](#11-align-backups-and-record-the-result)
+
+## First-cutover local preparation
+
+Use this once, after the separately approved Pi operation has blocked writes and verified the final backup of the previous release. Retrieve the exact backup and receipt using the existing verified-backup procedure in step 4; the receipt must still report `verified-upload` or `verified-unchanged`. Do not substitute an earlier backup. Keep the original backup and receipt private and unchanged.
+
+This first cutover assumes the candidate can read the previous release's existing persistent-data formats and storage-version markers unchanged. Do not run migrations during this preparation; if the candidate requires a data-format change, stop and plan that separately.
+
+Run on the workstation from the reviewed checkout in fish. Use a new private result path outside the checkout, operator configuration and runtime storage:
+
+```fish
+set -g CUTOVER_PARENT "$HOME/.local/share/recipe-db/cutover"
+mkdir -p "$CUTOVER_PARENT"
+chmod 700 "$CUTOVER_PARENT"
+set -g CUTOVER_RESULT "$CUTOVER_PARENT/result"
+and mise run --raw prepare-cutover-backup-k3d \
+  "$SOURCE_MANIFEST" "$SOURCE_ARCHIVE" "$RETRIEVAL_RECEIPT" "$RELEASE" "$CUTOVER_RESULT"
+```
+
+The command validates the same original backup against both immutable releases, imports it into only the cutover release's empty local volumes, keeps application writes blocked during read-only verification and capture, then restores the new package into a second empty local cluster. It never uses the Pi as a target. A successful result removes both temporary clusters and private input copies, leaving `cutover-backup/`, `provenance.json` and a data-free `result.json`:
+
+```fish
+mise exec -- jq -e --arg release "$RELEASE" '
+  .status == "passed" and .phase == "complete"
+  and .cutoverBackup.release == $release
+  and .clusters.source.deleted and .clusters.target.deleted
+  and .cleanup.privateDataRemoved and .cleanup.inputCopiesRemoved
+' "$CUTOVER_RESULT/result.json"
+```
+
+Retain the new package for the separately approved fresh Pi restore, plus its provenance and data-free result. On any failure or interruption, do not delete either cluster; inspect `result.json` and the private logs under `.private/logs`, then have an operator investigate and clean up explicitly.
 
 ## 1. Prepare the candidate
 
