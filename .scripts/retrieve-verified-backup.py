@@ -23,6 +23,7 @@ import warnings
 ROOT = Path(__file__).resolve().parent.parent
 upload = runpy.run_path(str(ROOT / "provisioning/files/backup-upload.py"))
 MAX_METADATA = upload["MAX_MANIFEST_BYTES"]
+MAX_MAINTENANCE_METADATA = MAX_METADATA + 1024 * 1024
 
 
 class AuthenticationError(Exception):
@@ -42,7 +43,7 @@ try:
             raise ValueError("remote catalog verification failed") from error
         sys.exit(0)
     maintenance_operation = None
-    if sys.argv[1] in ("maintenance", "maintenance-package"):
+    if sys.argv[1] in ("maintenance", "maintenance-package", "maintenance-snapshot"):
         state_path = tool["maintenance_state_path"](config)
         state = tool["lifecycle_state"](state_path)
         upload_status = tool["report_status"](config)
@@ -68,10 +69,56 @@ try:
             "source": state["source"], "capturedAt": state["capturedAt"],
             "uploadStatus": upload_status["status"],
         }
+        if upload_status["status"] == "verified-unchanged":
+            snapshot_manifest = tool["validate_snapshot"](state_path)
+            fingerprint = tool["content_fingerprint"](snapshot_manifest)
+            baseline = tool["read_json"](tool["baseline_path"](config))
+            names = tool["remote_names"](config)
+            if not isinstance(baseline, dict) or baseline.get("fingerprint") != fingerprint \
+                    or not tool["verify_baseline"](config, baseline, names):
+                raise ValueError("unchanged maintenance snapshot does not match the verified baseline")
+            baseline_backup_id = baseline.get("backupId")
+            if not tool["BACKUP_ID_PATTERN"].fullmatch(str(baseline_backup_id or "")):
+                raise ValueError("verified baseline has an invalid backup identity")
+            maintenance_operation.update(
+                packageBackupId=backup_id,
+                verifiedBaselineBackupId=baseline_backup_id,
+                contentFingerprint=fingerprint,
+            )
+            if sys.argv[1] == "maintenance":
+                print(json.dumps({
+                    "deploymentId": config["deploymentId"],
+                    "maintenanceOperation": maintenance_operation,
+                    "maintenanceSnapshot": {
+                        "manifest": snapshot_manifest,
+                        "contentFingerprint": fingerprint,
+                        "maxStagingBytes": config["maxStagingBytes"],
+                    },
+                }))
+                sys.exit(0)
+            if sys.argv[1] == "maintenance-snapshot":
+                if len(sys.argv) != 4 or sys.argv[2] != backup_id:
+                    raise ValueError("requested snapshot does not match the retained maintenance operation")
+                archive_name = sys.argv[3]
+                item = next((entry for entry in snapshot_manifest["inventory"]
+                             if entry.get("archive") == archive_name), None)
+                if item is None:
+                    raise ValueError("requested snapshot archive is not in the retained operation")
+                archive_path = state_path / archive_name
+                if archive_path.is_symlink() or not archive_path.is_file() \
+                        or archive_path.stat().st_size != item["sizeBytes"]:
+                    raise ValueError("retained snapshot archive changed")
+                with open(archive_path, "rb") as stream:
+                    while block := stream.read(1024 * 1024):
+                        sys.stdout.buffer.write(block)
+                sys.exit(0)
+            raise ValueError("unchanged maintenance package must be retrieved from the retained snapshot")
+        maintenance_operation["packageBackupId"] = backup_id
         if sys.argv[1] == "maintenance":
             sys.argv = [sys.argv[0], "backup-id", backup_id]
         else:
-            if len(sys.argv) != 5 or sys.argv[2] != backup_id:
+            if sys.argv[1] != "maintenance-package" or len(sys.argv) != 5 \
+                    or sys.argv[2] != backup_id:
                 raise ValueError("requested backup does not match the retained maintenance operation")
             sys.argv = [sys.argv[0], "package", backup_id, *sys.argv[3:]]
     if sys.argv[1] in ("backup-id", "package"):
@@ -105,6 +152,8 @@ try:
             "manifestSha256": hashlib.sha256(manifest_bytes).hexdigest(),
             "capturedAt": package["capturedAt"],
         }
+        if maintenance_operation is not None:
+            baseline["contentFingerprint"] = package.get("contentFingerprint")
         if sys.argv[1] == "backup-id":
             result = {"deploymentId": config["deploymentId"], "baseline": baseline}
             if maintenance_operation is not None:
@@ -238,9 +287,43 @@ def metadata(args):
     selected = args.backup_id is not None or args.maintenance
     remote_args = ("maintenance",) if args.maintenance else (
         ("backup-id", args.backup_id) if selected else ("metadata",))
-    document = parse_json(receive(args, remote_args, MAX_METADATA))
+    metadata_limit = MAX_MAINTENANCE_METADATA if args.maintenance else MAX_METADATA
+    document = parse_json(receive(args, remote_args, metadata_limit))
     if not isinstance(document, dict):
         raise ValueError("invalid Pi metadata")
+    if args.maintenance and "maintenanceSnapshot" in document:
+        snapshot = document["maintenanceSnapshot"]
+        operation = document.get("maintenanceOperation")
+        manifest = snapshot.get("manifest") if isinstance(snapshot, dict) else None
+        fingerprint = snapshot.get("contentFingerprint") if isinstance(snapshot, dict) else None
+        operation_id = operation.get("backupId") if isinstance(operation, dict) else None
+        baseline_id = operation.get("verifiedBaselineBackupId") \
+            if isinstance(operation, dict) else None
+        if not isinstance(document.get("deploymentId"), str) \
+                or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", document["deploymentId"]) \
+                or not isinstance(manifest, dict) \
+                or not isinstance(fingerprint, str) \
+                or not upload["HASH_PATTERN"].fullmatch(fingerprint) \
+                or type(snapshot.get("maxStagingBytes")) is not int \
+                or not 256 * 1024**2 <= snapshot["maxStagingBytes"] <= 100 * 1024**3 \
+                or not isinstance(operation, dict) \
+                or not isinstance(operation_id, str) \
+                or not upload["BACKUP_ID_PATTERN"].fullmatch(operation_id) \
+                or not isinstance(baseline_id, str) \
+                or not upload["BACKUP_ID_PATTERN"].fullmatch(baseline_id) \
+                or operation.get("packageBackupId") != operation_id \
+                or operation.get("uploadStatus") != "verified-unchanged" \
+                or operation.get("status") != "captured" \
+                or operation.get("phase") != "captured" \
+                or not isinstance(operation.get("source"), dict) \
+                or operation.get("source") != manifest.get("source") \
+                or operation.get("capturedAt") != manifest.get("capturedAt") \
+                or operation.get("contentFingerprint") != fingerprint \
+                or manifest.get("backupId") != operation_id \
+                or upload["content_fingerprint"](manifest) != fingerprint:
+            raise ValueError("invalid retained maintenance snapshot metadata")
+        upload["validate_timestamp"](operation.get("capturedAt"))
+        return document
     status, baseline = document.get("status"), document.get("baseline")
     deployment = document.get("deploymentId")
     if (not selected and not isinstance(status, dict)) or not isinstance(baseline, dict) \
@@ -262,12 +345,23 @@ def metadata(args):
         raise ValueError("Pi returned a different backup ID")
     if args.maintenance:
         operation = document.get("maintenanceOperation")
-        if not isinstance(operation, dict) \
-                or operation.get("backupId") != backup_id \
+        upload_status = operation.get("uploadStatus") if isinstance(operation, dict) else None
+        operation_identity_valid = isinstance(operation, dict) \
+            and operation.get("packageBackupId") == backup_id
+        if upload_status == "verified-upload":
+            operation_identity_valid = operation_identity_valid \
+                and operation.get("backupId") == backup_id \
+                and operation.get("capturedAt") == baseline.get("capturedAt")
+        elif upload_status == "verified-unchanged":
+            operation_identity_valid = operation_identity_valid \
+                and isinstance(operation.get("contentFingerprint"), str) \
+                and upload["HASH_PATTERN"].fullmatch(operation["contentFingerprint"]) \
+                and operation["contentFingerprint"] == baseline.get("contentFingerprint")
+        else:
+            operation_identity_valid = False
+        if not operation_identity_valid \
                 or operation.get("status") != "captured" \
                 or operation.get("phase") != "captured" \
-                or operation.get("uploadStatus") not in ("verified-upload", "verified-unchanged") \
-                or operation.get("capturedAt") != baseline.get("capturedAt") \
                 or not isinstance(operation.get("source"), dict) \
                 or not re.fullmatch(r"ghcr[.]io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}",
                                     str(operation["source"].get("artifact", ""))):
@@ -290,6 +384,90 @@ def metadata(args):
                 or not isinstance(digest, str) or not upload["HASH_PATTERN"].fullmatch(digest):
             raise ValueError("invalid baseline size or hash")
     return document
+
+
+def retrieve_maintenance_snapshot(args, document, destination, directory):
+    snapshot_metadata = document["maintenanceSnapshot"]
+    manifest = snapshot_metadata["manifest"]
+    snapshot = destination / ".snapshot"
+    os.mkdir(snapshot.name, mode=0o700, dir_fd=directory)
+    try:
+        snapshot_directory = os.open(snapshot, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except BaseException:
+        snapshot.rmdir()
+        raise
+    manifest_path = snapshot / "manifest.json"
+    complete = False
+    try:
+        descriptor = os.open(
+            "manifest.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600, dir_fd=snapshot_directory,
+        )
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(upload["json_bytes"](manifest))
+            stream.flush()
+            os.fsync(stream.fileno())
+        for item in manifest["inventory"]:
+            archive_name = item.get("archive")
+            if not isinstance(archive_name, str) \
+                    or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*\.tar", archive_name) \
+                    or type(item.get("sizeBytes")) is not int \
+                    or item["sizeBytes"] <= 0 \
+                    or not isinstance(item.get("sha256"), str) \
+                    or not upload["HASH_PATTERN"].fullmatch(item["sha256"]):
+                raise ValueError("invalid retained snapshot archive metadata")
+            descriptor = os.open(
+                archive_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600, dir_fd=snapshot_directory,
+            )
+            with os.fdopen(descriptor, "wb") as stream:
+                size, digest = receive(
+                    args,
+                    ("maintenance-snapshot", manifest["backupId"], archive_name),
+                    item["sizeBytes"], stream,
+                )
+                if size != item["sizeBytes"] or digest != item["sha256"]:
+                    raise ValueError("retained snapshot archive size or SHA-256 mismatch")
+                stream.flush()
+                os.fsync(stream.fileno())
+        verified_manifest = upload["validate_snapshot"](snapshot)
+        if verified_manifest != manifest \
+                or upload["content_fingerprint"](verified_manifest) \
+                != snapshot_metadata["contentFingerprint"]:
+            raise ValueError("retained snapshot differs from its verified metadata")
+        current = metadata(args)
+        if current.get("maintenanceOperation") != document["maintenanceOperation"] \
+                or current.get("maintenanceSnapshot") != snapshot_metadata:
+            raise ValueError("retained maintenance snapshot changed during retrieval")
+        package = upload["create_package"](
+            snapshot, destination, verified_manifest, document["deploymentId"],
+            snapshot_metadata["maxStagingBytes"],
+        )
+        for name in (manifest_path.name, *(item["archive"] for item in manifest["inventory"])):
+            (snapshot / name).unlink()
+        snapshot.rmdir()
+        complete = True
+        operation = document["maintenanceOperation"]
+        return {
+            "backupId": package["backupId"],
+            "manifest": str(destination / package["manifest"]),
+            "archive": str(destination / package["archive"]),
+            "maintenanceOperation": {
+                key: operation[key] for key in
+                ("backupId", "packageBackupId", "status", "phase", "source", "capturedAt",
+                 "uploadStatus", "contentFingerprint", "verifiedBaselineBackupId")
+            },
+        }
+    finally:
+        if not complete:
+            for path in destination.iterdir():
+                if path.is_file() and not path.is_symlink():
+                    path.unlink()
+            for path in snapshot.iterdir():
+                if path.is_file() and not path.is_symlink():
+                    path.unlink()
+            snapshot.rmdir()
+        os.close(snapshot_directory)
 
 
 def verify_manifest(content, document):
@@ -331,11 +509,22 @@ def retrieve(args):
         raise ValueError("destination must not contain '..'")
     destination = Path(os.path.abspath(os.path.expanduser(args.destination)))
     document = metadata(args)
+    directory = create_destination(destination)
+    if args.maintenance and "maintenanceSnapshot" in document:
+        try:
+            return retrieve_maintenance_snapshot(args, document, destination, directory)
+        except BaseException:
+            try:
+                destination.rmdir()
+            except OSError:
+                pass
+            raise
+        finally:
+            os.close(directory)
     baseline = document["baseline"]
     selected_backup_id = args.backup_id
     if args.maintenance:
         selected_backup_id = baseline["backupId"]
-    directory = create_destination(destination)
     created = []
     complete = False
     try:

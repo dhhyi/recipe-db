@@ -203,7 +203,7 @@ if password_auth:
 else:
     assert command[:5] == ["sudo", "-n", "-k", "python3", "-c"]
     code_index = 5
-assert len(command) in (code_index + 2, code_index + 3, code_index + 5)
+assert len(command) in (code_index + 2, code_index + 3, code_index + 4, code_index + 5)
 with open(os.environ["MOCK_LOG"], "a") as log:
     log.write(json.dumps(command[code_index + 1:]) + "\n")
 code = command[code_index].replace("/usr/local/sbin/recipe-db-backup-upload", os.environ["UPLOADER"])
@@ -467,6 +467,132 @@ assert result["backupId"] == "maintenance-id"
 assert result["maintenanceOperation"]["status"] == "captured"
 assert result["maintenanceOperation"]["phase"] == "captured"
 assert result["maintenanceOperation"]["uploadStatus"] == "verified-upload"
+PY
+}
+
+@test "verified-unchanged maintenance retrieval packages the exact retained snapshot" {
+  local operation_id=maintenance-final-capture-id package_id=maintenance-baseline-id
+  add_selected_backup "$package_id"
+  OPERATION_ID="$operation_id" PACKAGE_ID="$package_id" python3 - << 'PY'
+from datetime import datetime, timedelta, timezone
+import hashlib
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import tarfile
+
+root = Path(os.environ["REMOTE_ROOT"])
+drive = root / "drive"
+package_id = os.environ["PACKAGE_ID"]
+operation_id = os.environ["OPERATION_ID"]
+manifest_path = next(drive.glob(f"*{package_id}.manifest.json"))
+package = json.loads(manifest_path.read_text())
+now = datetime.now(timezone.utc).replace(microsecond=0)
+source = {
+    "target": "pi", "cluster": "recipe-db-pi", "context": "recipe-db-pi",
+    "namespace": "recipe-db",
+    "artifact": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64,
+    "revision": "b" * 40,
+}
+operation_captured = (now - timedelta(hours=1)).isoformat()
+file_data = b"final snapshot data\n"
+inner = io.BytesIO()
+with tarfile.open(fileobj=inner, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+    info = tarfile.TarInfo("data.txt")
+    info.size = len(file_data)
+    info.mode, info.uid, info.gid, info.mtime = 0o640, 123, 456, 0
+    archive.addfile(info, io.BytesIO(file_data))
+archive_bytes = inner.getvalue()
+archive_sha = hashlib.sha256(archive_bytes).hexdigest()
+operation_snapshot = {
+    "format": "recipe-db-pvc-snapshot", "formatVersion": 1,
+    "backupId": operation_id, "capturedAt": operation_captured, "source": source,
+    "inventory": [{
+        "service": "recipes", "role": "authoritative-read-only", "pvc": "recipes",
+        "archive": "recipes.tar", "sizeBytes": len(archive_bytes), "sha256": archive_sha,
+        "fileCount": 1,
+        "files": [{"path": "data.txt", "sizeBytes": len(file_data),
+                   "sha256": hashlib.sha256(file_data).hexdigest()}],
+    }],
+}
+spec = importlib.util.spec_from_file_location(
+    "upload", root.parent / "provisioning/files/backup-upload.py"
+)
+upload = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(upload)
+fingerprint = upload.content_fingerprint(operation_snapshot)
+baseline_snapshot = {
+    **operation_snapshot, "backupId": package_id,
+    "capturedAt": package["capturedAt"],
+}
+package["source"] = source
+package["snapshotManifest"] = baseline_snapshot
+package["contentFingerprint"] = fingerprint
+manifest = (json.dumps(package, sort_keys=True, separators=(",", ":")) + "\n").encode()
+manifest_path.write_bytes(manifest)
+
+baseline_path = root / "state/baseline.json"
+baseline = json.loads(baseline_path.read_text())
+baseline.update(
+    backupId=package_id,
+    archive=package["archive"]["name"],
+    manifest=manifest_path.name,
+    archiveSizeBytes=package["archive"]["sizeBytes"],
+    manifestSizeBytes=len(manifest),
+    archiveSha256=package["archive"]["sha256"],
+    manifestSha256=hashlib.sha256(manifest).hexdigest(),
+    capturedAt=package["capturedAt"],
+    fingerprint=fingerprint,
+)
+baseline_path.write_text(json.dumps(baseline))
+
+status_path = root / "state/status.json"
+status = json.loads(status_path.read_text())
+status.update(status="verified-unchanged", backupId=operation_id, lastCheck=now.isoformat())
+status_path.write_text(json.dumps(status))
+
+maintenance = root / "state/maintenance"
+maintenance.mkdir(mode=0o700)
+operation = {
+    "stateVersion": 2, "backupId": operation_id, "status": "captured",
+    "phase": "captured", "capturedAt": operation_captured, "source": source,
+}
+(maintenance / "backup-state.json").write_text(json.dumps(operation))
+(maintenance / "manifest.json").write_text(json.dumps(operation_snapshot))
+(maintenance / "recipes.tar").write_bytes(archive_bytes)
+PY
+  run python3 .scripts/retrieve-verified-backup.py --maintenance "$DESTINATION"
+  [ "$status" -eq 0 ]
+  RESULT="$output" OPERATION_ID="$operation_id" PACKAGE_ID="$package_id" python3 - << 'PY'
+import io
+import json
+import os
+from pathlib import Path
+import tarfile
+
+result = json.loads(os.environ["RESULT"])
+operation = result["maintenanceOperation"]
+package = json.loads(Path(result["manifest"]).read_text())
+assert result["backupId"] == os.environ["OPERATION_ID"]
+assert result["backupId"] != os.environ["PACKAGE_ID"]
+assert operation["backupId"] == os.environ["OPERATION_ID"]
+assert operation["packageBackupId"] == os.environ["OPERATION_ID"]
+assert operation["uploadStatus"] == "verified-unchanged"
+assert operation["capturedAt"] == package["capturedAt"]
+assert operation["contentFingerprint"] == package["contentFingerprint"]
+assert operation["verifiedBaselineBackupId"] == os.environ["PACKAGE_ID"]
+assert package["snapshotManifest"]["backupId"] == os.environ["OPERATION_ID"]
+with tarfile.open(result["archive"], "r:gz") as outer:
+    snapshot_archive = outer.extractfile("recipes.tar").read()
+with tarfile.open(fileobj=io.BytesIO(snapshot_archive), mode="r:") as inner:
+    member = inner.getmember("data.txt")
+    assert (member.mode, member.uid, member.gid) == (0o640, 123, 456)
+    assert inner.extractfile(member).read() == b"final snapshot data\n"
+assert sorted(path.name for path in Path(result["manifest"]).parent.iterdir()) == sorted(
+    (Path(result["manifest"]).name, Path(result["archive"]).name)
+)
 PY
 }
 

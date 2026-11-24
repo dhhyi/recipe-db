@@ -30,7 +30,7 @@ For current capabilities and limits, see the [release capability overview](produ
 
 ## First-cutover local preparation
 
-Use this once, after the separately approved Pi operation has blocked writes and verified the final backup of the previous release. Retrieve the exact backup and receipt using the existing verified-backup procedure in step 4; the receipt must still report `verified-upload` or `verified-unchanged`. Do not substitute an earlier backup. Keep the original backup and receipt private and unchanged.
+Use this once, after the separately approved Pi operation has blocked writes and verified the final backup of the previous release. Retrieve the final backup and receipt using the existing verified-backup procedure in step 4; the receipt must still report `verified-upload` or `verified-unchanged`. When the retained snapshot is verified unchanged, retrieval selects the remote baseline only after confirming its content fingerprint matches the final snapshot; provenance keeps both the operation and package backup identities. Keep the original backup and receipt private and unchanged.
 
 This first cutover assumes the candidate can read the previous release's existing persistent-data formats and storage-version markers unchanged. Do not run migrations during this preparation; if the candidate requires a data-format change, stop and plan that separately.
 
@@ -56,7 +56,7 @@ mise exec -- jq -e --arg release "$RELEASE" '
 ' "$CUTOVER_RESULT/result.json"
 ```
 
-Retain the new package for the separately approved fresh Pi restore, plus its provenance and data-free result. On any failure or interruption, do not delete either cluster; inspect `result.json` and the private logs under `.private/logs`, then have an operator investigate and clean up explicitly.
+Retain the new package for the separately approved fresh Pi restore, plus its provenance and data-free result. On a failure or interruption before cleanup, neither cluster is deleted. If a cluster deletion itself fails or is interrupted, no further deletion is attempted; inspect each cluster's `deletionAttempted` and `deleted` fields in `result.json` (`null` means the deletion outcome is uncertain), then verify the actual cluster state before operator cleanup. An interruption during final private-data cleanup occurs after both deletions; the result records the cluster state before returning.
 
 ## 1. Prepare the candidate
 
@@ -297,6 +297,8 @@ Continue only when the service succeeds. The exact uploader status, remote packa
 
 ## 4. Rehearse using the retained backup
 
+For the first cutover, use the retrieval instructions below, then skip the ordinary upgrade rehearsal and its migration/recovery scenarios. Run [First-cutover local preparation](#first-cutover-local-preparation) instead; it uses the same verified backup to check the candidate's read-only behavior, capture its backup and restore that package into a second empty cluster.
+
 Run the rehearsal inside the maintenance window, after the single pre-release capture. It retrieves the exact verified backup from the retained maintenance operation; it does not make another production capture. The retrieval receipt binds the downloaded package to that operation's backup ID, source release, capture time and verified upload status.
 
 From the **workstation fish shell**, retrieve the package using a new private destination and preserve the JSON receipt:
@@ -317,9 +319,9 @@ and set -g BACKUP_STATUS (mise exec -- jq -er .maintenanceOperation.uploadStatus
   "$RETRIEVAL_RECEIPT")
 ```
 
-Keep `--raw` so authentication prompts work. The command succeeds only when the retained operation is still captured, its uploader reports `verified-upload` or `verified-unchanged` for the same backup ID, and the remote package matches the operation. It verifies both files' identities and hashes over one SSH connection without Pi-side backup staging or copied Drive credentials. Do not retrieve a different or historical backup for this rehearsal.
+Keep `--raw` so authentication prompts work. The command succeeds only when the retained operation is still captured and its uploader reports `verified-upload` or `verified-unchanged` for the same backup ID. It verifies both package files' identities and hashes for `verified-upload`; with `verified-unchanged`, it verifies and packages the retained operation's exact snapshot instead. All retrieval streams over one SSH connection without Pi-side backup staging or copied Drive credentials. Do not retrieve a different or historical backup for this rehearsal.
 
-The downloaded backup is production data; keep the package, receipt, rehearsal directory and result private. The runner also requires `backup-release-ref` and the private `$HOME/.config/recipe-db/deployment/pi-values.yaml` to match the package source and documented Pi configuration, a candidate published by this repository, and the loopback-only Pi API tunnel from step 1. It checks the live source release and images, compares the backup's storage markers with the source release's declared versions, and uses isolated local clusters only. It never writes to the Pi. Keep the `maintenance-retrieval.json` receipt until the runner consumes it.
+The downloaded backup is production data; keep the package, receipt, rehearsal directory and result private. For `verified-upload`, retrieval downloads the verified package; for `verified-unchanged`, it verifies and packages the exact retained snapshot from the Pi rather than substituting an older package whose file permissions or numeric ownership may differ. Both paths verify snapshot hashes and metadata without creating Pi-side staging or copying Drive credentials. The runner also requires `backup-release-ref` and the private `$HOME/.config/recipe-db/deployment/pi-values.yaml` to match the package source and documented Pi configuration, a candidate published by this repository, and the loopback-only Pi API tunnel from step 1. It checks the live source release and images, compares the backup's storage markers with the source release's declared versions, and uses isolated local clusters only. It never writes to the Pi. Keep the `maintenance-retrieval.json` receipt until the runner consumes it.
 
 Run the rehearsal from the reviewed tooling checkout, using the candidate digest prepared in step 1:
 
