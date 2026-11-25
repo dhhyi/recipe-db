@@ -1271,10 +1271,10 @@ EOF
   : > "$MOCK_LOG.lifecycle"
   run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" RESTORE_READS_FAIL=true bash completion-order.sh
   [ "$status" -ne 0 ]
-  run ! grep -Fxq 'lease:awaiting-signoff' "$MOCK_LOG.lifecycle"
-  [ "$status" -eq 0 ]
-  run ! grep -Fxq 'completion' "$MOCK_LOG.lifecycle"
-  [ "$status" -eq 0 ]
+  run grep -Fxq 'lease:awaiting-signoff' "$MOCK_LOG.lifecycle"
+  [ "$status" -ne 0 ]
+  run grep -Fxq 'completion' "$MOCK_LOG.lifecycle"
+  [ "$status" -ne 0 ]
 }
 
 @test "restore-owned capture publishes one complete snapshot before maintenance and refuses recapture" {
@@ -1429,32 +1429,32 @@ EOF
     bash capture-pipeline.sh
   [ "$status" -ne 0 ]
   grep -Fxq 'claim-busy' "$MOCK_LOG.pipeline"
-  run ! grep -Eq '^storage-preflight$|^capture:' "$MOCK_LOG.pipeline"
-  [ "$status" -eq 0 ]
+  run grep -Eq '^storage-preflight$|^capture:' "$MOCK_LOG.pipeline"
+  [ "$status" -ne 0 ]
 
   : > "$MOCK_LOG.pipeline"
   run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" REUSE_STATE=true LEASE_UID_DRIFT=true \
     bash capture-pipeline.sh
   [ "$status" -ne 0 ]
   [[ $output == *"exact pending restore Lease is missing or changed"* ]]
-  run ! grep -Eq '^storage-preflight$|^capture:' "$MOCK_LOG.pipeline"
-  [ "$status" -eq 0 ]
+  run grep -Eq '^storage-preflight$|^capture:' "$MOCK_LOG.pipeline"
+  [ "$status" -ne 0 ]
 
   : > "$MOCK_LOG.pipeline"
   run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" PUBLISH_FAIL=true bash capture-pipeline.sh
   [ "$status" -ne 0 ]
   [[ $output == *"upload failed; retain the exact Lease and snapshot"* ]]
   [ -d "$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/snapshot" ]
-  run ! grep -Eq 'verified-upload:|restore-maintenance|completion|lease:awaiting-signoff' \
+  run grep -Eq 'verified-upload:|restore-maintenance|completion|lease:awaiting-signoff' \
     "$MOCK_LOG.pipeline"
-  [ "$status" -eq 0 ]
+  [ "$status" -ne 0 ]
 
   : > "$MOCK_LOG.pipeline"
   run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" REUSE_STATE=true bash capture-pipeline.sh
   [ "$status" -ne 0 ]
   [[ $output == *"progress or retained Lease phase does not permit this action"* ]]
-  run ! grep -q '^capture:' "$MOCK_LOG.pipeline"
-  [ "$status" -eq 0 ]
+  run grep -q '^capture:' "$MOCK_LOG.pipeline"
+  [ "$status" -ne 0 ]
 }
 
 @test "restore-owned retry and resume retain the exact uploaded snapshot" {
@@ -1493,10 +1493,10 @@ EOF
   chmod 700 retry-pipeline.sh
   run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" bash retry-pipeline.sh
   [ "$status" -eq 0 ]
-  grep -Fxq "publish:$FIXTURE_ROOT/capture-work/restore-captures/restore-id/snapshot" \
+  grep -Fxq "publish:$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/snapshot" \
     "$MOCK_LOG.pipeline"
-  run ! grep -Eq '^capture:|^restore-maintenance' "$MOCK_LOG.pipeline"
-  [ "$status" -eq 0 ]
+  run grep -Eq '^capture:|^restore-maintenance' "$MOCK_LOG.pipeline"
+  [ "$status" -ne 0 ]
 
   : > "$MOCK_LOG.pipeline"
   cat >> retry-pipeline.sh << 'EOF'
@@ -1531,10 +1531,10 @@ EOF
 
   kill "$graphql_pid" "$browse_pid"
   wait "$graphql_pid" "$browse_pid" 2> /dev/null || true
-  run ! kill -0 "$graphql_pid" 2> /dev/null
-  [ "$status" -eq 0 ]
-  run ! kill -0 "$browse_pid" 2> /dev/null
-  [ "$status" -eq 0 ]
+  run kill -0 "$graphql_pid"
+  [ "$status" -ne 0 ]
+  run kill -0 "$browse_pid"
+  [ "$status" -ne 0 ]
 }
 
 @test "pending restore can select another backup through preview reset and recovery restore" {
