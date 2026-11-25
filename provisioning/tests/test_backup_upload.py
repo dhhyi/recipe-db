@@ -696,7 +696,12 @@ raise SystemExit(0)
         )
         marker = self.root / "capture-started"
         capture = self.root / "capture"
-        capture.write_text(f"#!/bin/sh\n: > {marker}\nexec sleep 30\n")
+        capture.write_text(f"""#!/bin/sh
+sleep 30 &
+child=$!
+printf '%s\\n' "$child" > {marker}
+wait "$child"
+""")
         capture.chmod(0o700)
         systemctl = self.bin / "systemctl"
         systemctl.write_text("""#!/bin/sh
@@ -725,6 +730,14 @@ esac
             self.assertTrue(marker.exists(), "restore upload retry never started capture")
             process.send_signal(signal.SIGTERM)
             _, stderr = process.communicate(timeout=15)
+            child_pid = int(marker.read_text())
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(child_pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.05)
         finally:
             if process.poll() is None:
                 process.kill()
@@ -732,6 +745,8 @@ esac
 
         self.assertNotEqual(process.returncode, 0)
         self.assertIn("capture-interrupted", stderr)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child_pid, 0)
         state = backup.read_json(state_path)
         self.assertEqual((state["status"], state["phase"]), ("upload-failed", "upload-pending"))
         self.assertEqual(state["failureCode"], "capture-interrupted")

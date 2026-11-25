@@ -412,6 +412,12 @@ Do not retry automatically or use either action if status or phase is uncertain.
 
 After capture succeeds, verify Pi uploader status is `complete` for this restore and a distinct backup ID, then rerun the workstation `restore-status` and `lock-status` checks above. Require the same Lease UID and holder, `awaiting-signoff`, GraphQL maintenance, successful public reads, and writes still blocked. Confirm the timer remains disabled and do not sign off yet.
 
+On the Pi, print the staging limit to carry to the workstation:
+
+```sh
+sudo jq -er '.maxStagingBytes // 8589934592' /etc/recipe-db/backup.json
+```
+
 Retrieve the **exact** new Pi backup into a new private workstation directory using the existing authenticated retrieval command:
 
 ```fish
@@ -464,7 +470,7 @@ jq -e --arg id '<exact-new-backupId>' '
   and .savedStateMatchesCluster
   and ((.writesMayHaveOpened // false) | not)
 ' "$RUN_DIRECTORY/local-restore-status.json" > /dev/null
-jq -e --arg id '<exact-new-backupId>' '
+and jq -e --arg id '<exact-new-backupId>' '
   .backupId == $id and .status == "awaiting-signoff" and .phase == "pending-signoff"
   and .import.status == "complete" and .readChecks.status == "passed"
   and ((.writesMayHaveOpened // false) | not)
