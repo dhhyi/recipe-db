@@ -14,6 +14,32 @@
       changed_when: false
       no_log: true
 
+    - name: Inspect cluster operation ownership before enabling the timer
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - --kubeconfig
+          - /etc/recipe-db/backup-kubeconfig.yaml
+          - --namespace
+          - kube-system
+          - get
+          - lease
+          - recipe-db-deploy
+          - --ignore-not-found
+          - -o
+          - json
+      register: backup_enable_lease
+      changed_when: false
+      no_log: true
+
+    - name: Refuse scheduling while cluster operation ownership is retained
+      ansible.builtin.assert:
+        that:
+          - backup_enable_lease.stdout | trim | length == 0
+        fail_msg: >-
+          A cluster operation still owns the Pi. Complete or recover its ownership before enabling scheduled backups. Restore capture status: {{ ((backup_status.stdout | from_json).get('restoreCapture') or {}).get('status', 'unavailable') }}, phase: {{ ((backup_status.stdout | from_json).get('restoreCapture') or {}).get('phase', 'unavailable') }}.
+
     - name: Read the private backup configuration generation marker
       ansible.builtin.slurp:
         src: /etc/recipe-db/backup-configured-at

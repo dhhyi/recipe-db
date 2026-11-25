@@ -781,6 +781,6 @@ ssh-add ~/.config/recipe-db/ssh/recipe-db-pi \
     backup-enable.yml --ask-become-pass
 ```
 
-For a completed release, enable the schedule only after successful finalization. The playbook independently requires a verified backup check after the latest configuration installation and that maintenance has ended.
+For a completed release, enable the schedule only after successful finalization. The playbook independently requires a verified backup check after the latest configuration installation, that maintenance has ended, and that no cluster operation retains the Pi Lease. It refuses to enable the timer if it cannot verify ownership.
 
 **Success:** the Pi runs `RELEASE`, managed tooling remains pinned, the public website was checked, the normal backup service captured and remotely verified the candidate after alignment with every actual storage-version marker, the operator accepted and published the sequential GitHub Release, cleanup followed publication, and scheduled capture was resumed only afterward if appropriate.

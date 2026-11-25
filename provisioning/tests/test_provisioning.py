@@ -1,3 +1,4 @@
+import base64
 import importlib.util
 import json
 import os
@@ -660,6 +661,57 @@ class ContractTests(unittest.TestCase):
         timer = next(task for task in enable["tasks"] if task["name"] == "Enable the scheduled backup timer")
         self.assertTrue(timer["ansible.builtin.systemd_service"]["enabled"])
         self.assertEqual(timer["ansible.builtin.systemd_service"]["state"], "started")
+
+    def test_backup_enable_requires_closed_cluster_ownership(self):
+        tasks = yaml.safe_load((ROOT / "backup-enable.yml").read_text())[0]["tasks"]
+        query = next(task for task in tasks
+                     if task["name"] == "Inspect cluster operation ownership before enabling the timer")
+        guard = next(task for task in tasks
+                     if task["name"] == "Refuse scheduling while cluster operation ownership is retained")
+        status_gate = next(task for task in tasks
+                           if task["name"] == "Require a verified explicit capture before enabling the timer")
+        timer = next(task for task in tasks if task["name"] == "Enable the scheduled backup timer")
+        self.assertEqual(query["ansible.builtin.command"]["argv"], [
+            "/usr/local/bin/k3s", "kubectl", "--kubeconfig", "/etc/recipe-db/backup-kubeconfig.yaml",
+            "--namespace", "kube-system", "get", "lease", "recipe-db-deploy",
+            "--ignore-not-found", "-o", "json",
+        ])
+        self.assertNotIn("failed_when", query)
+        self.assertNotIn("ignore_errors", query)
+        self.assertTrue(query["no_log"])
+        self.assertLess(tasks.index(query), tasks.index(guard))
+        self.assertLess(tasks.index(guard), tasks.index(timer))
+
+        self.environment.filters["from_json"] = json.loads
+        self.environment.filters["b64decode"] = lambda value: base64.b64decode(value).decode()
+        self.environment.tests["match"] = lambda value, pattern: re.match(pattern, value) is not None
+        evaluate = self.environment.compile_expression(" and ".join(
+            f"({condition})"
+            for task in (guard, status_gate)
+            for condition in task["ansible.builtin.assert"]["that"]
+        ))
+        status = {
+            "status": "verified-upload", "maintenanceActive": False,
+            "lastCheck": "2026-11-25T10:00:00+00:00",
+            "restoreCapture": {"status": "complete", "phase": "maintenance"},
+        }
+        inputs = {
+            "backup_status": {"stdout": json.dumps(status)},
+            "backup_configuration_timestamp": {
+                "content": base64.b64encode(b"2026-11-25T09:00:00+00:00").decode(),
+            },
+        }
+        retained = json.dumps({
+            "metadata": {"name": "recipe-db-deploy",
+                         "annotations": {"recipe-db/operation": "restore"}},
+        })
+        self.assertFalse(evaluate(backup_enable_lease={"stdout": retained}, **inputs))
+        self.assertFalse(evaluate(backup_enable_lease={"stdout": "not valid JSON"}, **inputs))
+        self.assertTrue(evaluate(backup_enable_lease={"stdout": ""}, **inputs))
+        status["maintenanceActive"] = True
+        inputs["backup_status"]["stdout"] = json.dumps(status)
+        self.assertFalse(evaluate(backup_enable_lease={"stdout": ""}, **inputs))
+        self.assertIn("restoreCapture", guard["ansible.builtin.assert"]["fail_msg"])
 
     def test_backup_release_reference_requires_the_canonical_immutable_digest(self):
         setup = yaml.safe_load((ROOT / "backup-configure.yml").read_text())[0]
