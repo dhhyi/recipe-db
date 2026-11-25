@@ -115,7 +115,7 @@ case "$action" in
       restore-maintenance-resume) lifecycle_action=restore-backup-maintenance-resume ;;
     esac
     exec /usr/local/bin/mise exec -- bash /opt/recipe-db/.scripts/production-k3d.sh \
-      --release-sources-from-git "$lifecycle_action" /etc/recipe-db/backup-values.yaml /etc/recipe-db/backup.json \
+      --release-sources-from-git "$lifecycle_action" /etc/recipe-db/backup-values.yaml /etc/recipe-db/backup-values.yaml \
       /etc/recipe-db/backup.json "$path" "$restore_id" "$restore_holder" \
       "$restore_lease_uid" "$confirmation"
     ;;

@@ -742,7 +742,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('maintenance-restore /etc/recipe-db/backup-values.yaml "$path"', command)
         self.assertIn('restore-capture | restore-upload-retry | restore-maintenance-resume)', command)
         self.assertIn('/var/lib/recipe-db-backup/restore-captures/$restore_id', command)
-        self.assertIn('/etc/recipe-db/backup-values.yaml /etc/recipe-db/backup.json', command)
+        self.assertIn('/etc/recipe-db/backup-values.yaml /etc/recipe-db/backup-values.yaml', command)
         self.assertIn('"$path" "$restore_id" "$restore_holder" \\', command)
         self.assertIn('"$restore_lease_uid" "$confirmation"', command)
         self.assertIn("release=$(cat /etc/recipe-db/backup-release-ref)", command)
@@ -793,7 +793,7 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(dispatched[5], expected_command)
                 self.assertEqual(dispatched[6:9], [
                     str(config / "backup-values.yaml"),
-                    str(config / "backup.json"),
+                    str(config / "backup-values.yaml"),
                     str(config / "backup.json"),
                 ])
                 self.assertEqual(dispatched[9:], [

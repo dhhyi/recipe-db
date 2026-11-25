@@ -703,6 +703,35 @@ EOF
   [ ! -e "$MOCK_LOG.lease" ]
 }
 
+@test "captured snapshot passes the uploader's real validation and packaging boundary" {
+  export MOCK_BACKUP=true
+  local snapshot="$FIXTURE_ROOT/backups/publisher-boundary"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -eq 0 ]
+  mkdir -p provisioning/files "$FIXTURE_ROOT/package-stage"
+  cp "$BATS_TEST_DIRNAME/../../provisioning/files/backup-upload.py" provisioning/files/
+  run python3 - "$snapshot" "$FIXTURE_ROOT/package-stage" << 'PY'
+import importlib.util
+import pathlib
+import sys
+
+module_path = pathlib.Path("provisioning/files/backup-upload.py")
+spec = importlib.util.spec_from_file_location("backup_upload", module_path)
+upload = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(upload)
+snapshot = pathlib.Path(sys.argv[1])
+stage = pathlib.Path(sys.argv[2])
+manifest = upload.validate_snapshot(snapshot)
+package = upload.create_package(
+    snapshot, stage, manifest, "pi-rehearsal", upload.DEFAULT_MAX_STAGING_BYTES)
+assert (stage / package["manifest"]).is_file()
+assert (stage / package["archive"]).is_file()
+print(package["backupId"])
+PY
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(jq -r .backupId "$snapshot/manifest.json")" ]
+}
+
 @test "capture measures actual archive bytes instead of trusting unenforced PVC requests" {
   export MOCK_BACKUP=true
   export MOCK_ARCHIVE_BYTES

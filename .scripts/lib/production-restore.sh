@@ -1978,8 +1978,8 @@ restore_load_saved_operation() {
   ' <<< "$current" > /dev/null \
     || production_fail "saved restore does not own the exact recorded Lease; inspect status and do not reopen"
   recovery_identity || production_fail "cannot verify the saved restore target identity"
-  jq -e --slurpfile actual "$work/reset-identity.json" \
-    '.restoreIdentity == $actual[0]' "$restore_state/restore-state.json" > /dev/null \
+  production_restore_identity_matches "$restore_state/restore-state.json" \
+    "$work/reset-identity.json" "$work/config.json" \
     || production_fail "restore target PVC/PV or cluster identity changed; preserve access barriers and investigate"
   jq -e '(.migrationRecovery.probeRecipeId // null) == null' \
     "$restore_state/restore-state.json" > /dev/null \

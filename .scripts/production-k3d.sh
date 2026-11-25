@@ -150,6 +150,11 @@ cleanup() {
   if [[ $result -ne 0 && $command == restore-backup-* &&
     $restore_backup_started == true &&
     -n ${restore_backup_state_path:-} && -f $restore_backup_state_path ]]; then
+    if [[ $command == restore-backup-maintenance-resume &&
+      $restore_backup_current_graphql_mode == maintenance ]]; then
+      backup_reblock_graphql \
+        || printf 'production: could not reblock GraphQL after restore-owned verification failure\n' >&2
+    fi
     restore_backup_record_failure \
       || printf 'production: restore-owned capture failure state could not be recorded; preserve the Lease and inspect capture state\n' >&2
   fi
@@ -1675,65 +1680,6 @@ maintenance_restore() {
   cluster_operation_lock_update captured || return 1
   backup_state_write captured captured || return 1
   printf 'production: verified maintenance snapshot restored read-only service; holder=%s\n' "$backup_id"
-}
-
-restore_backup_set_lease_phase() {
-  local phase=$1 current
-  current=$(cluster_operation_lock_status) || return 1
-  jq -e --arg holder "$restore_backup_holder" --arg uid "$restore_backup_lease_uid" \
-    --arg artifact "$restore_backup_artifact" '
-    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
-    and .metadata.uid == $uid and .spec.holderIdentity == $holder
-    and .metadata.annotations["recipe-db/operation"] == "restore"
-    and .metadata.annotations["recipe-db/release"] == $artifact
-    and (.metadata.resourceVersion | type == "string" and length > 0)
-  ' <<< "$current" > /dev/null \
-    || production_fail "restore-owned capture no longer holds the exact pending restore Lease"
-  jq --arg phase "$phase" \
-    '.metadata.annotations["recipe-db/phase"]=$phase' <<< "$current" \
-    > "$work/restore-backup-lease.json" || return 1
-  cluster_operation_lock_expected_uid=$restore_backup_lease_uid
-  cluster_operation_lock_kubectl replace -f "$work/restore-backup-lease.json" > /dev/null \
-    || production_fail "restore-owned capture could not update the exact restore Lease"
-}
-
-restore_backup_record_failure() {
-  local phase status backup_id current
-  backup_id=$(jq -r '.backupId // empty' "$restore_backup_state_path")
-  if jq -e '.status == "complete" and .phase == "maintenance"' \
-    "$restore_backup_state_path" > /dev/null; then
-    current=$(cluster_operation_lock_status) || return 1
-    if jq -e --arg uid "$restore_backup_lease_uid" --arg holder "$restore_backup_holder" \
-      --arg artifact "$restore_backup_artifact" '
-      .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
-      and .metadata.uid == $uid and .spec.holderIdentity == $holder
-      and .metadata.annotations["recipe-db/operation"] == "restore"
-      and .metadata.annotations["recipe-db/release"] == $artifact
-      and .metadata.annotations["recipe-db/phase"] == "awaiting-signoff"
-    ' <<< "$current" > /dev/null; then
-      return 0
-    fi
-    status=maintenance-failed
-    phase=maintenance-pending
-  else
-    phase=$(jq -r '.phase // "capture"' "$restore_backup_state_path")
-    case "$phase" in
-      upload-pending)
-        status=upload-failed
-        phase=upload-pending
-        ;;
-      maintenance-pending)
-        status=maintenance-failed
-        phase=maintenance-pending
-        ;;
-      *)
-        status=capture-failed
-        phase=capture
-        ;;
-    esac
-  fi
-  restore_backup_progress "$status" "$phase" "$backup_id" operation-failed || return 1
-  restore_backup_set_lease_phase "restore-backup-$status"
 }
 
 restore_backup_verify_pending_reads() {

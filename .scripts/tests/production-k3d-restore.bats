@@ -1184,6 +1184,41 @@ PY
   [ "$changed_hash" != "$workstation_hash" ]
 }
 
+@test "restore identity accepts mapped Pi secret paths but still binds config and storage" {
+  source .scripts/lib/production-config.sh
+  cat > "$FIXTURE_ROOT/saved-config.json" << 'JSON'
+{"origin":"https://recipe.example.org","secrets":{"auth-accounts.json":"/workstation/accounts.json"}}
+JSON
+  cat > "$FIXTURE_ROOT/pi-config.json" << 'JSON'
+{"origin":"https://recipe.example.org","secrets":{"auth-accounts.json":"/etc/recipe-db/application-inputs/accounts.json"}}
+JSON
+  local raw_hash normalized_hash
+  raw_hash=$(sha256sum "$FIXTURE_ROOT/saved-config.json" | cut -d ' ' -f 1)
+  normalized_hash=$(production_backup_config_sha256 "$FIXTURE_ROOT/saved-config.json")
+  jq -n --arg config "$raw_hash" --arg normalized "$normalized_hash" '
+    {configSha256:$config,backupConfigSha256:$normalized,
+      restoreIdentity:{configSha256:$config,namespaceUid:"namespace-uid",
+        volumes:[{name:"recipes",uid:"pvc-uid"}]}}
+  ' > "$FIXTURE_ROOT/saved-restore.json"
+  jq --arg config "$(sha256sum "$FIXTURE_ROOT/pi-config.json" | cut -d ' ' -f 1)" '
+    {configSha256:$config,namespaceUid:"namespace-uid",
+      volumes:[{name:"recipes",uid:"pvc-uid"}]}
+  ' "$FIXTURE_ROOT/saved-restore.json" > "$FIXTURE_ROOT/actual-identity.json"
+
+  production_restore_identity_matches "$FIXTURE_ROOT/saved-restore.json" \
+    "$FIXTURE_ROOT/actual-identity.json" "$FIXTURE_ROOT/pi-config.json"
+  jq '.restoreIdentity.volumes[0].uid="replacement-pvc"' "$FIXTURE_ROOT/saved-restore.json" \
+    > "$FIXTURE_ROOT/changed-restore.json"
+  run production_restore_identity_matches "$FIXTURE_ROOT/changed-restore.json" \
+    "$FIXTURE_ROOT/actual-identity.json" "$FIXTURE_ROOT/pi-config.json"
+  [ "$status" -ne 0 ]
+  jq '.origin="http://recipe.example.org"' "$FIXTURE_ROOT/pi-config.json" \
+    > "$FIXTURE_ROOT/changed-config.json"
+  run production_restore_identity_matches "$FIXTURE_ROOT/saved-restore.json" \
+    "$FIXTURE_ROOT/actual-identity.json" "$FIXTURE_ROOT/changed-config.json"
+  [ "$status" -ne 0 ]
+}
+
 @test "restore-owned capture compares installed inputs with restored credentials" {
   cp "$BATS_TEST_DIRNAME/../lib/production-restore-backup.sh" .scripts/lib/
   mkdir -m 700 "$FIXTURE_ROOT/operator-inputs" "$FIXTURE_ROOT/input-work"
@@ -1313,21 +1348,24 @@ CONFIG
     printf '%s\n' 'wrong-release-reference' > "$FIXTURE_ROOT/etc/backup-release-ref"
   fi
   config_sha=$(production_backup_config_sha256 "$FIXTURE_ROOT/work/config.json")
+  raw_config_sha=$(sha256sum "$FIXTURE_ROOT/work/config.json" | cut -d ' ' -f 1)
   restore_id=backup-20261101120000-1
   holder=restore-holder
   lease_uid=lease-uid-1
-  restore_identity='{"namespace":"recipe-db","pvcs":[]}'
+  restore_identity=$(jq -cn --arg config "$raw_config_sha" \
+    '{configSha256:$config,namespace:"recipe-db",pvcs:[]}')
   mkdir -m 700 -p "$FIXTURE_ROOT/capture-work/restore-captures/$restore_id"
   jq -n --arg id "$restore_id" --arg holder "$holder" --arg uid "$lease_uid" \
     '{format:"recipe-db-restore-capture",formatVersion:1,restoreBackupId:$id,
       restoreHolder:$holder,restoreLeaseUid:$uid,status:"capture",phase:"capture"}' \
     > "$FIXTURE_ROOT/capture-work/restore-captures/$restore_id/restore-capture-state.json"
   jq -n --arg id "$restore_id" --arg holder "$holder" --arg uid "$lease_uid" \
-    --arg configSha "$config_sha" --arg artifact "$ARTIFACT" --arg revision "$MOCK_REVISION" \
+    --arg configSha "$raw_config_sha" --arg backupConfigSha "$config_sha" \
+    --arg artifact "$ARTIFACT" --arg revision "$MOCK_REVISION" \
     --argjson identity "$restore_identity" '
     {version:1,backupId:$id,holder:$holder,leaseUid:$uid,status:"awaiting-signoff",
       phase:"pending-signoff",target:"pi",cluster:"recipe-db-pi",context:"explicit-pi",
-      namespace:"recipe-db",backupConfigSha256:$configSha,artifact:$artifact,
+      namespace:"recipe-db",configSha256:$configSha,backupConfigSha256:$backupConfigSha,artifact:$artifact,
       revision:$revision,import:{status:"complete"},readChecks:{status:"passed"},
       writesMayHaveOpened:false,probeRecipeId:null,restoreIdentity:$identity}
   ' > "$FIXTURE_ROOT/restore-state.json"
@@ -1352,7 +1390,7 @@ if [[ ${LEASE_UID_DRIFT:-false} == true ]]; then
   mv "$FIXTURE_ROOT/lease.next" "$FIXTURE_ROOT/lease.json"
 fi
 work="$FIXTURE_ROOT/work"
-command=restore-backup-capture
+command=${PIPELINE_ACTION:-restore-backup-capture}
 target=pi
 cluster=recipe-db-pi
 context=explicit-pi
@@ -1381,13 +1419,29 @@ kube() {
 pull_release() { revision=$MOCK_REVISION; }
 render() { :; }
 restore_backup_verify_inputs() { printf 'verify-inputs\n' >> "$MOCK_LOG.pipeline"; }
-recovery_identity() { printf '%s\n' '{"namespace":"recipe-db","pvcs":[]}' > "$work/reset-identity.json"; }
+recovery_identity() {
+  jq -cn --arg config "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" \
+    '{configSha256:$config,namespace:"recipe-db",pvcs:[]}' > "$work/reset-identity.json"
+}
 cluster_operation_lock_status() { cat "$FIXTURE_ROOT/lease.json"; }
+cluster_operation_lock_kubectl() {
+  case "$1" in
+    replace)
+      cp "${@: -1}" "$FIXTURE_ROOT/lease.json"
+      printf 'lease:%s\n' "$(jq -r '.metadata.annotations["recipe-db/phase"]' "$FIXTURE_ROOT/lease.json")" \
+        >> "$MOCK_LOG.pipeline"
+      ;;
+    *) return 1 ;;
+  esac
+}
 production_storage_preflight() {
   [[ $cluster_operation_lock_holder == restore-holder ]]
   printf 'storage-preflight\n' >> "$MOCK_LOG.pipeline"
 }
-restore_backup_verify_pending_reads() { printf 'reads:%s\n' "$2" >> "$MOCK_LOG.pipeline"; }
+restore_backup_verify_pending_reads() {
+  printf 'reads:%s\n' "$2" >> "$MOCK_LOG.pipeline"
+  [[ ${READS_FAIL:-false} != true ]]
+}
 restore_backup_check_timer() {
   printf 'check-timer\n' >> "$MOCK_LOG.pipeline"
   [[ ${TIMER_ENABLED:-false} != true ]]
@@ -1400,12 +1454,7 @@ restore_backup_prepare_snapshot() {
   mkdir -m 700 "$snapshot"
   printf 'prepare\n' >> "$MOCK_LOG.pipeline"
 }
-restore_backup_set_lease_phase() {
-  jq --arg phase "$1" '.metadata.annotations["recipe-db/phase"]=$phase' \
-    "$FIXTURE_ROOT/lease.json" > "$FIXTURE_ROOT/lease.next"
-  mv "$FIXTURE_ROOT/lease.next" "$FIXTURE_ROOT/lease.json"
-  printf 'lease:%s\n' "$1" >> "$MOCK_LOG.pipeline"
-}
+backup_reblock_graphql() { printf 'reblock-graphql\n' >> "$MOCK_LOG.pipeline"; }
 cluster_operation_lock_update() { printf 'claim:%s\n' "$1" >> "$MOCK_LOG.pipeline"; }
 backup_establish_barrier() { printf 'barrier\n' >> "$MOCK_LOG.pipeline"; }
 backup_start_modes() { printf 'backup-modes\n' >> "$MOCK_LOG.pipeline"; }
@@ -1424,9 +1473,26 @@ restore_backup_record_completion() {
   printf 'completion\n' >> "$MOCK_LOG.pipeline"
   restore_backup_progress complete maintenance "$backup_id"
 }
-restore_backup_capture "$FIXTURE_ROOT/etc/backup-values.yaml" "$FIXTURE_ROOT/uploader.json" \
-  "$restore_backup_state_directory" "$restore_backup_restore_id" "$restore_backup_holder" \
-  lease-uid-1 "CAPTURE-RESTORE-backup-20261101120000-1-restore-holder"
+pipeline_cleanup() {
+  local result=$?
+  if [[ $result -ne 0 && $restore_backup_started == true ]]; then
+    if [[ $command == restore-backup-maintenance-resume &&
+      $restore_backup_current_graphql_mode == maintenance ]]; then
+      backup_reblock_graphql || true
+    fi
+    restore_backup_record_failure || true
+  fi
+}
+trap pipeline_cleanup EXIT
+if [[ $command == restore-backup-capture ]]; then
+  restore_backup_capture "$FIXTURE_ROOT/etc/backup-values.yaml" "$FIXTURE_ROOT/uploader.json" \
+    "$restore_backup_state_directory" "$restore_backup_restore_id" "$restore_backup_holder" \
+    lease-uid-1 "CAPTURE-RESTORE-backup-20261101120000-1-restore-holder"
+else
+  restore_backup_maintenance_resume "$FIXTURE_ROOT/etc/backup-values.yaml" "$FIXTURE_ROOT/uploader.json" \
+    "$restore_backup_state_directory" "$restore_backup_restore_id" "$restore_backup_holder" \
+    lease-uid-1 "RESUME-MAINTENANCE-RESTORE-backup-20261101120000-1-restore-holder"
+fi
 EOF
   chmod 700 capture-pipeline.sh
   run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" bash capture-pipeline.sh
@@ -1475,6 +1541,18 @@ EOF
   [[ $output == *"backup release inputs do not match the retained restored release"* ]]
   run grep -Eq '^storage-preflight$|^check-timer$|^capture:' "$MOCK_LOG.pipeline"
   [ "$status" -ne 0 ]
+
+  run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" bash capture-pipeline.sh
+  [ "$status" -eq 0 ]
+  : > "$MOCK_LOG.pipeline"
+  run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" REUSE_STATE=true \
+    PIPELINE_ACTION=restore-backup-maintenance-resume READS_FAIL=true bash capture-pipeline.sh
+  [ "$status" -ne 0 ]
+  grep -Fxq 'reblock-graphql' "$MOCK_LOG.pipeline"
+  jq -e '.status == "maintenance-failed" and .phase == "maintenance-pending"' \
+    "$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/restore-capture-state.json"
+  jq -e '.metadata.annotations["recipe-db/phase"] == "restore-backup-maintenance-failed"' \
+    "$FIXTURE_ROOT/lease.json"
 
   : > "$MOCK_LOG.pipeline"
   run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" TIMER_ENABLED=true \

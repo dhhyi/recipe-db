@@ -191,11 +191,16 @@ If restore fails, keep the target isolated and follow the [failure-recovery proc
 KUBECONFIG="$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
   mise run production-k3d restore-status "$VALUES" "$STATE"
 HOLDER=$(jq -er .holder "$STATE/restore-state.json")
+```
+
+For a cutover restore, stop here: capturing a Pi backup of the restored release and successfully rehearsing that exact package locally are required before sign-off. Follow the [restore-owned Pi capture and local rehearsal procedure](production-kubernetes.md#restore-owned-pi-capture-and-local-rehearsal). Do not run `restore-reopen` until both steps succeed. For other restores, inspect status and approve reopening only after confirming the intended target, retained Lease, passed read checks and observed maintenance mode:
+
+```sh
 KUBECONFIG="$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
   mise run production-k3d restore-reopen "$VALUES" "$STATE" "OPEN-RESTORE-$BACKUP_ID-$HOLDER"
 ```
 
-Inspect status and approve reopening only after confirming the intended target, retained Lease, passed read checks and observed maintenance mode. If reopening fails or its result is uncertain, inspect status and preserve the state and Lease; do not assume writes stayed blocked or restore the previous backup automatically.
+If reopening fails or its result is uncertain, inspect status and preserve the state and Lease; do not assume writes stayed blocked or restore the previous backup automatically.
 
 Before sign-off, verify reads:
 

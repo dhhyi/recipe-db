@@ -160,7 +160,7 @@ mise run production-k3d --release-sources-from-git restore-status "$VALUES" "$ST
 
 Confirm the saved backup, target, successful read checks, Lease ownership, maintenance mode and public read routes. Then separately approve reopening with the exact saved holder:
 
-If this is the cutover Pi restore and the matching Pi backup inputs are installed, you may capture and rehearse a new Pi backup before sign-off. Follow the [restore-owned Pi capture and local rehearsal procedure](production-kubernetes.md#restore-owned-pi-capture-and-local-rehearsal); it preserves this Lease and keeps writes blocked. Otherwise continue with sign-off only after the remaining acceptance checks.
+For a cutover Pi restore, a backup of the restored release and a successful local rehearsal of that exact package are required before sign-off. Follow the [restore-owned Pi capture and local rehearsal procedure](production-kubernetes.md#restore-owned-pi-capture-and-local-rehearsal); it preserves this Lease and keeps writes blocked. Do not run `restore-reopen` until both have succeeded. For other restores, continue only after the remaining acceptance checks.
 
 ```fish
 set -g HOLDER (jq -er .holder "$STATE/restore-state.json")

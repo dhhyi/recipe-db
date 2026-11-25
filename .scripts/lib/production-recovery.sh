@@ -658,6 +658,9 @@ recovery_validate_pending_restore_handoff() {
   jq -er '.data["restore-state.json"]' "$work/pending-restore-configmap.json" \
     > "$work/pending-restore-state.json" \
     || production_fail "pending restore cluster state is malformed"
+  production_restore_identity_matches "$work/pending-restore-state.json" \
+    "$work/reset-identity.json" "$work/config.json" \
+    || production_fail "pending restore target identity or configuration changed"
   jq -e --arg target "$target" --arg cluster "$cluster" --arg context "$context" \
     --arg ns "$namespace" --slurpfile identity "$work/reset-identity.json" \
     --argjson lease "$lease" '
@@ -670,7 +673,6 @@ recovery_validate_pending_restore_handoff() {
     and .context == $context and .namespace == $ns
     and .import.status == "complete" and .writesMayHaveOpened == false
     and (.backupId | type == "string" and test("^backup-[0-9]{14}-[0-9]+$"))
-    and .restoreIdentity == $identity[0]
     and (.probeRecipeId // null) == null
     and (.migrationRecovery.probeRecipeId // null) == null
     and .holder == $lease.spec.holderIdentity

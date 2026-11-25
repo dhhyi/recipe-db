@@ -52,6 +52,57 @@ restore_backup_progress() {
   mv "$restore_backup_state_path.next" "$restore_backup_state_path"
 }
 
+restore_backup_set_lease_phase() {
+  local phase=$1 current
+  current=$(cluster_operation_lock_status) || return 1
+  jq -e --arg holder "$restore_backup_holder" --arg uid "$restore_backup_lease_uid" \
+    --arg expectedPhase "${restore_backup_current_phase:-}" \
+    --arg artifact "$restore_backup_artifact" '
+    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.uid == $uid and .spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/operation"] == "restore"
+    and .metadata.annotations["recipe-db/release"] == $artifact
+    and ($expectedPhase == "" or .metadata.annotations["recipe-db/phase"] == $expectedPhase)
+    and (.metadata.resourceVersion | type == "string" and length > 0)
+  ' <<< "$current" > /dev/null \
+    || production_fail "restore-owned capture no longer holds the exact expected restore Lease phase"
+  jq --arg phase "$phase" \
+    '.metadata.annotations["recipe-db/phase"]=$phase' <<< "$current" \
+    > "$work/restore-backup-lease.json" || return 1
+  cluster_operation_lock_expected_uid=$restore_backup_lease_uid
+  cluster_operation_lock_kubectl replace -f "$work/restore-backup-lease.json" > /dev/null \
+    || production_fail "restore-owned capture could not update the exact restore Lease"
+  restore_backup_current_phase=$phase
+}
+
+restore_backup_record_failure() {
+  local phase status backup_id
+  backup_id=$(jq -r '.backupId // empty' "$restore_backup_state_path")
+  if jq -e '.status == "complete" and .phase == "maintenance"' \
+    "$restore_backup_state_path" > /dev/null; then
+    status=maintenance-failed
+    phase=maintenance-pending
+  else
+    phase=$(jq -r '.phase // "capture"' "$restore_backup_state_path")
+    case "$phase" in
+      upload-pending)
+        status=upload-failed
+        phase=upload-pending
+        ;;
+      maintenance-pending)
+        status=maintenance-failed
+        phase=maintenance-pending
+        ;;
+      *)
+        status=capture-failed
+        phase=capture
+        ;;
+    esac
+  fi
+  restore_backup_progress "$status" "$phase" "$backup_id" operation-failed || return 1
+  restore_backup_set_lease_phase "restore-backup-$status"
+}
+
 restore_backup_finish_maintenance() {
   local config_file=$1 state_directory=$2
   restore_backup_progress upload-verified maintenance-pending "$backup_id"
@@ -281,6 +332,27 @@ restore_backup_load_operation() {
     || production_fail "restore-owned capture requires the exact verified pending read-only restore"
   restore_backup_artifact=$(jq -er .artifact "$work/restore-backup-state.json")
   restore_backup_revision=$(jq -er .revision "$work/restore-backup-state.json")
+  current_lease=$(cluster_operation_lock_status) \
+    || production_fail "cannot inspect the retained restore Lease"
+  restore_backup_current_phase=$(jq -er '.metadata.annotations["recipe-db/phase"]' \
+    <<< "$current_lease") || production_fail "restore Lease has no saved phase"
+  jq -e --arg holder "$holder" --arg uid "$lease_uid" \
+    --arg artifact "$restore_backup_artifact" '
+    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.uid == $uid and .spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/operation"] == "restore"
+    and .metadata.annotations["recipe-db/release"] == $artifact
+  ' <<< "$current_lease" > /dev/null \
+    || production_fail "the exact pending restore Lease is missing or changed"
+  cluster_operation_lock_holder=$holder
+  lock_holder=$holder
+  locked=true
+  retain_lock=true
+  restore_backup_expected_phase=$(jq -r '.phase' "$restore_backup_state_path")
+  restore_backup_phase_is_allowed "$command" "$restore_backup_expected_phase" \
+    "$restore_backup_current_phase" \
+    || production_fail "restore-owned capture progress or retained Lease phase does not permit this action"
+  restore_backup_started=true
   backup_reference="$(dirname "$config_file")/backup-release-ref"
   [[ -f $backup_reference && ! -L $backup_reference ]] \
     || production_fail "restore-owned capture requires an installed immutable backup release reference"
@@ -296,30 +368,10 @@ restore_backup_load_operation() {
   restore_backup_verify_inputs
   storage_class=$(jq -er .storageClass "$work/config.json")
   recovery_identity || production_fail "cannot verify the restored Pi storage identity"
-  jq -e --slurpfile actual "$work/reset-identity.json" \
-    '.restoreIdentity == $actual[0]' "$work/restore-backup-state.json" > /dev/null \
-    || production_fail "restored Pi namespace, PVC or PV identity changed"
-  current_lease=$(cluster_operation_lock_status) \
-    || production_fail "cannot inspect the retained restore Lease"
-  restore_backup_current_phase=$(jq -er '.metadata.annotations["recipe-db/phase"]' \
-    <<< "$current_lease") || production_fail "restore Lease has no saved phase"
-  jq -e --arg id "$restore_id" --arg holder "$holder" --arg uid "$lease_uid" \
-    --arg artifact "$restore_backup_artifact" '
-    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
-    and .metadata.uid == $uid and .spec.holderIdentity == $holder
-    and .metadata.annotations["recipe-db/operation"] == "restore"
-    and .metadata.annotations["recipe-db/release"] == $artifact
-  ' <<< "$current_lease" > /dev/null \
-    || production_fail "the exact pending restore Lease is missing or changed"
-  cluster_operation_lock_holder=$holder
   cluster_operation_lock_expected_uid=$lease_uid
-  lock_holder=$holder
-  locked=true
-  retain_lock=true
-  restore_backup_expected_phase=$(jq -r '.phase' "$restore_backup_state_path")
-  restore_backup_phase_is_allowed "$command" "$restore_backup_expected_phase" \
-    "$restore_backup_current_phase" \
-    || production_fail "restore-owned capture progress or retained Lease phase does not permit this action"
+  production_restore_identity_matches "$work/restore-backup-state.json" \
+    "$work/reset-identity.json" "$work/config.json" \
+    || production_fail "restored Pi namespace, PVC or PV identity changed"
   if [[ $command == restore-backup-capture ]]; then
     mkdir -m 700 "$work/restore-backup-state"
     cp "$work/restore-backup-state.json" "$work/restore-backup-state/restore-state.json"
@@ -328,10 +380,10 @@ restore_backup_load_operation() {
       || production_fail "restore no longer serves verified read-only traffic"
   elif [[ $command == restore-backup-maintenance-resume &&
     $restore_backup_current_phase == awaiting-signoff ]]; then
+    restore_backup_current_graphql_mode=maintenance
     restore_backup_verify_pending_reads "$config_file" awaiting-signoff \
       "$work/restore-backup-status.json" \
       || production_fail "restore no longer serves verified read-only traffic"
-    restore_backup_current_graphql_mode=maintenance
   elif [[ $command == restore-backup-maintenance-resume ]]; then
     kube get deployments -o json > "$work/restore-backup-current-deployments.json" \
       || production_fail "cannot verify the current blocked restore workloads"
