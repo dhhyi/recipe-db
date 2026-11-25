@@ -292,6 +292,37 @@ elif group == "manifest-size":
         assert not under_limit_output.exists()
     finally:
         module.upload.validate_max_staging_bytes = original_limit_validator
+elif group == "aggregate-staging-limit":
+    case, metadata, archive, projects, manifest = fixture()
+    limit = 256 * 1024**2
+    for item in manifest["inventory"][:2]:
+        item["sizeBytes"] = 140 * 1024**2
+    document = json.loads(metadata.read_bytes())
+    document["snapshotManifest"] = manifest
+    document["contentFingerprint"] = module.upload.content_fingerprint(manifest)
+    write(metadata, module.upload.json_bytes(document))
+    sizes = [item["sizeBytes"] for item in manifest["inventory"]]
+    assert all(size <= limit for size in sizes)
+    assert module.required_staging_bytes(sum(sizes), 0) > limit
+    output = case / "aggregate-over-limit"
+    decompression_started = []
+
+    def reject_if_decompression_starts(*_args, **_kwargs):
+        decompression_started.append(True)
+        raise AssertionError("bundle decompression started before aggregate budget rejection")
+
+    module.bundle_pass = reject_if_decompression_starts
+    try:
+        module.validate(
+            str(metadata), str(archive), str(output), str(projects),
+            "selected-backup", limit
+        )
+    except ValueError as error:
+        assert str(error) == "staging limit exceeded"
+    else:
+        raise AssertionError("accepted an aggregate payload beyond its staging limit")
+    assert not decompression_started
+    assert not output.exists()
 elif group == "identity":
     for key, value in [
         ("format", "other"), ("formatVersion", 2), ("formatVersion", True),
@@ -657,6 +688,10 @@ PY
 
 @test "package staging boundary uses the exact embedded manifest size" {
   package_cases manifest-size
+}
+
+@test "rejects aggregate staging excess before decompressing the package" {
+  package_cases aggregate-staging-limit
 }
 
 @test "backup package rejects corrupt identity, release, hashes and incomplete dataset without retaining staging" {

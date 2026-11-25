@@ -301,9 +301,11 @@ def validate(package_path, archive_path, output_path, projects_path, backup_id,
     manifest, expected = check_manifest(package, archive, backup_id, projects, max_staging_bytes)
     if package_path.name != archive.name.removesuffix(".tar.gz") + ".manifest.json":
         raise ValueError("package manifest name mismatch")
-    manifest_size = bundle_pass(archive, manifest, expected)
     sizes = [size for size in expected.values() if size is not None]
-    ensure_staging_limit(sum(sizes), manifest_size, max_staging_bytes)
+    input_size = sum(sizes)
+    ensure_staging_limit(input_size, 0, max_staging_bytes)
+    manifest_size = bundle_pass(archive, manifest, expected)
+    ensure_staging_limit(input_size, manifest_size, max_staging_bytes)
     required = sum(sizes) + 2 * max(sizes) + MAX_METADATA + 65536
     if shutil.disk_usage(output.parent).free < required:
         raise ValueError("insufficient staging space")
