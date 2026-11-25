@@ -384,7 +384,11 @@ sudo systemctl is-active recipe-db-backup.timer
 sudo jq -er '.maxStagingBytes // 8589934592' /etc/recipe-db/backup.json
 ```
 
+If Lease inspection is unavailable, uploader status preserves the verified-upload proof in `verifiedUpload` and reports a later failure in `restoreCapture.lastAttempt` and the top-level health fields. Treat the attempt as current health; the retained proof is not evidence that the latest check succeeded.
+
 Keep the restore Lease, capture state and barrier. On the **Raspberry Pi POSIX shell**, retry only the upload of the same complete validated snapshot after an upload failure; this never recaptures:
+
+If interruption occurred after the complete snapshot was marked `upload-pending` but before capture progress was advanced, an explicit retry can validate and upload that same snapshot without recapturing. It refuses a missing or incomplete snapshot.
 
 Use the exact `RESTORE_ID`, `RESTORE_HOLDER`, and `RESTORE_LEASE_UID` values transferred for the original capture.
 

@@ -1336,6 +1336,18 @@ EOF
   run restore_backup_phase_is_allowed restore-backup-upload-retry \
     capture restore-backup-capture-failed
   [ "$status" -eq 0 ]
+
+  run restore_backup_phase_is_allowed restore-backup-upload-retry \
+    capture copy-recipes
+  [ "$status" -eq 0 ]
+
+  run restore_backup_phase_is_allowed restore-backup-upload-retry \
+    upload-pending copy-recipes
+  [ "$status" -eq 0 ]
+
+  run restore_backup_phase_is_allowed restore-backup-upload-retry \
+    upload-pending restore-backup-capture-failed
+  [ "$status" -eq 0 ]
 }
 
 @test "restore capture retry verifies reads against its retained Lease failure phase" {
@@ -1794,7 +1806,7 @@ EOF
   chmod 700 "$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/snapshot"
   printf '{"stateDirectory":"%s"}\n' "$FIXTURE_ROOT/capture-work" > "$FIXTURE_ROOT/uploader.json"
   cat > "$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/restore-capture-state.json" << 'EOF'
-{"format":"recipe-db-restore-capture","formatVersion":1,"restoreBackupId":"backup-20261101120000-1","restoreHolder":"restore-holder","restoreLeaseUid":"lease-uid-1","status":"capture-failed","phase":"capture"}
+{"format":"recipe-db-restore-capture","formatVersion":1,"restoreBackupId":"backup-20261101120000-1","restoreHolder":"restore-holder","restoreLeaseUid":"lease-uid-1","status":"in-progress","phase":"capture"}
 EOF
   cat > "$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/snapshot/backup-state.json" << 'EOF'
 {"backupId":"backup-20261101120100-2","status":"backup-mode","phase":"upload-pending","restoreOperation":{"backupId":"backup-20261101120000-1","holder":"restore-holder","leaseUid":"lease-uid-1"}}
@@ -1812,7 +1824,7 @@ command=restore-backup-upload-retry
 restore_backup_load_operation() {
   if [[ $command == restore-backup-upload-retry ]]; then
     restore_backup_expected_phase=$(jq -er .phase "$restore_backup_state_directory/restore-capture-state.json")
-    restore_backup_current_phase=restore-backup-capture-failed
+    restore_backup_current_phase=copy-recipes
     restore_backup_phase_is_allowed "$command" "$restore_backup_expected_phase" \
       "$restore_backup_current_phase" || return 1
   fi

@@ -265,9 +265,12 @@ restore_backup_phase_is_allowed() {
     restore-backup-capture:capture:awaiting-signoff | \
       restore-backup-capture:capture:restore-backup-capture-failed | \
       restore-backup-upload-retry:upload-pending:restore-backup-upload-failed | \
+      restore-backup-upload-retry:upload-pending:restore-backup-capture-failed | \
       restore-backup-upload-retry:capture:restore-backup-upload-pending | \
       restore-backup-upload-retry:capture:restore-backup-capture-failed | \
+      restore-backup-upload-retry:capture:copy-* | \
       restore-backup-upload-retry:upload-pending:restore-backup-upload-pending | \
+      restore-backup-upload-retry:upload-pending:copy-* | \
       restore-backup-maintenance-resume:maintenance-pending:restore-backup-maintenance-failed | \
       restore-backup-maintenance-resume:maintenance-pending:restore-backup-maintenance-pending | \
       restore-backup-maintenance-resume:maintenance-pending:restore-backup-upload-pending | \

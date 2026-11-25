@@ -581,6 +581,15 @@ def write_status(config, status, code, backup_id=None, last_upload=None):
         "backupId": backup_id,
     }
     atomic_json(path, value)
+    if status == "verified-upload":
+        attempt_path = path.with_name("maintenance-attempt.json")
+        try:
+            attempt = read_json(attempt_path)
+            if isinstance(attempt, dict) and attempt.get("backupId") == backup_id \
+                    and attempt.get("restoreBackupId") is not None:
+                attempt_path.unlink()
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
     return value
 
 
@@ -1398,6 +1407,7 @@ def run_restore_capture_action(config, action, restore_id, holder, lease_uid, co
             ("upload-pending", "upload-pending"),
             ("upload-failed", "upload-pending"),
             ("in-progress", "upload-pending"),
+            ("in-progress", "capture"),
             ("capture-failed", "capture"),
         }
     else:
@@ -1437,6 +1447,7 @@ def run_restore_capture_action(config, action, restore_id, holder, lease_uid, co
             status = state.get("status", "failed")
             if status == "in-progress":
                 status = {
+                    "capture": "capture-failed" if action == "restore-upload-retry" else "failed",
                     "upload-pending": "upload-failed",
                     "maintenance-pending": "maintenance-failed",
                 }.get(phase, "failed")
@@ -1625,6 +1636,39 @@ def attach_restore_capture_status(config, value):
     return value
 
 
+def attach_restore_capture_attempt(config, value, verified_upload):
+    capture = value.get("restoreCapture")
+    if not isinstance(capture, dict) or (capture.get("status"), capture.get("phase")) != (
+            "complete", "maintenance") \
+            or capture.get("backupId") != verified_upload.get("backupId"):
+        return value
+    try:
+        attempt = read_json(status_path(config).with_name("maintenance-attempt.json"))
+        if not isinstance(attempt, dict) or attempt.get("backupId") != verified_upload.get("backupId") \
+                or attempt.get("restoreBackupId") != capture.get("restoreBackupId") \
+                or not isinstance(attempt.get("status"), str) \
+                or not isinstance(attempt.get("code"), str):
+            return value
+        attempt_time = validate_timestamp(attempt["lastCheck"])
+        verified_time = validate_timestamp(verified_upload["lastCheck"])
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return value
+    if attempt_time < verified_time:
+        return value
+    value["verifiedUpload"] = verified_upload
+    capture["lastAttempt"] = {
+        key: attempt[key] for key in ("status", "code", "lastCheck", "backupId")
+    }
+    if datetime.now(timezone.utc) - attempt_time > timedelta(hours=26):
+        value["status"] = "overdue"
+        value["code"] = "check-overdue"
+    else:
+        value["status"] = attempt["status"]
+        value["code"] = attempt["code"]
+    value["lastCheck"] = attempt["lastCheck"]
+    return value
+
+
 def report_status(config):
     path = status_path(config)
     try:
@@ -1644,6 +1688,12 @@ def report_status(config):
             "maintenanceActive": maintenance_active(config),
             "migrationRecoveryCloseoutVersion": 1,
         })
+    verified_upload = None
+    if value.get("status") == "verified-upload":
+        verified_upload = {
+            key: value.get(key) for key in
+            ("status", "code", "lastCheck", "lastUpload", "backupId")
+        }
     if not value.get("lastCheck"):
         value["status"] = "overdue"
         value["code"] = "no-check-record"
@@ -1667,6 +1717,8 @@ def report_status(config):
                 value.update({key: attempt[key] for key in ("status", "code", "lastCheck")})
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
             pass
+    elif verified_upload is not None:
+        value = attach_restore_capture_attempt(config, value, verified_upload)
     value["migrationRecoveryCloseoutVersion"] = 1
     return value
 
