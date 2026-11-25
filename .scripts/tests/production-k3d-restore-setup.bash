@@ -38,10 +38,14 @@ import json, os, pathlib, shutil, sys
 if os.environ.get("MOCK_RESTORE_PACKAGE_FAIL") == "true":
     print("production: package validation failed", file=sys.stderr)
     sys.exit(1)
-manifest, archive, output, projects, expected = sys.argv[1:]
+manifest, archive, output, projects, expected = sys.argv[1:6]
+max_staging_bytes = sys.argv[6] if len(sys.argv) > 6 else "8589934592"
 package = json.loads(pathlib.Path(manifest).read_text())
 assert package["backupId"] == expected
 assert pathlib.Path(archive).is_file() and pathlib.Path(projects).is_file()
+pathlib.Path(os.environ["FIXTURE_ROOT"], "package-validation-limit").write_text(max_staging_bytes)
+with pathlib.Path(os.environ["FIXTURE_ROOT"], "package-validation-limits").open("a") as limits:
+    limits.write(max_staging_bytes + "\n")
 pathlib.Path(output).mkdir()
 for item in package["inventory"]:
     shutil.copy(pathlib.Path(manifest).parent / item["archive"], pathlib.Path(output) / item["archive"])
@@ -140,8 +144,11 @@ pi_https_restore_values() {
 }
 
 run_restore() {
+  local max_staging_bytes=${1:-}
+  local arguments=()
+  [[ -z $max_staging_bytes ]] || arguments+=("$max_staging_bytes")
   run bash .scripts/production-k3d.sh restore "$VALUES" "$RESTORE_MANIFEST" \
-    "$RESTORE_ARCHIVE" "$RESTORE_ID" "$RESTORE_STATE" "RESTORE-$RESTORE_ID"
+    "$RESTORE_ARCHIVE" "$RESTORE_ID" "$RESTORE_STATE" "RESTORE-$RESTORE_ID" "${arguments[@]}"
 }
 
 restore_real_package_fixture() {

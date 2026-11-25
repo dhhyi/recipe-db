@@ -70,8 +70,8 @@ case "$command" in
   release-backup-verify) [[ $# = 4 ]] || production_fail "release-backup-verify requires the maintenance state directory, candidate artifact, verified-upload status and UPLOADED-<backup-id>-verified-upload confirmation" ;;
   release-accept) [[ $# = 3 ]] || production_fail "release-accept requires the maintenance state directory, candidate artifact and ACCEPT-<holder> confirmation" ;;
   release-finalize) [[ $# = 4 ]] || production_fail "release-finalize requires the maintenance state directory, candidate artifact, sequential GitHub release tag and PUBLISHED-<holder>-<tag> confirmation" ;;
-  restore) [[ $# = 5 ]] || production_fail "restore requires absolute package manifest, archive, expected backup ID, new absolute state directory and RESTORE-<backup-id> confirmation" ;;
-  cutover-restore) [[ $# = 7 ]] || production_fail "cutover-restore requires absolute package manifest, archive, expected backup ID, new absolute state directory, immutable cutover release artifact, new absolute snapshot directory and CUTOVER-RESTORE-<backup-id> confirmation" ;;
+  restore) [[ $# = 5 || $# = 6 ]] || production_fail "restore requires absolute package manifest, archive, expected backup ID, new absolute state directory and RESTORE-<backup-id> confirmation, with an optional configured staging limit" ;;
+  cutover-restore) [[ $# = 8 ]] || production_fail "cutover-restore requires absolute package manifest, archive, expected backup ID, new absolute state directory, immutable cutover release artifact, new absolute snapshot directory, CUTOVER-RESTORE-<backup-id> confirmation and configured staging limit" ;;
   restore-status) [[ $# = 1 ]] || production_fail "restore-status requires the absolute retained restore state directory" ;;
   restore-recheck) [[ $# = 2 ]] || production_fail "restore-recheck requires the absolute retained restore state directory and RECHECK-RESTORE-<backup-id> confirmation" ;;
   restore-reopen) [[ $# = 2 ]] || production_fail "restore-reopen requires the absolute retained restore state directory and OPEN-RESTORE-<backup-id>-<holder> confirmation" ;;
@@ -5002,10 +5002,10 @@ case "$command" in
     maintenance_restore "$1"
     ;;
   restore)
-    restore_run "$1" "$2" "$3" "$4" "$5"
+    restore_run "$1" "$2" "$3" "$4" "$5" standalone '' '' "${6:-}"
     ;;
   cutover-restore)
-    restore_run "$1" "$2" "$3" "$4" "$7" cutover "$5" "$6"
+    restore_run "$1" "$2" "$3" "$4" "$7" cutover "$5" "$6" "$8"
     ;;
   restore-status)
     restore_status "$1"

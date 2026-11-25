@@ -38,9 +38,29 @@ def private_file(value, limit):
     path = upload.absolute_path(value)
     info = path.lstat()
     if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 \
-            or info.st_uid != os.geteuid() or info.st_nlink != 1 or info.st_size > limit:
+            or info.st_uid != os.geteuid() or info.st_nlink != 1:
         raise ValueError("input must be a bounded private regular file")
+    ensure_within_limit(info.st_size, limit, "input exceeds staging limit")
     return path
+
+
+def ensure_within_limit(size, limit, message):
+    try:
+        upload.validate_staging_size(size, limit)
+    except ValueError:
+        raise ValueError(message)
+
+
+def required_staging_bytes(input_size, manifest_size):
+    return input_size * 2 + manifest_size * 3 + input_size // 100 + 1024 * 1024
+
+
+def ensure_staging_limit(input_size, manifest_size, max_staging_bytes):
+    ensure_within_limit(
+        required_staging_bytes(input_size, manifest_size),
+        max_staging_bytes,
+        "staging limit exceeded",
+    )
 
 
 def parse_json(content):
@@ -80,7 +100,7 @@ def projects_from(path):
     return expected
 
 
-def check_manifest(package, archive, backup_id, projects):
+def check_manifest(package, archive, backup_id, projects, max_staging_bytes):
     if not isinstance(package, dict) or package.get("format") != upload.PACKAGE_FORMAT \
             or type(package.get("formatVersion")) is not int or package["formatVersion"] != 1:
         raise ValueError("unsupported package format")
@@ -95,10 +115,11 @@ def check_manifest(package, archive, backup_id, projects):
     if not isinstance(identity, dict) or identity.get("name") != name or archive.name != name:
         raise ValueError("archive name mismatch")
     size, digest = identity.get("sizeBytes"), identity.get("sha256")
-    if type(size) is not int or not 0 < size <= MAX_BYTES or size != archive.stat().st_size \
+    if type(size) is not int or not 0 < size or size != archive.stat().st_size \
             or not isinstance(digest, str) or not upload.HASH_PATTERN.fullmatch(digest) \
             or upload.file_hash(archive) != digest:
         raise ValueError("archive size or checksum mismatch")
+    ensure_within_limit(size, max_staging_bytes, "archive size or checksum mismatch")
     manifest = package.get("snapshotManifest")
     if not isinstance(manifest, dict) or manifest.get("format") != upload.FORMAT \
             or type(manifest.get("formatVersion")) is not int or manifest["formatVersion"] != 1 \
@@ -128,8 +149,9 @@ def check_manifest(package, archive, backup_id, projects):
         claims.add(claim)
         name, size = item["archive"], item["sizeBytes"]
         if name != service + ".tar" \
-                or name in expected or type(size) is not int or not 0 < size <= MAX_BYTES:
+                or name in expected or type(size) is not int or not 0 < size:
             raise ValueError("invalid snapshot archive")
+        ensure_within_limit(size, max_staging_bytes, "invalid snapshot archive")
         files = item["files"]
         if not isinstance(files, list) or type(item["fileCount"]) is not int or len(files) != item["fileCount"]:
             raise ValueError("invalid file inventory")
@@ -141,9 +163,6 @@ def check_manifest(package, archive, backup_id, projects):
         raise ValueError("incomplete authoritative dataset")
     if upload.content_fingerprint(manifest) != package.get("contentFingerprint"):
         raise ValueError("content fingerprint mismatch")
-    sizes = [size for size in expected.values() if size is not None]
-    if sum(sizes) + 2 * max(sizes) + archive.stat().st_size + MAX_METADATA + 65536 > MAX_BYTES:
-        raise ValueError("staging limit exceeded")
     return manifest, expected
 
 
@@ -163,6 +182,7 @@ class BoundedReader:
 
 def bundle_pass(archive, manifest, expected, output=None):
     seen = set()
+    manifest_size = None
     limit = sum(size or 0 for size in expected.values()) + MAX_METADATA + 1024 * len(expected) + 1024 * 1024
     with gzip.open(archive, "rb") as compressed:
         bounded = BoundedReader(compressed, limit)
@@ -180,6 +200,7 @@ def bundle_pass(archive, manifest, expected, output=None):
                     raise ValueError("package member size mismatch")
                 stream = bundle.extractfile(member)
                 if name == "manifest.json":
+                    manifest_size = member.size
                     content = stream.read(MAX_METADATA + 1)
                     if len(content) != member.size or parse_json(content) != manifest:
                         raise ValueError("embedded snapshot manifest differs")
@@ -204,9 +225,10 @@ def bundle_pass(archive, manifest, expected, output=None):
                 raise ValueError("unexpected trailing package data")
     if seen != set(expected):
         raise ValueError("incomplete package")
+    return manifest_size
 
 
-def check_inner_bounds(archive):
+def check_inner_bounds(archive, max_staging_bytes=MAX_BYTES):
     names = set()
     total = 0
     files = 0
@@ -251,7 +273,7 @@ def check_inner_bounds(archive):
                 if files > MAX_FILES:
                     raise ValueError("too many archive files")
                 total += member.size
-                if total > MAX_BYTES or member.size < 0:
+                if total > max_staging_bytes or member.size < 0:
                     raise ValueError("snapshot content limit exceeded")
             else:
                 raise ValueError("unsafe snapshot member")
@@ -260,9 +282,14 @@ def check_inner_bounds(archive):
                 raise ValueError("unexpected trailing snapshot data")
 
 
-def validate(package_path, archive_path, output_path, projects_path, backup_id):
+def validate(package_path, archive_path, output_path, projects_path, backup_id,
+             max_staging_bytes=None):
+    if max_staging_bytes is None:
+        max_staging_bytes = MAX_BYTES
+    else:
+        max_staging_bytes = upload.validate_max_staging_bytes(max_staging_bytes)
     package_path = private_file(package_path, MAX_METADATA)
-    archive = private_file(archive_path, MAX_BYTES)
+    archive = private_file(archive_path, max_staging_bytes)
     projects_path = private_file(projects_path, MAX_METADATA)
     output = upload.absolute_path(output_path)
     parent = output.parent.stat()
@@ -271,11 +298,12 @@ def validate(package_path, archive_path, output_path, projects_path, backup_id):
         raise ValueError("output must be new inside a private directory")
     package = read_json(package_path)
     projects = projects_from(projects_path)
-    manifest, expected = check_manifest(package, archive, backup_id, projects)
+    manifest, expected = check_manifest(package, archive, backup_id, projects, max_staging_bytes)
     if package_path.name != archive.name.removesuffix(".tar.gz") + ".manifest.json":
         raise ValueError("package manifest name mismatch")
-    bundle_pass(archive, manifest, expected)
+    manifest_size = bundle_pass(archive, manifest, expected)
     sizes = [size for size in expected.values() if size is not None]
+    ensure_staging_limit(sum(sizes), manifest_size, max_staging_bytes)
     required = sum(sizes) + 2 * max(sizes) + MAX_METADATA + 65536
     if shutil.disk_usage(output.parent).free < required:
         raise ValueError("insufficient staging space")
@@ -286,7 +314,7 @@ def validate(package_path, archive_path, output_path, projects_path, backup_id):
         with os.fdopen(descriptor, "wb") as destination:
             destination.write(upload.json_bytes(manifest))
         for item in manifest["inventory"]:
-            check_inner_bounds(output / item["archive"])
+            check_inner_bounds(output / item["archive"], max_staging_bytes)
         validated = upload.validate_snapshot(output)
         for item in validated["inventory"]:
             observed = snapshot.validate(output / item["archive"], include_directories=True)
@@ -304,9 +332,12 @@ def validate(package_path, archive_path, output_path, projects_path, backup_id):
 
 
 def main():
-    if len(sys.argv) != 6:
-        raise ValueError("usage: validate-backup-package.py ABS_PACKAGE_MANIFEST ABS_ARCHIVE ABS_NEW_OUTPUT_DIR ABS_PROJECTS_JSONL EXPECTED_BACKUP_ID")
-    print(json.dumps(validate(*sys.argv[1:]), sort_keys=True))
+    if len(sys.argv) not in (6, 7):
+        raise ValueError("usage: validate-backup-package.py ABS_PACKAGE_MANIFEST ABS_ARCHIVE ABS_NEW_OUTPUT_DIR ABS_PROJECTS_JSONL EXPECTED_BACKUP_ID [MAX_STAGING_BYTES]")
+    arguments = sys.argv[1:]
+    if len(arguments) == 6:
+        arguments[-1] = int(arguments[-1])
+    print(json.dumps(validate(*arguments), sort_keys=True))
 
 
 if __name__ == "__main__":

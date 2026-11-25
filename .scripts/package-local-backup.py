@@ -28,7 +28,8 @@ def private_directory(path, *, create=False):
     return resolved
 
 
-def package(snapshot, output):
+def package(snapshot, output, max_staging_bytes=UPLOAD.DEFAULT_MAX_STAGING_BYTES):
+    max_staging_bytes = UPLOAD.validate_max_staging_bytes(max_staging_bytes)
     snapshot = private_directory(snapshot)
     output_parent = private_directory(Path(output).parent)
     output = output_parent / Path(output).name
@@ -37,16 +38,17 @@ def package(snapshot, output):
     manifest = UPLOAD.validate_snapshot(snapshot)
     private_directory(output, create=True)
     return UPLOAD.create_package(
-        snapshot, output, manifest, "recipe-db-cutover-local", UPLOAD.DEFAULT_MAX_STAGING_BYTES
+        snapshot, output, manifest, "recipe-db-cutover-local", max_staging_bytes
     )
 
 
 if __name__ == "__main__":
     try:
-        if len(sys.argv) != 3:
-            raise ValueError("usage: package-local-backup.py ABS_SNAPSHOT_DIR ABS_NEW_PACKAGE_DIR")
+        if len(sys.argv) not in (3, 4):
+            raise ValueError("usage: package-local-backup.py ABS_SNAPSHOT_DIR ABS_NEW_PACKAGE_DIR [MAX_STAGING_BYTES]")
         import json
-        print(json.dumps(package(sys.argv[1], sys.argv[2]), sort_keys=True))
+        max_staging_bytes = int(sys.argv[3]) if len(sys.argv) == 4 else UPLOAD.DEFAULT_MAX_STAGING_BYTES
+        print(json.dumps(package(sys.argv[1], sys.argv[2], max_staging_bytes), sort_keys=True))
     except (OSError, ValueError, KeyError, TypeError, UPLOAD.BackupError) as error:
         print(f"production: local backup packaging failed: {error}", file=sys.stderr)
         sys.exit(1)

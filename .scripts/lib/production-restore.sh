@@ -3,6 +3,12 @@
 # SC2016: GraphQL variables and remote shell expressions must stay literal.
 # shellcheck disable=SC2034,SC2154,SC2016
 
+restore_validate_staging_limit() {
+  local value=$1
+  [[ $value =~ ^[0-9]+$ ]] \
+    && ((10#$value >= 268435456 && 10#$value <= 107374182400))
+}
+
 restore_ingress_values() {
   local service_type=LoadBalancer
   yq -o=json -I=0 'select(.kind == "HelmChartConfig" and .metadata.name == "traefik" and
@@ -1596,11 +1602,13 @@ restore_import() {
     }
     jq -e --slurpfile source "$work/source-$name-metadata.json" \
       '. as $actual
+        | ($actual.directories | reduce .[] as $path ({}; .[$path] = true)) as $actual_directories
+        | ($actual.directoryMetadata
+          | reduce .[] as $item ({}; .[$item.path] = $item)) as $actual_directory_metadata
         | ($actual.fileMetadata == $source[0].fileMetadata)
-        and (all($source[0].directories[]; . as $path |
-          any($actual.directories[]; . == $path)))
+        and (all($source[0].directories[]; $actual_directories[.] == true))
         and (all($source[0].directoryMetadata[] | select(.path != "."); . as $expected |
-          any($actual.directoryMetadata[]; . == $expected)))
+          $actual_directory_metadata[$expected.path] == $expected))
         and (if any($source[0].directoryMetadata[]; .path == ".")
           then ([$actual.directoryMetadata[] | select(.path == ".")]
             == [$source[0].directoryMetadata[] | select(.path == ".")])
@@ -2284,12 +2292,16 @@ restore_reopen() {
 restore_run() {
   local manifest=$1 archive=$2 expected=$3 state=$4 confirmation=$5
   local mode=${6:-standalone} recovery_candidate=${7:-} cutover_snapshot=${8:-}
+  local max_staging_bytes=${9:-8589934592}
   local parent key name image_port artifact source_artifact source_revision current source_flag=
   local cutover_revision='' source_validation_dir="$work/source-validated"
   local routes_sha256
   local recovery_state_phase='' recovery_attempt='' recovery_attempts=''
   restore_mode=$mode
   backup_id=$expected
+  restore_validate_staging_limit "$max_staging_bytes" \
+    || production_fail "restore staging limit must match a configured backup limit between 256 MiB and 100 GiB"
+  max_staging_bytes=$((10#$max_staging_bytes))
   restore_migration_candidate=$recovery_candidate
   [[ $expected =~ ^backup-[0-9]{14}-[0-9]+$ ]] \
     || production_fail "restore requires an exact backup identity"
@@ -2316,6 +2328,8 @@ restore_run() {
     cutover)
       [[ $target == local ]] \
         || production_fail "cutover preparation is available only on an isolated local target"
+      RECIPE_DB_BACKUP_MAX_SNAPSHOT_BYTES=$((max_staging_bytes / 2))
+      export RECIPE_DB_BACKUP_MAX_SNAPSHOT_BYTES
       [[ $confirmation == "CUTOVER-RESTORE-$expected" ]] \
         || production_fail "cutover restore requires CUTOVER-RESTORE-<backup-id>"
       [[ $state == /* && ! -e $state && ! -L $state ]] \
@@ -2402,7 +2416,7 @@ restore_run() {
   application_project_metadata_to_jsonl "$release_root" "$work/source-projects.jsonl"
   if [[ $mode == cutover ]]; then
     python3 "$root/.scripts/validate-backup-package.py" "$manifest" "$archive" \
-      "$source_validation_dir" "$work/source-projects.jsonl" "$expected" \
+      "$source_validation_dir" "$work/source-projects.jsonl" "$expected" "$max_staging_bytes" \
       > "$work/source-restore-manifest.json"
     jq -e --arg revision "$source_revision" '.source.revision == $revision' \
       "$work/source-restore-manifest.json" > /dev/null \
@@ -2413,7 +2427,8 @@ restore_run() {
     cutover_revision=$revision
     application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
     python3 "$root/.scripts/validate-backup-package.py" "$manifest" "$archive" \
-      "$work/validated" "$work/projects.jsonl" "$expected" > "$work/restore-manifest.json"
+      "$work/validated" "$work/projects.jsonl" "$expected" "$max_staging_bytes" \
+      > "$work/restore-manifest.json"
     jq -e --slurpfile source "$work/source-restore-manifest.json" '
       . == $source[0]
     ' "$work/restore-manifest.json" > /dev/null \
@@ -2422,7 +2437,8 @@ restore_run() {
   else
     application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
     python3 "$root/.scripts/validate-backup-package.py" "$manifest" "$archive" \
-      "$work/validated" "$work/projects.jsonl" "$expected" > "$work/restore-manifest.json"
+      "$work/validated" "$work/projects.jsonl" "$expected" "$max_staging_bytes" \
+      > "$work/restore-manifest.json"
     artifact=$(jq -er .source.artifact "$work/restore-manifest.json")
     jq -e --arg revision "$source_revision" '.source.revision == $revision' \
       "$work/restore-manifest.json" > /dev/null \

@@ -32,7 +32,7 @@ class AuthenticationError(Exception):
 
 # Execute installed tooling, not a Pi checkout. Only selected metadata leaves the Pi.
 REMOTE = """
-import hashlib, json, runpy, subprocess, sys
+import hashlib, json, re, runpy, subprocess, sys
 try:
     tool = runpy.run_path("/usr/local/sbin/recipe-db-backup-upload")
     config = tool["safe_config"]("/etc/recipe-db/backup.json")
@@ -68,9 +68,11 @@ try:
             "backupId": backup_id, "status": state["status"], "phase": state["phase"],
             "source": state["source"], "capturedAt": state["capturedAt"],
             "uploadStatus": upload_status["status"],
+            "maxStagingBytes": config["maxStagingBytes"],
         }
         if upload_status["status"] == "verified-unchanged":
-            snapshot_manifest = tool["validate_snapshot"](state_path)
+            snapshot_manifest = local_manifest if sys.argv[1] == "maintenance-snapshot" \
+                else tool["validate_snapshot"](state_path)
             fingerprint = tool["content_fingerprint"](snapshot_manifest)
             baseline = tool["read_json"](tool["baseline_path"](config))
             names = tool["remote_names"](config)
@@ -100,20 +102,34 @@ try:
                 }))
                 sys.exit(0)
             if sys.argv[1] == "maintenance-snapshot":
-                if len(sys.argv) != 4 or sys.argv[2] != backup_id:
+                if len(sys.argv) != 5 or sys.argv[2] != backup_id:
                     raise ValueError("requested snapshot does not match the retained maintenance operation")
                 archive_name = sys.argv[3]
+                expected_fingerprint = sys.argv[4]
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*[.]tar", archive_name) \
+                        or not tool["HASH_PATTERN"].fullmatch(expected_fingerprint) \
+                        or expected_fingerprint != fingerprint:
+                    raise ValueError("requested snapshot does not match the validated manifest")
                 item = next((entry for entry in snapshot_manifest["inventory"]
                              if entry.get("archive") == archive_name), None)
-                if item is None:
+                if item is None or type(item.get("sizeBytes")) is not int \
+                        or item["sizeBytes"] <= 0 \
+                        or not isinstance(item.get("sha256"), str) \
+                        or not tool["HASH_PATTERN"].fullmatch(item["sha256"]):
                     raise ValueError("requested snapshot archive is not in the retained operation")
                 archive_path = state_path / archive_name
                 if archive_path.is_symlink() or not archive_path.is_file() \
                         or archive_path.stat().st_size != item["sizeBytes"]:
                     raise ValueError("retained snapshot archive changed")
+                digest = hashlib.sha256()
+                size = 0
                 with open(archive_path, "rb") as stream:
                     while block := stream.read(1024 * 1024):
+                        size += len(block)
+                        digest.update(block)
                         sys.stdout.buffer.write(block)
+                if size != item["sizeBytes"] or digest.hexdigest() != item["sha256"]:
+                    raise ValueError("retained snapshot archive checksum mismatch")
                 sys.exit(0)
             raise ValueError("unchanged maintenance package must be retrieved from the retained snapshot")
         maintenance_operation["packageBackupId"] = backup_id
@@ -310,6 +326,7 @@ def metadata(args):
                 or type(snapshot.get("maxStagingBytes")) is not int \
                 or not 256 * 1024**2 <= snapshot["maxStagingBytes"] <= 100 * 1024**3 \
                 or not isinstance(operation, dict) \
+                or operation.get("maxStagingBytes") != snapshot["maxStagingBytes"] \
                 or not isinstance(operation_id, str) \
                 or not upload["BACKUP_ID_PATTERN"].fullmatch(operation_id) \
                 or not isinstance(baseline_id, str) \
@@ -349,6 +366,10 @@ def metadata(args):
     if args.maintenance:
         operation = document.get("maintenanceOperation")
         upload_status = operation.get("uploadStatus") if isinstance(operation, dict) else None
+        max_staging_bytes = operation.get("maxStagingBytes") if isinstance(operation, dict) else None
+        if type(max_staging_bytes) is not int:
+            raise ValueError("maintenance retrieval has no valid staging limit")
+        upload["validate_max_staging_bytes"](max_staging_bytes)
         operation_identity_valid = isinstance(operation, dict) \
             and operation.get("packageBackupId") == backup_id
         if upload_status == "verified-upload":
@@ -426,7 +447,8 @@ def retrieve_maintenance_snapshot(args, document, destination, directory):
             with os.fdopen(descriptor, "wb") as stream:
                 size, digest = receive(
                     args,
-                    ("maintenance-snapshot", manifest["backupId"], archive_name),
+                    ("maintenance-snapshot", manifest["backupId"], archive_name,
+                     snapshot_metadata["contentFingerprint"]),
                     item["sizeBytes"], stream,
                 )
                 if size != item["sizeBytes"] or digest != item["sha256"]:
@@ -458,7 +480,8 @@ def retrieve_maintenance_snapshot(args, document, destination, directory):
             "maintenanceOperation": {
                 key: operation[key] for key in
                 ("backupId", "packageBackupId", "status", "phase", "source", "capturedAt",
-                 "uploadStatus", "contentFingerprint", "verifiedBaselineBackupId")
+                 "uploadStatus", "maxStagingBytes", "contentFingerprint",
+                 "verifiedBaselineBackupId")
             },
         }
     finally:

@@ -99,6 +99,8 @@ jq -e --arg id "$backup_id" --arg manifest "$input_manifest" --arg archive "$inp
   and .maintenanceOperation.phase == "captured"
   and (.maintenanceOperation.uploadStatus == "verified-upload"
     or .maintenanceOperation.uploadStatus == "verified-unchanged")
+  and (.maintenanceOperation.maxStagingBytes | type == "number" and floor == .
+    and . >= 268435456 and . <= 107374182400)
   and (.maintenanceOperation.capturedAt | type == "string" and length > 0)
   and (.maintenanceOperation.uploadStatus != "verified-upload"
     or (.maintenanceOperation.backupId == $id
@@ -111,6 +113,12 @@ jq -e --arg id "$backup_id" --arg manifest "$input_manifest" --arg archive "$inp
   and .maintenanceOperation.source.artifact == $artifact
   and .maintenanceOperation.source.revision == $revision
 ' "$retrieval_receipt" > /dev/null || fail 'retrieval receipt does not verify this exact final backup'
+max_staging_bytes=$(jq -er '.maintenanceOperation.maxStagingBytes' "$retrieval_receipt")
+archive_size=$(stat -c %s "$input_archive") \
+  || fail 'cannot determine the retrieved archive size'
+if ! [[ $archive_size =~ ^[0-9]+$ ]] || ((10#$archive_size > max_staging_bytes)); then
+  fail 'retrieved archive exceeds the Pi configured staging limit'
+fi
 git -C "$root" cat-file -e "$source_revision^{commit}" 2> /dev/null \
   || fail 'previous release revision is unavailable in this checkout; fetch it before preparation'
 
@@ -399,7 +407,7 @@ run_project_metadata "$private/logs/previous-metadata.log" \
   "$private/previous-source" "$private/previous-projects.jsonl"
 run_active_capture "$private/previous-validation.json" "$private/logs/previous-validation.log" \
   python3 "$root/.scripts/validate-backup-package.py" "$manifest" "$archive" \
-  "$private/previous-validation" "$private/previous-projects.jsonl" "$backup_id"
+  "$private/previous-validation" "$private/previous-projects.jsonl" "$backup_id" "$max_staging_bytes"
 jq -e --arg fingerprint "$(jq -er .contentFingerprint "$manifest")" '
   .maintenanceOperation.uploadStatus != "verified-unchanged"
   or .maintenanceOperation.contentFingerprint == $fingerprint
@@ -425,7 +433,7 @@ run_project_metadata "$private/logs/cutover-metadata.log" \
 run_production "$private/logs/cutover-render.log" render "$source_values" "$candidate"
 run_active_capture "$private/cutover-validation.json" "$private/logs/cutover-validation.log" \
   python3 "$root/.scripts/validate-backup-package.py" "$manifest" "$archive" \
-  "$private/cutover-validation" "$private/cutover-projects.jsonl" "$backup_id"
+  "$private/cutover-validation" "$private/cutover-projects.jsonl" "$backup_id" "$max_staging_bytes"
 jq -e --slurpfile previous "$private/previous-validation.json" '
   .backupId == $previous[0].backupId and .source == $previous[0].source
   and .inventory == $previous[0].inventory
@@ -440,7 +448,7 @@ source_cluster_created=true
 phase=import-final-previous-backup
 run_production "$private/logs/source-restore.log" cutover-restore "$source_values" \
   "$manifest" "$archive" "$backup_id" "$source_state" "$candidate" "$snapshot" \
-  "CUTOVER-RESTORE-$backup_id"
+  "CUTOVER-RESTORE-$backup_id" "$max_staging_bytes"
 phase=verify-cutover-read-checks
 run_production "$private/source-restore-status.json" restore-status "$source_values" "$source_state"
 jq -e '.savedProgress.status == "awaiting-signoff"
@@ -458,14 +466,15 @@ jq -e '.savedProgress.status == "awaiting-signoff"
 
 phase=package-cutover-backup
 run_active_capture "$private/cutover-package.json" "$private/logs/cutover-package.log" \
-  python3 "$root/.scripts/package-local-backup.py" "$snapshot" "$package_directory"
+  python3 "$root/.scripts/package-local-backup.py" "$snapshot" "$package_directory" "$max_staging_bytes"
 cutover_backup_id=$(jq -er '.backupId' "$private/cutover-package.json")
 package_manifest="$package_directory/$(jq -er '.manifest' "$private/cutover-package.json")"
 package_archive="$package_directory/$(jq -er '.archive' "$private/cutover-package.json")"
 run_active_capture "$private/cutover-package-validation.json" \
   "$private/logs/cutover-package-validation.log" \
   python3 "$root/.scripts/validate-backup-package.py" "$package_manifest" "$package_archive" \
-  "$private/cutover-package-validation" "$private/cutover-projects.jsonl" "$cutover_backup_id"
+  "$private/cutover-package-validation" "$private/cutover-projects.jsonl" \
+  "$cutover_backup_id" "$max_staging_bytes"
 
 jq -e --arg artifact "$candidate" --arg cluster "$source_cluster" \
   --arg context "k3d-$source_cluster" --arg revision "$candidate_revision" \
@@ -485,7 +494,7 @@ target_cluster_created=true
 phase=restore-cutover-backup
 run_production "$private/logs/target-restore.log" restore "$target_values" \
   "$package_manifest" "$package_archive" "$cutover_backup_id" "$target_state" \
-  "RESTORE-$cutover_backup_id"
+  "RESTORE-$cutover_backup_id" "$max_staging_bytes"
 phase=verify-restored-read-checks
 run_production "$private/target-restore-status.json" restore-status "$target_values" "$target_state"
 jq -e '.savedProgress.status == "awaiting-signoff"
@@ -515,6 +524,7 @@ maintenance_backup_id=$(jq -er .maintenanceOperation.backupId "$receipt")
 maintenance_captured_at=$(jq -er .maintenanceOperation.capturedAt "$receipt")
 jq -n --arg previousId "$backup_id" --arg previousManifestSha "$source_manifest_sha" \
   --arg previousArchiveSha "$archive_sha" --slurpfile previous "$manifest" \
+  --argjson maxStagingBytes "$max_staging_bytes" \
   --arg verification "$(jq -er .maintenanceOperation.uploadStatus "$receipt")" \
   --arg maintenanceBackupId "$maintenance_backup_id" \
   --arg maintenanceCapturedAt "$maintenance_captured_at" \
@@ -533,7 +543,8 @@ jq -n --arg previousId "$backup_id" --arg previousManifestSha "$source_manifest_
       source:$previous[0].source,
       verifiedUploadStatus:$verification},
     maintenanceOperation:{backupId:$maintenanceBackupId,packageBackupId:$previousId,
-      capturedAt:$maintenanceCapturedAt,uploadStatus:$verification} +
+      capturedAt:$maintenanceCapturedAt,uploadStatus:$verification,
+      maxStagingBytes:$maxStagingBytes} +
       (if $verification == "verified-unchanged" then
         {verifiedBaselineBackupId:$verifiedBaselineBackupId,contentFingerprint:$contentFingerprint}
        else {} end),

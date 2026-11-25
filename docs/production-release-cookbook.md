@@ -32,6 +32,8 @@ For current capabilities and limits, see the [release capability overview](produ
 
 Use this once, after the separately approved Pi operation has blocked writes and verified the final backup of the previous release. Retrieve the final backup and receipt using the existing verified-backup procedure in step 4; the receipt must still report `verified-upload` or `verified-unchanged`. For `verified-unchanged`, retrieval verifies and packages the exact retained snapshot locally; it does not substitute the older remote baseline package. Provenance records the retained operation and the verified baseline identities. Keep the original backup and receipt private and unchanged.
 
+The receipt carries the Pi's configured `maxStagingBytes`. Preparation applies that limit to package validation and packaging, uses half of it as the local snapshot-capture limit, and still checks measured free space. The resulting `provenance.json` preserves the value; pass it as the optional final `MAX_STAGING_BYTES` argument when restoring the prepared package later.
+
 This first cutover assumes the candidate can read the previous release's existing persistent-data formats and storage-version markers unchanged. Do not run migrations during this preparation; if the candidate requires a data-format change, stop and plan that separately.
 
 Run on the workstation from the reviewed checkout in fish. Use a new private result path outside the checkout, operator configuration and runtime storage:

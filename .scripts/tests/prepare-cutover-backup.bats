@@ -98,6 +98,7 @@ receipt = {"backupId":info["backupId"],"manifest":str(package / info["manifest"]
     "archive":str(package / info["archive"]),
     "maintenanceOperation":{"backupId":info["backupId"],"packageBackupId":info["backupId"],
       "status":"captured","phase":"captured",
+      "maxStagingBytes":12884901888,
       "uploadStatus":"verified-upload","capturedAt":captured,"source":{
         "artifact":release,"revision":revision}}}
 (package / "retrieval.json").write_text(json.dumps(receipt))
@@ -237,8 +238,11 @@ fi
 case "$operation" in
   cutover-restore)
     manifest=$1 archive=$2 id=$3 state=$4 candidate=$5 snapshot=$6
+    max_staging_bytes=$8
     jq -n --arg manifest "$manifest" --arg archive "$archive" --arg id "$id" \
-      '{manifest:$manifest,archive:$archive,backupId:$id}' > "$MOCK_LOG.cutover-restore-inputs"
+      --argjson maxStagingBytes "$max_staging_bytes" \
+      '{manifest:$manifest,archive:$archive,backupId:$id,maxStagingBytes:$maxStagingBytes}' \
+      > "$MOCK_LOG.cutover-restore-inputs"
     cluster=$(yq -r '.cluster' "$values")
     context=$(yq -r '.context' "$values")
     source_release=$(jq -r '.source.artifact' "$manifest")
@@ -257,8 +261,11 @@ case "$operation" in
     ;;
   restore)
     manifest=$1 archive=$2 id=$3 state=$4
+    max_staging_bytes=$6
     jq -n --arg manifest "$manifest" --arg archive "$archive" --arg id "$id" \
-      '{manifest:$manifest,archive:$archive,backupId:$id}' > "$MOCK_LOG.restore-inputs"
+      --argjson maxStagingBytes "$max_staging_bytes" \
+      '{manifest:$manifest,archive:$archive,backupId:$id,maxStagingBytes:$maxStagingBytes}' \
+      > "$MOCK_LOG.restore-inputs"
     mkdir -m 700 "$state"
     jq -n --arg id "$id" --arg candidate "$(jq -r .source.artifact "$manifest")" \
       --arg revision "$(jq -r .source.revision "$manifest")" '{
@@ -378,6 +385,10 @@ PY
 }
 
 @test "successful local preparation retains truthful package provenance and removes both clusters" {
+  jq '.maintenanceOperation.maxStagingBytes = 107374182400' \
+    "$RETRIEVAL_RECEIPT" > "$RETRIEVAL_RECEIPT.tmp"
+  chmod 600 "$RETRIEVAL_RECEIPT.tmp"
+  mv "$RETRIEVAL_RECEIPT.tmp" "$RETRIEVAL_RECEIPT"
   run env -u HOME bash .scripts/prepare-cutover-backup-k3d.sh "$INPUT_MANIFEST" "$INPUT_ARCHIVE" \
     "$RETRIEVAL_RECEIPT" "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY"
   if [ "$status" -ne 0 ] && [ -f "$RESULT_DIRECTORY/.private/logs/source-restore.log" ]; then
@@ -416,6 +427,9 @@ assert Path(source_input["manifest"]).parent == result / ".private" / "inputs"
 assert Path(source_input["archive"]).parent == result / ".private" / "inputs"
 provenance = json.loads((result / "provenance.json").read_text())
 assert source_input["backupId"] == provenance["previousBackup"]["backupId"]
+assert source_input["maxStagingBytes"] == 100 * 1024**3
+assert target_input["maxStagingBytes"] == 100 * 1024**3
+assert provenance["maintenanceOperation"]["maxStagingBytes"] == 100 * 1024**3
 assert hashlib.sha256(Path(sys.argv[4]).read_bytes()).hexdigest() == \
     provenance["previousBackup"]["manifestSha256"]
 assert hashlib.sha256(Path(sys.argv[5]).read_bytes()).hexdigest() == \
@@ -466,6 +480,7 @@ PY
     and .maintenanceOperation.contentFingerprint == $fingerprint
   ' "$RESULT_DIRECTORY/provenance.json"
   for filter in \
+    '.maintenanceOperation.maxStagingBytes = 107374182401' \
     '.maintenanceOperation.backupId = "backup-20261102123456-2"' \
     '.maintenanceOperation.capturedAt = "2026-11-02T12:34:56Z"' \
     '.maintenanceOperation.verifiedBaselineBackupId = "invalid-id"' \
@@ -493,6 +508,27 @@ PY
     fi
     [ ! -s "$MOCK_LOG" ]
   done
+}
+
+@test "preflight rejects archive above the retrieved Pi staging limit before copying" {
+  export REAL_STAT
+  REAL_STAT=$(command -v stat)
+  cat > bin/stat << 'SH'
+#!/usr/bin/env bash
+if [[ ${1-} == -c && ${2-} == %s && ${3-} == "$INPUT_ARCHIVE" ]]; then
+  printf '12884901889\n'
+  exit 0
+fi
+exec "$REAL_STAT" "$@"
+SH
+  chmod +x bin/stat
+
+  run bash .scripts/prepare-cutover-backup-k3d.sh "$INPUT_MANIFEST" "$INPUT_ARCHIVE" \
+    "$RETRIEVAL_RECEIPT" "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY"
+  [ "$status" -ne 0 ]
+  [[ $output == *"retrieved archive exceeds the Pi configured staging limit"* ]]
+  [ ! -e "$RESULT_DIRECTORY" ]
+  [ ! -s "$MOCK_LOG" ]
 }
 
 @test "failed second cluster deletion reports partial cleanup and preserves evidence" {

@@ -19,9 +19,11 @@ load production-k3d-restore-setup
   [ "$status" -ne 0 ]
   [[ $output == *"metadata and templates must match"* ]]
   run bash .scripts/production-k3d.sh --release-sources-from-git restore "$VALUES" \
-    "$RESTORE_MANIFEST" "$RESTORE_ARCHIVE" "$RESTORE_ID" "$RESTORE_STATE" "RESTORE-$RESTORE_ID"
+    "$RESTORE_MANIFEST" "$RESTORE_ARCHIVE" "$RESTORE_ID" "$RESTORE_STATE" \
+    "RESTORE-$RESTORE_ID" 12884901888
   [ "$status" -eq 0 ]
   [ "$(git rev-parse HEAD)" = "$tooling_revision" ]
+  [ "$(cat "$FIXTURE_ROOT/package-validation-limit")" = 12884901888 ]
   jq -e '.status == "awaiting-signoff" and .phase == "pending-signoff"
     and .import.status == "complete" and .readChecks.status == "passed"' \
     "$RESTORE_STATE/restore-state.json"
@@ -99,9 +101,10 @@ load production-k3d-restore-setup
   export MOCK_SERVICE_TYPE=ClusterIP
   pi_https_restore_values
   set_value '.timeoutSeconds=1'
-  run_restore
+  run_restore 12884901888
   printf '%s\n' "$output"
   [ "$status" -ne 0 ]
+  [ "$(cat "$FIXTURE_ROOT/package-validation-limit")" = 12884901888 ]
   [[ $output == *"restore ingress is not a safe LoadBalancer"* ]]
   local storage infrastructure inspection contact
   storage=$(awk '/create -f .*retained-storage-class.json/ {print NR; exit}' "$MOCK_LOG")
@@ -267,8 +270,9 @@ load production-k3d-restore-setup
 
   run bash .scripts/production-k3d.sh --release-sources-from-git cutover-restore "$VALUES" \
     "$RESTORE_MANIFEST" "$RESTORE_ARCHIVE" "$RESTORE_ID" "$cutover_state" \
-    "$candidate" "$cutover_snapshot" "CUTOVER-RESTORE-$RESTORE_ID"
+    "$candidate" "$cutover_snapshot" "CUTOVER-RESTORE-$RESTORE_ID" 12884901888
   [ "$status" -eq 0 ]
+  [ "$(cat "$FIXTURE_ROOT/package-validation-limits")" = $'12884901888\n12884901888' ]
   [ "$(sha256sum "$RESTORE_MANIFEST" | cut -d ' ' -f 1)" = "$original_manifest_sha" ]
   [ "$(sha256sum "$RESTORE_ARCHIVE" | cut -d ' ' -f 1)" = "$original_archive_sha" ]
   jq -e --arg candidate "$candidate" --arg revision "$candidate_revision" '
@@ -342,7 +346,7 @@ load production-k3d-restore-setup
 
   run bash .scripts/production-k3d.sh --release-sources-from-git cutover-restore "$VALUES" \
     "$RESTORE_MANIFEST" "$RESTORE_ARCHIVE" "$RESTORE_ID" "$cutover_state" \
-    "$candidate" "$cutover_snapshot" "CUTOVER-RESTORE-$RESTORE_ID"
+    "$candidate" "$cutover_snapshot" "CUTOVER-RESTORE-$RESTORE_ID" 12884901888
   [ "$status" -ne 0 ]
   [[ $output == *"backup source revision differs from the immutable release artifact"* ]]
   [ ! -e "$MOCK_LOG.imported" ]
@@ -1081,7 +1085,7 @@ run_restore_abandon() {
 
 @test "restore full CLI consumes a real packaged opaque snapshot through the real validator with mocked cluster infrastructure" {
   restore_real_package_fixture
-  run_restore
+  run_restore 12884901888
   [ "$status" -eq 0 ]
   jq -e '.status == "awaiting-signoff" and .phase == "pending-signoff"' \
     "$RESTORE_STATE/restore-state.json"
