@@ -275,6 +275,11 @@ case "$operation" in
       > "$state/restore-state.json"
     ;;
   restore-status)
+    printf '[production-k3d] $ bash .scripts/production-k3d.sh restore-status\n' >&2
+    if [[ -n ${MOCK_FAIL_STATUS_SUFFIX:-} && $cluster == *-"$MOCK_FAIL_STATUS_SUFFIX" ]]; then
+      printf 'simulated restore-status diagnostic\n' >&2
+      exit 42
+    fi
     jq -nc --arg bad "$MOCK_BAD_RESTORE_STATUS" '{
       savedProgress:{status:"awaiting-signoff",phase:"pending-signoff",
         writesMayHaveOpened:false,readChecks:{status:"passed"},
@@ -413,6 +418,7 @@ PY
   ' "$RESULT_DIRECTORY/provenance.json"
   [ -f "$INPUT_MANIFEST" ] && [ -f "$INPUT_ARCHIVE" ] && [ -f "$RETRIEVAL_RECEIPT" ]
   [ "$(grep -c '^delete$' "$MOCK_LOG")" -eq 2 ]
+  [ "$(grep -c '^restore-status$' "$MOCK_LOG")" -eq 2 ]
   python3 - "$MOCK_LOG.cutover-restore-inputs" "$MOCK_LOG.restore-inputs" \
     "$RESULT_DIRECTORY" "$INPUT_MANIFEST" "$INPUT_ARCHIVE" << 'PY'
 import hashlib
@@ -600,6 +606,39 @@ SH
   [ -d "$RESULT_DIRECTORY/.private/inputs" ]
   [ -f "$INPUT_MANIFEST" ] && [ -f "$INPUT_ARCHIVE" ] && [ -f "$RETRIEVAL_RECEIPT" ]
   run ! grep -q '^delete$' "$MOCK_LOG"
+}
+
+@test "restore-status separates Mise stderr and retains diagnostics on either failure" {
+  local suffix phase log result_directory
+  for suffix in s t; do
+    export MOCK_FAIL_STATUS_SUFFIX=$suffix
+    result_directory="$RESULT_PARENT/result-status-failure-$suffix"
+    export RESULT_DIRECTORY=$result_directory
+    : > "$MOCK_LOG"
+    run bash .scripts/prepare-cutover-backup-k3d.sh "$INPUT_MANIFEST" "$INPUT_ARCHIVE" \
+      "$RETRIEVAL_RECEIPT" "$CANDIDATE_RELEASE" "$result_directory"
+    [ "$status" -eq 42 ]
+    if [[ $suffix == s ]]; then
+      phase=verify-cutover-read-checks
+      log=source-restore-status
+      jq -e '(.clusters.target.creationAttempted | not) and (.clusters.target.created | not)' \
+        "$result_directory/result.json"
+    else
+      phase=verify-restored-read-checks
+      log=target-restore-status
+      jq -e '.clusters.target.created and (.clusters.target.deleted | not)' \
+        "$result_directory/result.json"
+      jq -e '.savedProgress.readChecks.status == "passed"' \
+        "$result_directory/.private/source-restore-status.json"
+      grep -Fq '[production-k3d] $' "$result_directory/.private/logs/source-restore-status.log"
+    fi
+    jq -e --arg phase "$phase" '.status == "failed" and .phase == $phase
+      and .clusters.source.created and (.clusters.source.deleted | not)
+      and (.clusters.target.deleted | not)' "$result_directory/result.json"
+    grep -Fq '[production-k3d] $' "$result_directory/.private/logs/$log.log"
+    grep -Fq 'simulated restore-status diagnostic' "$result_directory/.private/logs/$log.log"
+    if grep -q '^delete$' "$MOCK_LOG"; then return 1; fi
+  done
 }
 
 @test "failed partial cluster creation is reported as unknown and retained for investigation" {

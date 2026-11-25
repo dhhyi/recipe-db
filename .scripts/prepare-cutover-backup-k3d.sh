@@ -345,6 +345,12 @@ run_production() {
   run_active_command "$log" mise run --raw production-k3d --release-sources-from-git "$@"
 }
 
+run_production_capture() {
+  local output=$1 log=$2
+  shift 2
+  run_active_capture "$output" "$log" mise run --raw production-k3d --release-sources-from-git "$@"
+}
+
 run_cluster_lifecycle() {
   local log=$1
   shift
@@ -450,7 +456,8 @@ run_production "$private/logs/source-restore.log" cutover-restore "$source_value
   "$manifest" "$archive" "$backup_id" "$source_state" "$candidate" "$snapshot" \
   "CUTOVER-RESTORE-$backup_id" "$max_staging_bytes"
 phase=verify-cutover-read-checks
-run_production "$private/source-restore-status.json" restore-status "$source_values" "$source_state"
+run_production_capture "$private/source-restore-status.json" "$private/logs/source-restore-status.log" \
+  restore-status "$source_values" "$source_state"
 jq -e '.savedProgress.status == "awaiting-signoff"
   and .savedProgress.phase == "pending-signoff"
   and .savedProgress.writesMayHaveOpened == false
@@ -496,7 +503,8 @@ run_production "$private/logs/target-restore.log" restore "$target_values" \
   "$package_manifest" "$package_archive" "$cutover_backup_id" "$target_state" \
   "RESTORE-$cutover_backup_id" "$max_staging_bytes"
 phase=verify-restored-read-checks
-run_production "$private/target-restore-status.json" restore-status "$target_values" "$target_state"
+run_production_capture "$private/target-restore-status.json" "$private/logs/target-restore-status.log" \
+  restore-status "$target_values" "$target_state"
 jq -e '.savedProgress.status == "awaiting-signoff"
   and .savedProgress.phase == "pending-signoff"
   and .savedProgress.writesMayHaveOpened == false
