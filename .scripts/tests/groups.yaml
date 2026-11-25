@@ -191,6 +191,9 @@ backup:
 restore:
   tests:
     - .scripts/tests/production-k3d-restore.bats
+    - .scripts/tests/production-k3d-restore-capture.bats
+    - .scripts/tests/production-k3d-restore-safety.bats
+    - .scripts/tests/production-k3d-restore-status.bats
     - .scripts/tests/production-restore.bats
     - .scripts/tests/production-recovery.bats
   suite_inputs:
@@ -199,7 +202,7 @@ restore:
       - .scripts/lib/production-recovery.sh
       - .scripts/lib/production-restore.sh
       - .scripts/lib/production-config.sh
-    .scripts/tests/production-k3d-restore.bats:
+    .scripts/tests/production-k3d-restore.bats: &production-k3d-restore-inputs
       - .scripts/tests/production-k3d-restore-setup.bash
       - .scripts/production-k3d.sh
       - .scripts/lib/release-data-cache.sh
@@ -222,6 +225,9 @@ restore:
       - browse-maintenance/unavailable.html
       - design/nginx.conf
       - package.json
+    .scripts/tests/production-k3d-restore-capture.bats: *production-k3d-restore-inputs
+    .scripts/tests/production-k3d-restore-safety.bats: *production-k3d-restore-inputs
+    .scripts/tests/production-k3d-restore-status.bats: *production-k3d-restore-inputs
     .scripts/tests/production-restore.bats:
       - .scripts/lib/production-restore.sh
       - .scripts/lib/production-config.sh
