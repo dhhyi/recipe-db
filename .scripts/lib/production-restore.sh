@@ -3,6 +3,12 @@
 # SC2016: GraphQL variables and remote shell expressions must stay literal.
 # shellcheck disable=SC2034,SC2154,SC2016
 
+restore_validate_staging_limit() {
+  local value=$1
+  [[ $value =~ ^[0-9]+$ ]] \
+    && ((10#$value >= 268435456 && 10#$value <= 107374182400))
+}
+
 restore_ingress_values() {
   local service_type=LoadBalancer
   yq -o=json -I=0 'select(.kind == "HelmChartConfig" and .metadata.name == "traefik" and
@@ -293,7 +299,7 @@ restore_cleanup() {
     kill "$pid" 2> /dev/null || true
     wait "$pid" 2> /dev/null || true
   done
-  [[ (${command:-} == restore || ${command:-} == recovery-restore ||
+  [[ (${command:-} == restore || ${command:-} == cutover-restore || ${command:-} == recovery-restore ||
     ${command:-} == restore-recheck || ${command:-} == restore-reopen ||
     ${command:-} == release-migration-recover) &&
     $result != 0 && ${restore_started:-false} == true ]] || return 0
@@ -355,7 +361,7 @@ restore_cleanup() {
       fi
     fi
   fi
-  if [[ (${command:-} == restore || ${command:-} == restore-recheck ||
+  if [[ (${command:-} == restore || ${command:-} == cutover-restore || ${command:-} == restore-recheck ||
     ${command:-} == recovery-restore) &&
     ${restore_current_phase:-} == verifying-reads &&
     -f ${restore_state:-}/restore-state.json ]] \
@@ -1548,7 +1554,7 @@ restore_verify_volume_identity() {
 }
 
 restore_import() {
-  local entry name archive pod
+  local entry name archive pod root_uid root_gid root_mode root_mode_octal
   while IFS= read -r entry; do
     name=$(jq -r .service <<< "$entry")
     archive=$(jq -r .archive <<< "$entry")
@@ -1566,16 +1572,49 @@ restore_import() {
     kube exec "$pod" -- sh -ec \
       'entries=$(find /data -mindepth 1 -maxdepth 1 -print -quit) || exit 1; test -z "$entries"' \
       || return 1
+    python3 "$root/.scripts/validate-backup-snapshot.py" --include-metadata \
+      "$work/validated/$archive" > "$work/source-$name-metadata.json" || return 1
+    root_uid=$(jq -r '[.directoryMetadata[] | select(.path == ".")][0].uid // empty' \
+      "$work/source-$name-metadata.json") || return 1
+    if [[ -n $root_uid ]]; then
+      root_gid=$(jq -er '[.directoryMetadata[] | select(.path == ".")][0].gid' \
+        "$work/source-$name-metadata.json") || return 1
+      root_mode=$(jq -er '[.directoryMetadata[] | select(.path == ".")][0].mode' \
+        "$work/source-$name-metadata.json") || return 1
+      printf -v root_mode_octal '%o' "$root_mode"
+    fi
     # Preserve numeric ownership and permission bits from the exact recorded release.
     kube exec -i "$pod" -- tar -xpkf - --numeric-owner -C /data < "$work/validated/$archive" || return 1
+    if [[ -n $root_uid ]]; then
+      kube exec "$pod" -- sh -ec 'chown "$1:$2" /data && chmod "$3" /data' \
+        sh "$root_uid" "$root_gid" "$root_mode_octal" || return 1
+    fi
     kube exec "$pod" -- sync || return 1
     kube exec "$pod" -- tar -C /data -cf - . > "$work/restored-$name.tar" || return 1
-    python3 "$root/.scripts/validate-backup-snapshot.py" "$work/restored-$name.tar" \
+    python3 "$root/.scripts/validate-backup-snapshot.py" --include-metadata \
+      "$work/restored-$name.tar" \
       > "$work/restored-$name-files.json" || return 1
     jq -e --slurpfile actual "$work/restored-$name-files.json" \
-      '(.files | sort_by(.path)) == ($actual[0] | sort_by(.path))' \
+      '(.files | sort_by(.path)) == ($actual[0].files | sort_by(.path))' \
       <<< "$entry" > /dev/null || {
       printf 'production: restored volume verification failed: %s\n' "$name" >&2
+      return 1
+    }
+    jq -e --slurpfile source "$work/source-$name-metadata.json" \
+      '. as $actual
+        | ($actual.directories | reduce .[] as $path ({}; .[$path] = true)) as $actual_directories
+        | ($actual.directoryMetadata
+          | reduce .[] as $item ({}; .[$item.path] = $item)) as $actual_directory_metadata
+        | ($actual.fileMetadata == $source[0].fileMetadata)
+        and (all($source[0].directories[]; $actual_directories[.] == true))
+        and (all($source[0].directoryMetadata[] | select(.path != "."); . as $expected |
+          $actual_directory_metadata[$expected.path] == $expected))
+        and (if any($source[0].directoryMetadata[]; .path == ".")
+          then ([$actual.directoryMetadata[] | select(.path == ".")]
+            == [$source[0].directoryMetadata[] | select(.path == ".")])
+          else true end)' \
+      "$work/restored-$name-files.json" > /dev/null || {
+      printf 'production: restored volume ownership or permissions differ: %s\n' "$name" >&2
       return 1
     }
   done < <(jq -c '.inventory[]' "$work/restore-manifest.json")
@@ -1659,6 +1698,13 @@ restore_reblock_graphql_maintenance() {
   if backup_reblock_graphql; then return 0; fi
   kube scale deployment/graphql --replicas=0 > /dev/null \
     && backup_wait_pods_gone graphql
+}
+
+restore_stop_forward() {
+  [[ -n ${restore_forward_pid:-} ]] || return 0
+  kill "$restore_forward_pid" 2> /dev/null || true
+  wait "$restore_forward_pid" 2> /dev/null || true
+  restore_forward_pid=
 }
 
 restore_forward() {
@@ -2082,7 +2128,8 @@ restore_status() {
       savedProgress:{backupId:$saved.backupId,status:$saved.status,phase:$saved.phase,
         import:($saved.import // null),readChecks:($saved.readChecks // null),
         publicRoutesMayBeOpen:($saved.publicRoutesMayBeOpen // null),
-        writesMayHaveOpened:($saved.writesMayHaveOpened // null)},
+        writesMayHaveOpened:($saved | if has("writesMayHaveOpened")
+          then .writesMayHaveOpened else null end)},
       lease:{present:($currentLease != null),
         holder:($currentLease.spec.holderIdentity // null),
         phase:($currentLease.metadata.annotations["recipe-db/phase"] // null),
@@ -2244,12 +2291,17 @@ restore_reopen() {
 
 restore_run() {
   local manifest=$1 archive=$2 expected=$3 state=$4 confirmation=$5
-  local mode=${6:-standalone} recovery_candidate=${7:-}
+  local mode=${6:-standalone} recovery_candidate=${7:-} cutover_snapshot=${8:-}
+  local max_staging_bytes=${9:-8589934592}
   local parent key name image_port artifact source_artifact source_revision current source_flag=
+  local cutover_revision='' source_validation_dir="$work/source-validated"
   local routes_sha256
   local recovery_state_phase='' recovery_attempt='' recovery_attempts=''
   restore_mode=$mode
   backup_id=$expected
+  restore_validate_staging_limit "$max_staging_bytes" \
+    || production_fail "restore staging limit must match a configured backup limit between 256 MiB and 100 GiB"
+  max_staging_bytes=$((10#$max_staging_bytes))
   restore_migration_candidate=$recovery_candidate
   [[ $expected =~ ^backup-[0-9]{14}-[0-9]+$ ]] \
     || production_fail "restore requires an exact backup identity"
@@ -2272,6 +2324,20 @@ restore_run() {
         || production_fail "restore requires the exact expected backup identity and RESTORE-<backup-id> confirmation"
       [[ $state == /* && ! -e $state && ! -L $state ]] \
         || production_fail "restore state must be a new absolute directory"
+      ;;
+    cutover)
+      [[ $target == local ]] \
+        || production_fail "cutover preparation is available only on an isolated local target"
+      RECIPE_DB_BACKUP_MAX_SNAPSHOT_BYTES=$((max_staging_bytes / 2))
+      export RECIPE_DB_BACKUP_MAX_SNAPSHOT_BYTES
+      [[ $confirmation == "CUTOVER-RESTORE-$expected" ]] \
+        || production_fail "cutover restore requires CUTOVER-RESTORE-<backup-id>"
+      [[ $state == /* && ! -e $state && ! -L $state ]] \
+        || production_fail "cutover restore state must be a new absolute directory"
+      [[ $cutover_snapshot == /* && ! -e $cutover_snapshot && ! -L $cutover_snapshot ]] \
+        || production_fail "cutover snapshot must be a new absolute directory"
+      [[ $recovery_candidate =~ ^ghcr[.]io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}$ ]] \
+        || production_fail "cutover release must be an immutable recipe-db release artifact"
       ;;
     migration-recovery)
       [[ $state == /* && -d $state && ! -L $state && $(realpath -e "$state") == "$state" &&
@@ -2322,7 +2388,7 @@ restore_run() {
   parent=$(dirname "$state")
   [[ -d $parent && $(realpath -e "$parent") == "$parent" ]] \
     || production_fail "restore state parent must exist without symlink traversal"
-  if [[ $mode == standalone ]]; then
+  if [[ $mode == standalone || $mode == cutover ]]; then
     [[ $(basename "$state") =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]] \
       || production_fail "restore state directory name must be a safe token"
   fi
@@ -2346,13 +2412,38 @@ restore_run() {
     restore_expected_graphql
   fi
   pull_release "$source_artifact"
-  application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
-  python3 "$root/.scripts/validate-backup-package.py" "$manifest" "$archive" \
-    "$work/validated" "$work/projects.jsonl" "$expected" > "$work/restore-manifest.json"
-  artifact=$(jq -er .source.artifact "$work/restore-manifest.json")
-  source_revision=$(jq -er .source.revision "$work/restore-manifest.json")
-  [[ $revision == "$source_revision" ]] \
-    || production_fail "backup source revision differs from the immutable release artifact"
+  source_revision=$revision
+  application_project_metadata_to_jsonl "$release_root" "$work/source-projects.jsonl"
+  if [[ $mode == cutover ]]; then
+    python3 "$root/.scripts/validate-backup-package.py" "$manifest" "$archive" \
+      "$source_validation_dir" "$work/source-projects.jsonl" "$expected" "$max_staging_bytes" \
+      > "$work/source-restore-manifest.json"
+    jq -e --arg revision "$source_revision" '.source.revision == $revision' \
+      "$work/source-restore-manifest.json" > /dev/null \
+      || production_fail "backup source revision differs from the immutable release artifact"
+    [[ $source_artifact != "$recovery_candidate" ]] \
+      || production_fail "cutover release must differ from the original backup release"
+    pull_release "$recovery_candidate"
+    cutover_revision=$revision
+    application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
+    python3 "$root/.scripts/validate-backup-package.py" "$manifest" "$archive" \
+      "$work/validated" "$work/projects.jsonl" "$expected" "$max_staging_bytes" \
+      > "$work/restore-manifest.json"
+    jq -e --slurpfile source "$work/source-restore-manifest.json" '
+      . == $source[0]
+    ' "$work/restore-manifest.json" > /dev/null \
+      || production_fail "cutover validation changed the original backup identity or content"
+    artifact=$recovery_candidate
+  else
+    application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
+    python3 "$root/.scripts/validate-backup-package.py" "$manifest" "$archive" \
+      "$work/validated" "$work/projects.jsonl" "$expected" "$max_staging_bytes" \
+      > "$work/restore-manifest.json"
+    artifact=$(jq -er .source.artifact "$work/restore-manifest.json")
+    jq -e --arg revision "$source_revision" '.source.revision == $revision' \
+      "$work/restore-manifest.json" > /dev/null \
+      || production_fail "backup source revision differs from the immutable release artifact"
+  fi
   if [[ $mode == migration-recovery ]]; then
     jq -e --arg id "$expected" --arg target "$target" --arg cluster "$cluster" \
       --arg context "$context" --arg namespace "$namespace" --arg artifact "$artifact" \
@@ -2401,7 +2492,7 @@ restore_run() {
     locked=true
     retain_lock=true
     ensure_namespace
-  elif [[ $mode == standalone ]]; then
+  elif [[ $mode == standalone || $mode == cutover ]]; then
     connect
     lock_holder="restore-$expected-$$"
     cluster_operation_lock_acquire "$lock_holder" restore "$artifact"
@@ -2437,7 +2528,7 @@ restore_run() {
     recovery_stop_workers || production_fail "reset handoff workloads are not stopped"
     recovery_assert_identity
     production_ephemeral_secrets
-  elif [[ $mode == standalone ]]; then
+  elif [[ $mode == standalone || $mode == cutover ]]; then
     restore_fresh_target
     production_ephemeral_secrets
   else
@@ -2458,7 +2549,7 @@ restore_run() {
   annotate_credentials
   if [[ $mode == existing-reset ]]; then
     restore_state=$state
-  elif [[ $mode == standalone ]]; then
+  elif [[ $mode == standalone || $mode == cutover ]]; then
     mkdir -m 700 "$state"
     restore_state=$state
     jq -n --arg backupId "$expected" --arg holder "$lock_holder" --arg target "$target" \
@@ -2470,7 +2561,10 @@ restore_run() {
         restoreMode:"standalone",leaseUid:$leaseUid,routesSha256:$routesSha256,
         writesMayHaveOpened:false,
         publicRoutesMayBeOpen:false,
-        status:"in-progress",phase:"prepared",recovery:"Keep ingress isolated and workers stopped; never merge or overwrite a partial import. Investigate then select a new empty target."}' \
+        status:"in-progress",phase:"prepared",recovery:"Keep ingress isolated and workers stopped; never merge or overwrite a partial import. Investigate then select a new empty target."}
+        + (if $cutover then {cutover:{sourceRelease:$sourceArtifact,sourceRevision:$sourceRevision}} else {} end)' \
+      --arg sourceArtifact "$source_artifact" --arg sourceRevision "$source_revision" \
+      --argjson cutover "$([[ $mode == cutover ]] && echo true || echo false)" \
       > "$state/restore-state.json"
   fi
   if [[ $mode == existing-reset ]]; then
@@ -2487,8 +2581,8 @@ restore_run() {
   restore_started=true
   retain_lock=true
   restore_phase preparing-target
-  if [[ $mode == standalone || $mode == existing-reset ]]; then
-    if [[ $mode == standalone ]]; then ensure_namespace; fi
+  if [[ $mode == standalone || $mode == existing-reset || $mode == cutover ]]; then
+    if [[ $mode == standalone || $mode == cutover ]]; then ensure_namespace; fi
     restore_cluster_state=true
   else
     release_recovery_state_write recovery-required migration-recovery-preflight \
@@ -2541,7 +2635,7 @@ restore_run() {
   fi
   copy_image=$(jq -r '.infrastructure.maintenance' "$work/config.json")
   yq 'select(.kind == "PersistentVolumeClaim")' "$work/rendered.yml" > "$work/restore-claims.yml"
-  if [[ $mode == standalone || $mode == existing-reset ]]; then
+  if [[ $mode == standalone || $mode == existing-reset || $mode == cutover ]]; then
     # Create missing claims only; never replace or resize an operator's existing claim.
     while IFS= read -r name; do
       kube get pvc "$name" --ignore-not-found -o json > "$work/restore-claim.json"
@@ -2678,6 +2772,11 @@ restore_run() {
     || production_fail "cannot durably authorize completed restore guard shutdown"
   restore_guard_check || production_fail "recovery shutdown guard was lost before handoff"
   restore_guard_stop || production_fail "restore is pending sign-off but the recovery guard could not be stopped"
+  if [[ $mode == cutover ]]; then
+    restore_current_phase=cutover-backup-capture
+    snapshot=$cutover_snapshot
+    cutover_capture_snapshot "$state" "$cutover_snapshot" "$artifact" "$cutover_revision"
+  fi
   restore_started=false
   recovery_started=false
   $release_sources_from_git && source_flag="--release-sources-from-git "

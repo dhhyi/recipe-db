@@ -24,6 +24,8 @@ FORMAT = "recipe-db-pvc-snapshot"
 PACKAGE_FORMAT = "recipe-db-backup"
 STATUS_FORMAT = "recipe-db-backup-status"
 DEFAULT_MAX_STAGING_BYTES = 8 * 1024**3
+MIN_MAX_STAGING_BYTES = 256 * 1024**2
+MAX_MAX_STAGING_BYTES = 100 * 1024**3
 MAX_MANIFEST_BYTES = 64 * 1024**2
 MAX_FILES = 100_000
 MAX_DIRECTORIES = 100_000
@@ -108,6 +110,18 @@ def validate_timestamp(value):
     if parsed.tzinfo is None:
         raise ValueError("invalid timestamp")
     return parsed.astimezone(timezone.utc)
+
+
+def validate_max_staging_bytes(value):
+    if type(value) is not int or not MIN_MAX_STAGING_BYTES <= value <= MAX_MAX_STAGING_BYTES:
+        raise ValueError("invalid staging limit")
+    return value
+
+
+def validate_staging_size(size, limit):
+    if type(size) is not int or size < 0 or size > limit:
+        raise ValueError("staging limit exceeded")
+    return size
 
 
 def validate_snapshot(snapshot, require_storage_versions=False, allow_upload_pending=False):
@@ -428,8 +442,7 @@ def safe_config(path):
     if rclone_config.is_symlink() or not rclone_config.is_file() or rclone_config.stat().st_mode & 0o077:
         raise ValueError("rclone configuration must be private")
     config["maxStagingBytes"] = int(config.get("maxStagingBytes", DEFAULT_MAX_STAGING_BYTES))
-    if not 256 * 1024**2 <= config["maxStagingBytes"] <= 100 * 1024**3:
-        raise ValueError("invalid staging limit")
+    validate_max_staging_bytes(config["maxStagingBytes"])
     config["captureTimeoutSeconds"] = int(config.get("captureTimeoutSeconds", 5400))
     if not 60 <= config["captureTimeoutSeconds"] <= 7200:
         raise ValueError("invalid capture timeout")

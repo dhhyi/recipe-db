@@ -12,10 +12,12 @@ MAX_FILES = 100_000
 MAX_DIRECTORIES = 100_000
 
 
-def validate(archive, require_storage_version=False, include_directories=False):
+def validate(archive, require_storage_version=False, include_directories=False,
+             include_metadata=False):
     members = set()
     files = set()
     inventory = []
+    file_metadata = []
     directories = []
     directory_metadata = []
     materialized_directories = set()
@@ -75,6 +77,9 @@ def validate(archive, require_storage_version=False, include_directories=False):
                 if name == "storage-version":
                     marker.extend(block)
             entry = {"path": name, "sizeBytes": size, "sha256": digest.hexdigest()}
+            if include_metadata:
+                file_metadata.append({"path": name, "mode": member.mode,
+                                      "uid": member.uid, "gid": member.gid})
             if name == "storage-version":
                 if not re.fullmatch(rb"[1-9][0-9]*\n", marker):
                     raise ValueError("malformed storage-version marker")
@@ -84,9 +89,12 @@ def validate(archive, require_storage_version=False, include_directories=False):
     if require_storage_version and storage_version is None:
         raise ValueError("missing storage-version marker")
     inventory = sorted(inventory, key=lambda item: item["path"])
-    if include_directories:
-        return {"files": inventory, "directories": sorted(directories),
-                "directoryMetadata": sorted(directory_metadata, key=lambda item: item["path"])}
+    if include_directories or include_metadata:
+        result = {"files": inventory, "directories": sorted(directories),
+                  "directoryMetadata": sorted(directory_metadata, key=lambda item: item["path"])}
+        if include_metadata:
+            result["fileMetadata"] = sorted(file_metadata, key=lambda item: item["path"])
+        return result
     return inventory
 
 
@@ -99,9 +107,13 @@ def main():
     include_directories = "--include-directories" in arguments
     if include_directories:
         arguments.remove("--include-directories")
+    include_metadata = "--include-metadata" in arguments
+    if include_metadata:
+        arguments.remove("--include-metadata")
     if len(arguments) != 1:
-        raise ValueError("usage: validate-backup-snapshot.py [--require-storage-version] [--include-directories] ARCHIVE")
-    print(json.dumps(validate(arguments[0], require_storage_version, include_directories)))
+        raise ValueError("usage: validate-backup-snapshot.py [--require-storage-version] [--include-directories] [--include-metadata] ARCHIVE")
+    print(json.dumps(validate(arguments[0], require_storage_version,
+                              include_directories, include_metadata)))
 
 
 if __name__ == "__main__":

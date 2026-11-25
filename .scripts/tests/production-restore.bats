@@ -1149,14 +1149,14 @@ setup() {
   printf '{"name":"recipes","backupRole":"authoritative-read-only"}\n' > work/projects.jsonl
   printf '{"name":"recipes","uid":"stable-claim"}\n' > work/restore-pvc-identities.jsonl
   python3 - "$FIXTURE_ROOT/work" << 'PY'
-import hashlib, io, json, pathlib, sys, tarfile
+import hashlib, io, json, os, pathlib, sys, tarfile
 root = pathlib.Path(sys.argv[1])
 content = b"\x00opaque volume fixture\n"
 with tarfile.open(root / "validated/recipes.tar", "w") as archive:
     item = tarfile.TarInfo("opaque.bin")
     item.size = len(content)
     item.mode = 0o640
-    item.uid, item.gid = 12345, 23456
+    item.uid, item.gid = os.geteuid(), os.getegid()
     item.uname, item.gname = "root", "root"
     archive.addfile(item, io.BytesIO(content))
 (root / "restore-manifest.json").write_text(json.dumps({"inventory":[{
@@ -1216,15 +1216,18 @@ EOF
   [ "$status" -eq 0 ]
   grep -q 'tar -xpkf - --numeric-owner -C /data' "$MOCK_LOG"
   [ "$(stat -c '%a' data/opaque.bin)" = 640 ]
+  [ "$(stat -c '%u:%g' data/opaque.bin)" = "$(id -u):$(id -g)" ]
   [ -e helper-deleted ]
 }
 
 @test "restore import does not require recorded empty directories" {
   python3 - << 'PY'
-import tarfile
+import os, tarfile
 with tarfile.open("work/validated/recipes.tar", "a") as archive:
     directory = tarfile.TarInfo("empty")
     directory.type = tarfile.DIRTYPE
+    directory.mode = 0o755
+    directory.uid, directory.gid = os.geteuid(), os.getegid()
     archive.addfile(directory)
 PY
   jq '.inventory[0].directories = ["empty", "missing"]' work/restore-manifest.json > work/manifest.next
@@ -1246,12 +1249,15 @@ PY
 
 @test "restore import permits implicit parent directories" {
   python3 - << 'PY'
-import hashlib, io, json, pathlib, tarfile
+import hashlib, io, json, os, pathlib, tarfile
 root = pathlib.Path("work")
 content = b"nested data"
 with tarfile.open(root / "validated/recipes.tar", "w") as archive:
     item = tarfile.TarInfo("nested/opaque.bin")
     item.size = len(content)
+    item.mode = 0o640
+    item.uid, item.gid = os.geteuid(), os.getegid()
+    item.uname = item.gname = "root"
     archive.addfile(item, io.BytesIO(content))
 manifest = json.loads((root / "restore-manifest.json").read_text())
 manifest["inventory"][0]["directories"] = []

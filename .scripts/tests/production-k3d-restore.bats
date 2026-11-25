@@ -19,9 +19,11 @@ load production-k3d-restore-setup
   [ "$status" -ne 0 ]
   [[ $output == *"metadata and templates must match"* ]]
   run bash .scripts/production-k3d.sh --release-sources-from-git restore "$VALUES" \
-    "$RESTORE_MANIFEST" "$RESTORE_ARCHIVE" "$RESTORE_ID" "$RESTORE_STATE" "RESTORE-$RESTORE_ID"
+    "$RESTORE_MANIFEST" "$RESTORE_ARCHIVE" "$RESTORE_ID" "$RESTORE_STATE" \
+    "RESTORE-$RESTORE_ID" 12884901888
   [ "$status" -eq 0 ]
   [ "$(git rev-parse HEAD)" = "$tooling_revision" ]
+  [ "$(cat "$FIXTURE_ROOT/package-validation-limit")" = 12884901888 ]
   jq -e '.status == "awaiting-signoff" and .phase == "pending-signoff"
     and .import.status == "complete" and .readChecks.status == "passed"' \
     "$RESTORE_STATE/restore-state.json"
@@ -99,9 +101,10 @@ load production-k3d-restore-setup
   export MOCK_SERVICE_TYPE=ClusterIP
   pi_https_restore_values
   set_value '.timeoutSeconds=1'
-  run_restore
+  run_restore 12884901888
   printf '%s\n' "$output"
   [ "$status" -ne 0 ]
+  [ "$(cat "$FIXTURE_ROOT/package-validation-limit")" = 12884901888 ]
   [[ $output == *"restore ingress is not a safe LoadBalancer"* ]]
   local storage infrastructure inspection contact
   storage=$(awk '/create -f .*retained-storage-class.json/ {print NR; exit}' "$MOCK_LOG")
@@ -201,6 +204,157 @@ load production-k3d-restore-setup
   run ! grep -q private-restore-token "$MOCK_LOG"
 }
 
+@test "restore rejects file permission changes after import" {
+  restore_fixture
+  export MOCK_RESTORE_METADATA_DRIFT=mode
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"restored volume ownership or permissions differ: recipes"* ]]
+  [ -e "$MOCK_LOG.imported" ]
+  [ ! -e "$RESTORE_STATE/restore-state.json" ] \
+    || ! jq -e '.import.status == "complete"' "$RESTORE_STATE/restore-state.json"
+}
+
+@test "restore rejects numeric ownership changes after import" {
+  restore_fixture
+  export MOCK_RESTORE_METADATA_DRIFT=owner
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"restored volume ownership or permissions differ: recipes"* ]]
+  [ -e "$MOCK_LOG.imported" ]
+  [ ! -e "$RESTORE_STATE/restore-state.json" ] \
+    || ! jq -e '.import.status == "complete"' "$RESTORE_STATE/restore-state.json"
+}
+
+@test "restore rejects a package revision that differs from its immutable source artifact" {
+  restore_fixture
+  printf 'different source artifact revision\n' > source-revision.txt
+  git add -f source-revision.txt
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Different immutable source revision'
+  export MOCK_SOURCE_REVISION
+  MOCK_SOURCE_REVISION=$(git rev-parse HEAD)
+
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"backup source revision differs from the immutable release artifact"* ]]
+  [ ! -e "$MOCK_LOG.imported" ]
+  [ ! -e "$RESTORE_STATE/restore-state.json" ]
+}
+
+@test "cutover restore imports the unchanged backup into candidate volumes and captures that release without opening writes" {
+  restore_fixture
+  export MOCK_CUTOVER_CAPTURE=true
+  export MOCK_BACKUP=true
+  local original_revision original_manifest_sha original_archive_sha candidate candidate_revision path
+  printf '*\n' > .gitignore
+  git add -f .gitignore
+  git add -A
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Clean cutover fixture baseline'
+  original_revision=$(git rev-parse HEAD)
+  candidate="ghcr.io/dhhyi/recipe-db-releases@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  jq --arg revision "$original_revision" '
+    .source += {target:"pi",cluster:"recipe-db-pi",context:"recipe-db-pi",namespace:"recipe-db"}
+    | .source.revision=$revision | .contentFingerprint="original-content-fingerprint"
+  ' "$RESTORE_MANIFEST" > "$FIXTURE_ROOT/cutover-package.json"
+  mv "$FIXTURE_ROOT/cutover-package.json" "$RESTORE_MANIFEST"
+  printf '\n# candidate release fixture\n' >> .scripts/templates/kubernetes-template.yml
+  git add -f .scripts/templates/kubernetes-template.yml
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Candidate cutover release'
+  candidate_revision=$(git rev-parse HEAD)
+  export MOCK_SOURCE_REVISION="$original_revision" MOCK_REVISION="$candidate_revision"
+  original_manifest_sha=$(sha256sum "$RESTORE_MANIFEST" | cut -d ' ' -f 1)
+  original_archive_sha=$(sha256sum "$RESTORE_ARCHIVE" | cut -d ' ' -f 1)
+  local cutover_state="$FIXTURE_ROOT/backups/cutover-restore"
+  local cutover_snapshot="$FIXTURE_ROOT/backups/cutover-snapshot"
+  chmod 700 "$FIXTURE_ROOT/backups"
+
+  run bash .scripts/production-k3d.sh --release-sources-from-git cutover-restore "$VALUES" \
+    "$RESTORE_MANIFEST" "$RESTORE_ARCHIVE" "$RESTORE_ID" "$cutover_state" \
+    "$candidate" "$cutover_snapshot" "CUTOVER-RESTORE-$RESTORE_ID" 12884901888
+  [ "$status" -eq 0 ]
+  [ "$(cat "$FIXTURE_ROOT/package-validation-limits")" = $'12884901888\n12884901888' ]
+  [ "$(sha256sum "$RESTORE_MANIFEST" | cut -d ' ' -f 1)" = "$original_manifest_sha" ]
+  [ "$(sha256sum "$RESTORE_ARCHIVE" | cut -d ' ' -f 1)" = "$original_archive_sha" ]
+  jq -e --arg candidate "$candidate" --arg revision "$candidate_revision" '
+    .backupId == "backup-20261031123456-42"
+    and .artifact == $candidate and .revision == $revision
+    and .cutover.sourceRelease == "ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    and .cutover.sourceRevision != $revision
+    and .status == "awaiting-signoff" and .phase == "pending-signoff"
+    and .import.status == "complete" and .readChecks.status == "passed"
+    and .writesMayHaveOpened == false
+  ' "$cutover_state/restore-state.json"
+  jq -e --arg candidate "$candidate" --arg revision "$candidate_revision" '
+    .source.target == "local" and .source.cluster == "recipe-db-rehearsal"
+    and .source.context == "k3d-recipe-db-rehearsal" and .source.artifact == $candidate
+    and .source.revision == $revision and .backupId != "backup-20261031123456-42"
+  ' "$cutover_snapshot/manifest.json"
+  [ ! -e "$cutover_snapshot/backup-state.json" ]
+  cmp "$FIXTURE_ROOT/tar-data/recipes/nested/data.bin" \
+    "$FIXTURE_ROOT/imported/recipes/nested/data.bin"
+  tar --numeric-owner -tvf "$FIXTURE_ROOT/recipes.tar" | grep -Fq "$(id -u)/$(id -g)"
+  grep -Fq 'tar -xpkf - --numeric-owner' "$MOCK_LOG"
+  for path in recipes/nested recipes/nested/data.bin; do
+    [ "$(stat -c '%a:%Y' "$FIXTURE_ROOT/tar-data/$path")" = \
+      "$(stat -c '%a:%Y' "$FIXTURE_ROOT/imported/$path")" ]
+    [ "$(stat -c '%u:%g' "$FIXTURE_ROOT/tar-data/$path")" = \
+      "$(stat -c '%u:%g' "$FIXTURE_ROOT/imported/$path")" ]
+  done
+  [ "$(stat -c '%a:%u:%g' "$FIXTURE_ROOT/tar-data/recipes")" = \
+    "$(stat -c '%a:%u:%g' "$FIXTURE_ROOT/imported/recipes")" ]
+  [ ! -e "$MOCK_LOG.restore-mutation-attempt" ]
+  run ! grep -Eq 'createRecipe|updateRecipe|deleteRecipe|recipe/probe' "$MOCK_LOG"
+  run ! grep -Eq 'apply -f .*backup-cleanup-job\.yml|patch job backup-cleanup|wait --for=condition=complete job/backup-cleanup' \
+    "$MOCK_LOG"
+  [ "$(jq -r '.metadata.annotations["recipe-db/phase"]' "$MOCK_LOG.lease")" = awaiting-signoff ]
+  [ "$(wc -l < "$MOCK_LOG.forward-pids-traefik")" -eq 2 ]
+  [ ! -e "$MOCK_LOG.traefik-forward-overlap" ]
+  local forward_pid
+  while IFS= read -r forward_pid; do
+    run ! kill -0 "$forward_pid" 2> /dev/null
+  done < "$MOCK_LOG.forward-pids-traefik"
+  while IFS= read -r forward_pid; do
+    run ! kill -0 "$forward_pid" 2> /dev/null
+  done < "$MOCK_LOG.forward-pids-browse"
+}
+
+@test "cutover restore rejects a package revision that differs from its immutable source artifact" {
+  restore_fixture
+  printf '*\n' > .gitignore
+  git add -f .gitignore
+  git add -A
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Clean cutover fixture baseline'
+  local original_revision source_revision candidate candidate_revision cutover_state cutover_snapshot
+  original_revision=$(git rev-parse HEAD)
+  printf 'different source artifact revision\n' > source-revision.txt
+  git add -f source-revision.txt
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Different immutable source revision'
+  source_revision=$(git rev-parse HEAD)
+  printf '\n# candidate release fixture\n' >> .scripts/templates/kubernetes-template.yml
+  git add -f .scripts/templates/kubernetes-template.yml
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Candidate cutover release'
+  candidate_revision=$(git rev-parse HEAD)
+  candidate="ghcr.io/dhhyi/recipe-db-releases@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  export MOCK_SOURCE_REVISION="$source_revision" MOCK_REVISION="$candidate_revision"
+  jq --arg revision "$original_revision" '
+    .source += {target:"pi",cluster:"recipe-db-pi",context:"recipe-db-pi",namespace:"recipe-db"}
+    | .source.revision=$revision
+  ' "$RESTORE_MANIFEST" > "$FIXTURE_ROOT/cutover-package.json"
+  mv "$FIXTURE_ROOT/cutover-package.json" "$RESTORE_MANIFEST"
+  cutover_state="$FIXTURE_ROOT/backups/cutover-restore"
+  cutover_snapshot="$FIXTURE_ROOT/backups/cutover-snapshot"
+
+  run bash .scripts/production-k3d.sh --release-sources-from-git cutover-restore "$VALUES" \
+    "$RESTORE_MANIFEST" "$RESTORE_ARCHIVE" "$RESTORE_ID" "$cutover_state" \
+    "$candidate" "$cutover_snapshot" "CUTOVER-RESTORE-$RESTORE_ID" 12884901888
+  [ "$status" -ne 0 ]
+  [[ $output == *"backup source revision differs from the immutable release artifact"* ]]
+  [ ! -e "$MOCK_LOG.imported" ]
+  [ ! -e "$cutover_state/restore-state.json" ]
+  run ! grep -Fq "$candidate" "$MOCK_LOG"
+  run ! grep -q '^kubectl' "$MOCK_LOG"
+}
+
 @test "restore accepts a valid empty dataset without creating an application record" {
   restore_fixture
   export MOCK_RESTORE_EMPTY=true
@@ -224,6 +378,7 @@ load production-k3d-restore-setup
   jq -e '.savedProgress.status == "awaiting-signoff"
     and .savedProgress.import.status == "complete"
     and .savedProgress.readChecks.status == "passed"
+    and .savedProgress.writesMayHaveOpened == false
     and .lease.present and .lease.ownedByRestore
     and .lease.phase == "awaiting-signoff"
     and .observed.graphql.mode == "maintenance"
@@ -302,7 +457,7 @@ load production-k3d-restore-setup
   mv "$MOCK_LOG.cluster-restore-state.next" "$MOCK_LOG.cluster-restore-state"
   run bash .scripts/production-k3d.sh restore-status "$VALUES" "$RESTORE_STATE"
   [ "$status" -eq 0 ]
-  jq -e '.savedProgress.writesMayHaveOpened == null
+  jq -e '.savedProgress.writesMayHaveOpened == false
     and .savedStateMatchesCluster == false
     and .observed.graphql.maintenanceVerified
     and .observed.publicRoutes.normalRoutesObserved
@@ -930,7 +1085,7 @@ run_restore_abandon() {
 
 @test "restore full CLI consumes a real packaged opaque snapshot through the real validator with mocked cluster infrastructure" {
   restore_real_package_fixture
-  run_restore
+  run_restore 12884901888
   [ "$status" -eq 0 ]
   jq -e '.status == "awaiting-signoff" and .phase == "pending-signoff"' \
     "$RESTORE_STATE/restore-state.json"

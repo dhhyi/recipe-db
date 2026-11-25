@@ -41,6 +41,7 @@ release:
     - .scripts/tests/production-release-files.bats
     - .scripts/tests/production-release.bats
     - .scripts/tests/production-upgrade-rehearsal.bats
+    - .scripts/tests/prepare-cutover-backup.bats
   suite_inputs:
     .scripts/tests/production-release-files.bats:
       - .scripts/production-release.py
@@ -85,6 +86,16 @@ release:
       - deploy/**
       - ":(glob)*/.project.yaml"
       - package.json
+    .scripts/tests/prepare-cutover-backup.bats:
+      - .scripts/prepare-cutover-backup-k3d.sh
+      - .scripts/package-local-backup.py
+      - .scripts/validate-backup-package.py
+      - .scripts/validate-backup-snapshot.py
+      - .scripts/lib/project-metadata.sh
+      - .scripts/tests/prepare-cutover-backup.bats
+      - .scripts/tests/test_helper.bash
+      - provisioning/files/backup-upload.py
+      - deploy/local.yaml
 deploy:
   tests:
     - .scripts/tests/kubernetes-templates.bats

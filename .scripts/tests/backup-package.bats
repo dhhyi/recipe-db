@@ -141,7 +141,8 @@ def fixture(include_metadata=False):
     return case, metadata, archive, projects, manifest
 
 
-def repack(metadata, archive, manifest=None, outer=None, inner=None, mode=None, inner_service="images"):
+def repack(metadata, archive, manifest=None, outer=None, inner=None, mode=None,
+           inner_service="images", manifest_bytes=None):
     document = json.loads(metadata.read_bytes())
     manifest = manifest or document["snapshotManifest"]
     content = []
@@ -167,7 +168,7 @@ def repack(metadata, archive, manifest=None, outer=None, inner=None, mode=None, 
             item["files"] = sorted(files, key=lambda item: item["path"])
             item["fileCount"] = len(files)
         content.append((item["archive"], data, None))
-    content.insert(0, ("manifest.json", module.upload.json_bytes(manifest), None))
+    content.insert(0, ("manifest.json", manifest_bytes or module.upload.json_bytes(manifest), None))
     if outer:
         content = outer(content)
     import gzip
@@ -236,6 +237,92 @@ if group == "valid":
     output = case / "snapshot"
     assert module.validate(str(metadata), str(archive), str(output), str(projects), "selected-backup") == manifest
     assert module.upload.validate_snapshot(output) == manifest
+elif group == "manifest-size":
+    case, metadata, archive, projects, manifest = fixture()
+    expanded_manifest = json.dumps(manifest, indent=2).encode()
+    repack(metadata, archive, manifest, manifest_bytes=expanded_manifest)
+    expected = {"manifest.json": None} | {
+        item["archive"]: item["sizeBytes"] for item in manifest["inventory"]
+    }
+    manifest_size = module.bundle_pass(archive, manifest, expected)
+    assert manifest_size == len(expanded_manifest)
+    input_size = sum(item["sizeBytes"] for item in manifest["inventory"])
+    required = module.required_staging_bytes(input_size, manifest_size)
+    expected_required = input_size * 2 + len(expanded_manifest) * 3 \
+        + input_size // 100 + 1024 * 1024
+    assert required == expected_required
+    compact_required = module.required_staging_bytes(
+        input_size, len(module.upload.json_bytes(manifest))
+    )
+    assert required > compact_required
+    module.ensure_staging_limit(input_size, manifest_size, required)
+    try:
+        module.ensure_staging_limit(input_size, manifest_size, required - 1)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("accepted one byte below the uploader's staging requirement")
+    original_limit_validator = module.upload.validate_max_staging_bytes
+    module.upload.validate_max_staging_bytes = lambda value: value
+    try:
+        assert module.validate(
+            str(metadata), str(archive), str(case / "snapshot-exact"), str(projects),
+            "selected-backup", required
+        ) == manifest
+        under_limit_output = case / "snapshot-under"
+        original_mkdir = Path.mkdir
+
+        def guarded_mkdir(path, *args, **kwargs):
+            if path == under_limit_output:
+                raise AssertionError("validation created output before rejecting the staging limit")
+            return original_mkdir(path, *args, **kwargs)
+
+        Path.mkdir = guarded_mkdir
+        try:
+            module.validate(
+                str(metadata), str(archive), str(under_limit_output), str(projects),
+                "selected-backup", required - 1
+            )
+        except ValueError as error:
+            assert str(error) == "staging limit exceeded"
+        else:
+            raise AssertionError("package validation accepted one byte below the requirement")
+        finally:
+            Path.mkdir = original_mkdir
+        assert not under_limit_output.exists()
+    finally:
+        module.upload.validate_max_staging_bytes = original_limit_validator
+elif group == "aggregate-staging-limit":
+    case, metadata, archive, projects, manifest = fixture()
+    limit = 256 * 1024**2
+    for item in manifest["inventory"][:2]:
+        item["sizeBytes"] = 140 * 1024**2
+    document = json.loads(metadata.read_bytes())
+    document["snapshotManifest"] = manifest
+    document["contentFingerprint"] = module.upload.content_fingerprint(manifest)
+    write(metadata, module.upload.json_bytes(document))
+    sizes = [item["sizeBytes"] for item in manifest["inventory"]]
+    assert all(size <= limit for size in sizes)
+    assert module.required_staging_bytes(sum(sizes), 0) > limit
+    output = case / "aggregate-over-limit"
+    decompression_started = []
+
+    def reject_if_decompression_starts(*_args, **_kwargs):
+        decompression_started.append(True)
+        raise AssertionError("bundle decompression started before aggregate budget rejection")
+
+    module.bundle_pass = reject_if_decompression_starts
+    try:
+        module.validate(
+            str(metadata), str(archive), str(output), str(projects),
+            "selected-backup", limit
+        )
+    except ValueError as error:
+        assert str(error) == "staging limit exceeded"
+    else:
+        raise AssertionError("accepted an aggregate payload beyond its staging limit")
+    assert not decompression_started
+    assert not output.exists()
 elif group == "identity":
     for key, value in [
         ("format", "other"), ("formatVersion", 2), ("formatVersion", True),
@@ -502,6 +589,109 @@ PY
 
 @test "backup package stages the complete selected pair privately and prints its snapshot manifest" {
   package_cases valid
+}
+
+@test "configured staging limit accepts sizes above the default without large fixtures" {
+  run python3 - << 'PY'
+import importlib.util
+
+spec = importlib.util.spec_from_file_location("package", ".scripts/validate-backup-package.py")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+default = module.upload.DEFAULT_MAX_STAGING_BYTES
+configured = 12 * 1024**3
+maximum = 100 * 1024**3
+size_above_default = default + 1
+
+assert module.upload.validate_max_staging_bytes(configured) == configured
+assert module.upload.validate_max_staging_bytes(maximum) == maximum
+module.ensure_within_limit(size_above_default, configured, "too large")
+for size, limit in ((size_above_default, default), (configured + 1, configured)):
+    try:
+        module.ensure_within_limit(size, limit, "too large")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(f"accepted {size} bytes under {limit}-byte limit")
+try:
+    module.upload.validate_max_staging_bytes(100 * 1024**3 + 1)
+except ValueError:
+    pass
+else:
+    raise AssertionError("accepted a staging limit above the existing 100 GiB maximum")
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "package validation accepts the Pi uploader's configured staging boundary" {
+  run python3 - << 'PY'
+import importlib.util
+from types import SimpleNamespace
+
+spec = importlib.util.spec_from_file_location("package", ".scripts/validate-backup-package.py")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+upload = module.upload
+gigabyte = 1024**3
+captured = "2026-11-01T12:34:56Z"
+backup_id = "backup-20261101123456-1"
+source = {
+    "target": "pi", "cluster": "recipe-db-pi", "context": "recipe-db-pi",
+    "namespace": "recipe-db", "artifact": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64,
+    "revision": "b" * 40,
+}
+roles = {
+    "recipes": "authoritative-read-only", "images": "cleanup-participant",
+    "inspirations": "cleanup-participant", "ratings": "cleanup-participant",
+    "tags": "cleanup-participant",
+}
+sizes = [4 * gigabyte, gigabyte // 4, gigabyte // 4, gigabyte // 4, gigabyte // 4]
+manifest = {
+    "format": upload.FORMAT, "formatVersion": 1, "backupId": backup_id,
+    "capturedAt": captured, "source": source, "inventory": [
+        {"service": service, "role": role, "pvc": service, "archive": service + ".tar",
+         "sizeBytes": size, "files": [], "fileCount": 0}
+        for (service, role), size in zip(roles.items(), sizes)
+    ],
+}
+digest = "c" * 64
+archive_name = "recipe-db-pi-20261101T123456Z-" + backup_id + ".tar.gz"
+package = {
+    "format": upload.PACKAGE_FORMAT, "formatVersion": 1, "deploymentId": "pi",
+    "backupId": backup_id, "capturedAt": captured, "source": source,
+    "snapshotManifest": manifest,
+    "archive": {"name": archive_name, "sizeBytes": gigabyte, "sha256": digest},
+    "contentFingerprint": upload.content_fingerprint(manifest),
+}
+archive = SimpleNamespace(name=archive_name, stat=lambda: SimpleNamespace(st_size=gigabyte))
+upload.file_hash = lambda _archive: digest
+projects = dict(roles)
+staging_limit = 12 * gigabyte
+assert sum(sizes) == 5 * gigabyte
+required = module.required_staging_bytes(sum(sizes), len(upload.json_bytes(manifest)))
+expected_required = 2 * sum(sizes) + len(upload.json_bytes(manifest)) * 3 \
+    + sum(sizes) // 100 + 1024**2
+assert required == expected_required
+assert required <= staging_limit
+module.ensure_staging_limit(sum(sizes), len(upload.json_bytes(manifest)), staging_limit)
+try:
+    module.ensure_staging_limit(
+        sum(sizes), len(upload.json_bytes(manifest)), upload.DEFAULT_MAX_STAGING_BYTES
+    )
+except ValueError:
+    pass
+else:
+    raise AssertionError("accepted a Pi-sized package above the configured limit")
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "package staging boundary uses the exact embedded manifest size" {
+  package_cases manifest-size
+}
+
+@test "rejects aggregate staging excess before decompressing the package" {
+  package_cases aggregate-staging-limit
 }
 
 @test "backup package rejects corrupt identity, release, hashes and incomplete dataset without retaining staging" {

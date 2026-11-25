@@ -58,12 +58,27 @@ PY
 setup() {
   setup_fixture retrieve-verified-backup.py
   setup_mock_bin
+  export SYSTEM_PYTHON
+  SYSTEM_PYTHON=$(PATH=/usr/bin:/bin command -v python3)
+  cat > bin/python3 << 'SH'
+#!/usr/bin/env bash
+exec "$SYSTEM_PYTHON" "$@"
+SH
+  chmod +x bin/python3
+  export SYSTEM_FISH
+  SYSTEM_FISH=$(PATH=/usr/bin:/bin command -v fish)
+  cat > bin/fish << 'SH'
+#!/usr/bin/env bash
+exec "$SYSTEM_FISH" "$@"
+SH
+  chmod +x bin/fish
   mkdir -p provisioning/files .mise/tasks
   cp "$BATS_TEST_DIRNAME/../../provisioning/files/backup-upload.py" provisioning/files/
   cp "$BATS_TEST_DIRNAME/../../.mise/tasks/validation.toml" .mise/tasks/
   printf '[task_config]\nincludes = [".mise/tasks/*.toml"]\n' > mise.toml
   export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT"
   export HOME="$FIXTURE_ROOT/home"
+  unset MISE_CONFIG_DIR
   mkdir -p "$HOME/.config/recipe-db/ssh" remote/state remote/drive
   export REMOTE_ROOT="$FIXTURE_ROOT/remote"
   export UPLOADER="$FIXTURE_ROOT/provisioning/files/backup-upload.py"
@@ -203,11 +218,17 @@ if password_auth:
 else:
     assert command[:5] == ["sudo", "-n", "-k", "python3", "-c"]
     code_index = 5
-assert len(command) in (code_index + 2, code_index + 3, code_index + 5)
+assert len(command) in (code_index + 2, code_index + 3, code_index + 4, code_index + 5)
 with open(os.environ["MOCK_LOG"], "a") as log:
     log.write(json.dumps(command[code_index + 1:]) + "\n")
 code = command[code_index].replace("/usr/local/sbin/recipe-db-backup-upload", os.environ["UPLOADER"])
 code = code.replace("/etc/recipe-db/backup.json", str(root / "config.json"))
+if os.environ.get("CASE") == "changed-maintenance-snapshot-archive" \
+        and command[code_index + 1:code_index + 2] == ["maintenance-snapshot"]:
+    snapshot_archive = root / "state/maintenance/recipes.tar"
+    content = snapshot_archive.read_bytes()
+    snapshot_archive.write_bytes(bytes([content[0] ^ 1]) + content[1:])
+    (root / "changed-maintenance-archive").touch()
 sys.exit(subprocess.run(["python3", "-c", code, *command[code_index + 1:]],
                         stdin=subprocess.DEVNULL).returncode)
 PY
@@ -429,6 +450,10 @@ from pathlib import Path
 
 root = Path(os.environ["REMOTE_ROOT"])
 drive = root / "drive"
+config_path = root / "config.json"
+config = json.loads(config_path.read_text())
+config["maxStagingBytes"] = 12 * 1024**3
+config_path.write_text(json.dumps(config))
 manifest_path = next(drive.glob("*maintenance-id.manifest.json"))
 package = json.loads(manifest_path.read_text())
 source = {
@@ -467,7 +492,208 @@ assert result["backupId"] == "maintenance-id"
 assert result["maintenanceOperation"]["status"] == "captured"
 assert result["maintenanceOperation"]["phase"] == "captured"
 assert result["maintenanceOperation"]["uploadStatus"] == "verified-upload"
+assert result["maintenanceOperation"]["maxStagingBytes"] == 12 * 1024**3
 PY
+}
+
+@test "verified-unchanged maintenance retrieval packages the exact retained snapshot" {
+  local operation_id=maintenance-final-capture-id package_id=maintenance-baseline-id
+  add_selected_backup "$package_id"
+  OPERATION_ID="$operation_id" PACKAGE_ID="$package_id" python3 - << 'PY'
+from datetime import datetime, timedelta, timezone
+import hashlib
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import tarfile
+
+root = Path(os.environ["REMOTE_ROOT"])
+drive = root / "drive"
+package_id = os.environ["PACKAGE_ID"]
+operation_id = os.environ["OPERATION_ID"]
+manifest_path = next(drive.glob(f"*{package_id}.manifest.json"))
+placeholder = json.loads(manifest_path.read_text())
+now = datetime.now(timezone.utc).replace(microsecond=0)
+source = {
+    "target": "pi", "cluster": "recipe-db-pi", "context": "recipe-db-pi",
+    "namespace": "recipe-db",
+    "artifact": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64,
+    "revision": "b" * 40,
+}
+operation_captured = (now - timedelta(hours=1)).isoformat()
+file_data = b"final snapshot data\n"
+spec = importlib.util.spec_from_file_location(
+    "upload", root.parent / "provisioning/files/backup-upload.py"
+)
+upload = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(upload)
+
+def make_archive(mode, uid, gid, data):
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        info = tarfile.TarInfo("data.txt")
+        info.size = len(data)
+        info.mode, info.uid, info.gid, info.mtime = mode, uid, gid, 0
+        archive.addfile(info, io.BytesIO(data))
+    return buffer.getvalue()
+
+file_inventory = [{
+    "path": "data.txt", "sizeBytes": len(file_data),
+    "sha256": hashlib.sha256(file_data).hexdigest(),
+}]
+
+def make_snapshot(backup_id, captured_at, archive_bytes, tags_archive_bytes, tags_data):
+    tags_inventory = [{
+        "path": "data.txt", "sizeBytes": len(tags_data),
+        "sha256": hashlib.sha256(tags_data).hexdigest(),
+    }]
+    return {
+        "format": "recipe-db-pvc-snapshot", "formatVersion": 1,
+        "backupId": backup_id, "capturedAt": captured_at, "source": source,
+        "inventory": [
+            {"service": service, "role": role, "pvc": service,
+             "archive": service + ".tar", "sizeBytes": len(data),
+             "sha256": hashlib.sha256(data).hexdigest(), "fileCount": len(files), "files": files}
+            for service, role, data, files in (
+                ("recipes", "authoritative-read-only", archive_bytes, file_inventory),
+                ("tags", "cleanup-participant", tags_archive_bytes, tags_inventory),
+            )
+        ],
+    }
+
+operation_tags_data = b"final tag snapshot data\n"
+operation_archive = make_archive(0o640, 123, 456, file_data)
+operation_tags_archive = make_archive(0o640, 123, 456, operation_tags_data)
+operation_snapshot = make_snapshot(
+    operation_id, operation_captured, operation_archive, operation_tags_archive,
+    operation_tags_data
+)
+baseline_tags_data = operation_tags_data
+baseline_archive = make_archive(0o600, 1, 2, file_data)
+baseline_tags_archive = make_archive(0o600, 1, 2, baseline_tags_data)
+baseline_snapshot = make_snapshot(
+    package_id, placeholder["capturedAt"], baseline_archive, baseline_tags_archive,
+    baseline_tags_data
+)
+fingerprint = upload.content_fingerprint(operation_snapshot)
+assert upload.content_fingerprint(baseline_snapshot) == fingerprint
+
+snapshot_dir = root / "baseline-snapshot"
+stage_dir = root / "baseline-stage"
+snapshot_dir.mkdir(mode=0o700)
+stage_dir.mkdir(mode=0o700)
+(snapshot_dir / "manifest.json").write_bytes(upload.json_bytes(baseline_snapshot))
+(snapshot_dir / "recipes.tar").write_bytes(baseline_archive)
+(snapshot_dir / "tags.tar").write_bytes(baseline_tags_archive)
+baseline_package = upload.create_package(
+    snapshot_dir, stage_dir, baseline_snapshot, "pi", upload.DEFAULT_MAX_STAGING_BYTES
+)
+baseline_manifest = (stage_dir / baseline_package["manifest"]).read_bytes()
+baseline_path_manifest = drive / baseline_package["manifest"]
+baseline_path_archive = drive / baseline_package["archive"]
+baseline_path_manifest.write_bytes(baseline_manifest)
+baseline_path_archive.write_bytes((stage_dir / baseline_package["archive"]).read_bytes())
+
+baseline_path = root / "state/baseline.json"
+baseline = json.loads(baseline_path.read_text())
+baseline.update(
+    backupId=package_id,
+    archive=baseline_package["archive"],
+    manifest=baseline_package["manifest"],
+    archiveSizeBytes=baseline_package["archiveSizeBytes"],
+    manifestSizeBytes=len(baseline_manifest),
+    archiveSha256=baseline_package["archiveSha256"],
+    manifestSha256=hashlib.sha256(baseline_manifest).hexdigest(),
+    capturedAt=baseline_package["capturedAt"],
+    fingerprint=baseline_package["fingerprint"],
+)
+baseline_path.write_text(json.dumps(baseline))
+
+status_path = root / "state/status.json"
+status = json.loads(status_path.read_text())
+status.update(status="verified-unchanged", backupId=operation_id, lastCheck=now.isoformat())
+status_path.write_text(json.dumps(status))
+
+maintenance = root / "state/maintenance"
+maintenance.mkdir(mode=0o700)
+operation = {
+    "stateVersion": 2, "backupId": operation_id, "status": "captured",
+    "phase": "captured", "capturedAt": operation_captured, "source": source,
+}
+(maintenance / "backup-state.json").write_text(json.dumps(operation))
+(maintenance / "manifest.json").write_text(json.dumps(operation_snapshot))
+(maintenance / "recipes.tar").write_bytes(operation_archive)
+(maintenance / "tags.tar").write_bytes(operation_tags_archive)
+PY
+  export REMOTE_VALIDATION_LOG="$REMOTE_ROOT/validation-count"
+  python3 - "$UPLOADER" << 'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+with path.open("a") as source:
+    source.write("""
+import sys
+_original_validate_snapshot = validate_snapshot
+def validate_snapshot(*args, **kwargs):
+    if len(sys.argv) > 1 and sys.argv[1] in ("maintenance", "maintenance-snapshot"):
+        with open(os.environ["REMOTE_VALIDATION_LOG"], "a") as log:
+            log.write("full\\n")
+    return _original_validate_snapshot(*args, **kwargs)
+""")
+PY
+  run python3 .scripts/retrieve-verified-backup.py --maintenance "$DESTINATION"
+  [ "$status" -eq 0 ]
+  RESULT="$output" OPERATION_ID="$operation_id" PACKAGE_ID="$package_id" python3 - << 'PY'
+import io
+import json
+import os
+from pathlib import Path
+import tarfile
+
+result = json.loads(os.environ["RESULT"])
+operation = result["maintenanceOperation"]
+package = json.loads(Path(result["manifest"]).read_text())
+assert result["backupId"] == os.environ["OPERATION_ID"]
+assert result["backupId"] != os.environ["PACKAGE_ID"]
+assert operation["backupId"] == os.environ["OPERATION_ID"]
+assert operation["packageBackupId"] == os.environ["OPERATION_ID"]
+assert operation["uploadStatus"] == "verified-unchanged"
+assert operation["maxStagingBytes"] == 8 * 1024**3
+assert operation["capturedAt"] == package["capturedAt"]
+assert operation["contentFingerprint"] == package["contentFingerprint"]
+assert operation["verifiedBaselineBackupId"] == os.environ["PACKAGE_ID"]
+assert package["snapshotManifest"]["backupId"] == os.environ["OPERATION_ID"]
+root = Path(os.environ["REMOTE_ROOT"])
+assert (root / "validation-count").read_text().splitlines() == ["full", "full"]
+baseline_archive = next((root / "drive").glob(f"*{os.environ['PACKAGE_ID']}.tar.gz"))
+assert (root / "read-log").read_text().splitlines().count(baseline_archive.name) == 2
+with tarfile.open(result["archive"], "r:gz") as outer:
+    assert sorted(member.name for member in outer.getmembers()) == [
+        "manifest.json", "recipes.tar", "tags.tar"
+    ]
+    for service, content in (
+        ("recipes", b"final snapshot data\n"),
+        ("tags", b"final tag snapshot data\n"),
+    ):
+        snapshot_archive = outer.extractfile(service + ".tar").read()
+        with tarfile.open(fileobj=io.BytesIO(snapshot_archive), mode="r:") as inner:
+            member = inner.getmember("data.txt")
+            assert (member.mode, member.uid, member.gid) == (0o640, 123, 456)
+            assert inner.extractfile(member).read() == content
+assert sorted(path.name for path in Path(result["manifest"]).parent.iterdir()) == sorted(
+    (Path(result["manifest"]).name, Path(result["archive"]).name)
+)
+PY
+  rm -r "$DESTINATION"
+  export CASE=changed-maintenance-snapshot-archive
+  export DESTINATION="$FIXTURE_ROOT/private changed download"
+  run python3 .scripts/retrieve-verified-backup.py --maintenance "$DESTINATION"
+  [ "$status" -ne 0 ]
+  [ -e "$REMOTE_ROOT/changed-maintenance-archive" ]
+  [ ! -e "$DESTINATION" ]
 }
 
 @test "missing ambiguous and incomplete backup IDs fail without a download" {
