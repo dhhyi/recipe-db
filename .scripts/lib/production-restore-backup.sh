@@ -263,6 +263,7 @@ restore_backup_check_confirmations() {
 restore_backup_phase_is_allowed() {
   case "$1:$2:$3" in
     restore-backup-capture:capture:awaiting-signoff | \
+      restore-backup-capture:capture:restore-backup-capturing | \
       restore-backup-capture:capture:restore-backup-capture-failed | \
       restore-backup-upload-retry:upload-pending:restore-backup-upload-failed | \
       restore-backup-upload-retry:upload-pending:restore-backup-capture-failed | \

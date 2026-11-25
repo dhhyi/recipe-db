@@ -1412,6 +1412,7 @@ def run_restore_capture_action(config, action, restore_id, holder, lease_uid, co
         }
     else:
         expected_states = {
+            ("capture", "capture"),
             ("in-progress", "capture"),
             ("failed", "capture"),
             ("capture-failed", "capture"),
@@ -1638,8 +1639,11 @@ def attach_restore_capture_status(config, value):
 
 def attach_restore_capture_attempt(config, value, verified_upload):
     capture = value.get("restoreCapture")
-    if not isinstance(capture, dict) or (capture.get("status"), capture.get("phase")) != (
-            "complete", "maintenance") \
+    if not isinstance(capture, dict) or (capture.get("status"), capture.get("phase")) not in {
+            ("upload-verified", "maintenance-pending"),
+            ("maintenance-failed", "maintenance-pending"),
+            ("complete", "maintenance"),
+    } \
             or capture.get("backupId") != verified_upload.get("backupId"):
         return value
     try:

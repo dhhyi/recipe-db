@@ -1350,6 +1350,15 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+@test "restore capture retries an interruption before snapshot preparation" {
+  cp "$BATS_TEST_DIRNAME/../lib/production-restore-backup.sh" .scripts/lib/
+  source .scripts/lib/production-restore-backup.sh
+
+  run restore_backup_phase_is_allowed restore-backup-capture \
+    capture restore-backup-capturing
+  [ "$status" -eq 0 ]
+}
+
 @test "restore capture retry verifies reads against its retained Lease failure phase" {
   cp "$BATS_TEST_DIRNAME/../lib/production-restore-backup.sh" .scripts/lib/
   cat > load-operation.sh << 'EOF'

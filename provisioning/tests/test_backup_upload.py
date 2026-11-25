@@ -240,6 +240,33 @@ raise SystemExit(0)
         self.assertNotEqual(result["restoreBackupId"], result["backupId"])
         self.assertEqual((result["status"], result["phase"]), ("complete", "maintenance"))
 
+    def test_restore_capture_retries_initial_progress_without_a_snapshot(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        state_path = capture_state / "restore-capture-state.json"
+        backup.restore_capture_write(
+            state_path, restore_id, holder, lease_uid, "capture", "capture",
+        )
+
+        def capture(config, action, path, operation_id, operation_holder, operation_uid, confirmation):
+            self.assertEqual(action, "restore-capture")
+            self.assertFalse((Path(path) / "snapshot").exists())
+            backup.restore_capture_write(
+                state_path, restore_id, holder, lease_uid,
+                "complete", "maintenance", backupId="backup-20261101120100-2",
+            )
+
+        with patch.object(backup, "run_capture_command", side_effect=capture):
+            result = backup.run_restore_capture_action(
+                self.config, "restore-capture", restore_id, holder, lease_uid,
+                f"CAPTURE-RESTORE-{restore_id}-{holder}",
+            )
+
+        self.assertEqual((result["status"], result["phase"]), ("complete", "maintenance"))
+
     def test_wrong_lease_uid_does_not_poison_initial_capture_retry(self):
         restore_id = "backup-20261101120000-1"
         holder = "restore-holder"
@@ -497,6 +524,12 @@ raise SystemExit(0)
         self.assertEqual(attempt["backupId"], backup_id)
         self.assertEqual(attempt["restoreBackupId"], restore_id)
         self.assertEqual(attempt["code"], "maintenance-resume-interrupted")
+        status = backup.report_status(self.config)
+        self.assertEqual((status["status"], status["code"]),
+                         ("maintenance-failure", "maintenance-resume-interrupted"))
+        self.assertEqual(status["verifiedUpload"]["status"], "verified-upload")
+        self.assertEqual(status["restoreCapture"]["lastAttempt"]["code"],
+                         "maintenance-resume-interrupted")
 
     def test_reopened_restore_stops_protecting_current_backup_status(self):
         restore_id = "backup-20261101120000-1"
