@@ -56,7 +56,7 @@ restore_backup_set_lease_phase() {
   local phase=$1 current
   current=$(cluster_operation_lock_status) || return 1
   jq -e --arg holder "$restore_backup_holder" --arg uid "$restore_backup_lease_uid" \
-    --arg expectedPhase "${restore_backup_current_phase:-}" \
+    --arg expectedPhase "${cluster_operation_lock_current_phase:-${restore_backup_current_phase:-}}" \
     --arg artifact "$restore_backup_artifact" '
     .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
     and .metadata.uid == $uid and .spec.holderIdentity == $holder
@@ -73,6 +73,7 @@ restore_backup_set_lease_phase() {
   cluster_operation_lock_kubectl replace -f "$work/restore-backup-lease.json" > /dev/null \
     || production_fail "restore-owned capture could not update the exact restore Lease"
   restore_backup_current_phase=$phase
+  cluster_operation_lock_current_phase=$phase
 }
 
 restore_backup_record_failure() {
@@ -336,6 +337,7 @@ restore_backup_load_operation() {
     || production_fail "cannot inspect the retained restore Lease"
   restore_backup_current_phase=$(jq -er '.metadata.annotations["recipe-db/phase"]' \
     <<< "$current_lease") || production_fail "restore Lease has no saved phase"
+  cluster_operation_lock_current_phase=$restore_backup_current_phase
   jq -e --arg holder "$holder" --arg uid "$lease_uid" \
     --arg artifact "$restore_backup_artifact" '
     .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"

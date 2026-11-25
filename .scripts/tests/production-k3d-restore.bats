@@ -1164,8 +1164,8 @@ PY
   cmp "$MOCK_LOG.lease-before-update" "$MOCK_LOG.lease"
 
   cluster_operation_lock_expected_uid=new-lease-uid
-  run cluster_operation_lock_update restore-backup-capturing
-  [ "$status" -eq 0 ]
+  cluster_operation_lock_update restore-backup-capturing
+  [ "$cluster_operation_lock_current_phase" = restore-backup-capturing ]
   jq -e '.metadata.uid == "new-lease-uid"
     and .metadata.annotations["recipe-db/phase"] == "restore-backup-capturing"
     and .spec.holderIdentity == "restore-holder"' "$MOCK_LOG.lease"
@@ -1334,6 +1334,7 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 source .scripts/lib/production-config.sh
+source .scripts/lib/cluster-operation-lock.sh
 source .scripts/lib/production-restore-backup.sh
 if [[ ${REUSE_STATE:-false} != true ]]; then
   rm -rf "$FIXTURE_ROOT/capture-work" "$FIXTURE_ROOT/work" "$FIXTURE_ROOT/etc"
@@ -1426,6 +1427,7 @@ recovery_identity() {
 cluster_operation_lock_status() { cat "$FIXTURE_ROOT/lease.json"; }
 cluster_operation_lock_kubectl() {
   case "$1" in
+    get) cat "$FIXTURE_ROOT/lease.json" ;;
     replace)
       cp "${@: -1}" "$FIXTURE_ROOT/lease.json"
       printf 'lease:%s\n' "$(jq -r '.metadata.annotations["recipe-db/phase"]' "$FIXTURE_ROOT/lease.json")" \
@@ -1455,20 +1457,32 @@ restore_backup_prepare_snapshot() {
   printf 'prepare\n' >> "$MOCK_LOG.pipeline"
 }
 backup_reblock_graphql() { printf 'reblock-graphql\n' >> "$MOCK_LOG.pipeline"; }
-cluster_operation_lock_update() { printf 'claim:%s\n' "$1" >> "$MOCK_LOG.pipeline"; }
-backup_establish_barrier() { printf 'barrier\n' >> "$MOCK_LOG.pipeline"; }
+backup_establish_barrier() {
+  cluster_operation_lock_update barrier
+  printf 'barrier\n' >> "$MOCK_LOG.pipeline"
+}
 backup_start_modes() { printf 'backup-modes\n' >> "$MOCK_LOG.pipeline"; }
 backup_state_write() { printf 'backup-state:%s:%s\n' "$1" "$2" >> "$MOCK_LOG.pipeline"; }
-backup_cleanup_job() { printf 'cleanup\n' >> "$MOCK_LOG.pipeline"; }
+backup_cleanup_job() {
+  cluster_operation_lock_update cleanup
+  printf 'cleanup\n' >> "$MOCK_LOG.pipeline"
+}
 backup_scale_zero() { printf 'scale-zero\n' >> "$MOCK_LOG.pipeline"; }
-backup_capture() { printf 'capture:%s:%s\n' "$1" "$snapshot" >> "$MOCK_LOG.pipeline"; }
+backup_capture() {
+  local name
+  for name in recipes images tags; do cluster_operation_lock_update "copy-$name"; done
+  printf 'capture:%s:%s\n' "$1" "$snapshot" >> "$MOCK_LOG.pipeline"
+}
 backup_write_manifest() { printf 'manifest\n' >> "$MOCK_LOG.pipeline"; }
 restore_backup_publish_snapshot() {
   printf 'publish:%s:%s\n' "$1" "$snapshot" >> "$MOCK_LOG.pipeline"
   [[ ${PUBLISH_FAIL:-false} != true ]]
 }
 restore_backup_verify_upload() { printf 'verified-upload:%s\n' "$1" >> "$MOCK_LOG.pipeline"; }
-backup_restore_maintenance() { printf 'restore-maintenance\n' >> "$MOCK_LOG.pipeline"; }
+backup_restore_maintenance() {
+  cluster_operation_lock_update projection-refresh
+  printf 'restore-maintenance\n' >> "$MOCK_LOG.pipeline"
+}
 restore_backup_record_completion() {
   printf 'completion\n' >> "$MOCK_LOG.pipeline"
   restore_backup_progress complete maintenance "$backup_id"
