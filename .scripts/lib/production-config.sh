@@ -8,6 +8,23 @@ production_fail() {
   exit 1
 }
 
+production_backup_config_sha256() {
+  jq -S 'if (.secrets | type) == "object" then
+    .secrets |= with_entries(.value = .key)
+  else . end' "$1" | sha256sum | cut -d ' ' -f 1
+}
+
+production_restore_identity_matches() {
+  local state_file=$1 actual_identity=$2 config_file=$3
+  jq -e --arg configSha256 "$(sha256sum "$config_file" | cut -d ' ' -f 1)" \
+    --arg backupConfigSha256 "$(production_backup_config_sha256 "$config_file")" \
+    --slurpfile actual "$actual_identity" '
+    (.configSha256 == $configSha256 or .backupConfigSha256 == $backupConfigSha256)
+    and .restoreIdentity.configSha256 == .configSha256
+    and ((.restoreIdentity | del(.configSha256)) == ($actual[0] | del(.configSha256)))
+  ' "$state_file" > /dev/null
+}
+
 production_config() {
   [[ $1 = /* && -f $1 ]] || production_fail "values must be an absolute file path"
   yq -o=json eval-all '[.]' "$1" > "$work/config-documents.json"
@@ -95,6 +112,7 @@ production_config() {
       ($action == "deploy" or $action == "backup-run" or $action == "backup-enter"
         or $action == "maintenance-enter"
         or $action == "backup-capture" or $action == "maintenance-restore" or $action == "backup-exit"
+        or ($action | startswith("restore-backup-"))
         or $action == "release-stage" or $action == "release-fallback-stage"
         or $action == "release-migration-result"
         or $action == "release-migration-plan" or $action == "release-migration-next"

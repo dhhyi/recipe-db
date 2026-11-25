@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2154
+# shellcheck disable=SC2034,SC2154
 
 cluster_operation_lock_holder=
+cluster_operation_lock_expected_uid=
+cluster_operation_lock_current_phase=
 
 cluster_operation_lock_fail() {
   printf 'production: %s\n' "$*" >&2
@@ -23,6 +25,7 @@ cluster_operation_lock_acquire() {
       return 1
     }
   cluster_operation_lock_holder=$holder
+  cluster_operation_lock_current_phase=acquired
 }
 
 cluster_operation_lock_update() {
@@ -40,9 +43,11 @@ cluster_operation_lock_update() {
       cluster_operation_lock_fail "could not verify operation lock ownership"
       return 1
     }
-  jq -e --arg holder "$cluster_operation_lock_holder" '
+  jq -e --arg holder "$cluster_operation_lock_holder" \
+    --arg uid "${cluster_operation_lock_expected_uid:-}" '
     .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
     and .spec.holderIdentity == $holder
+    and ($uid == "" or .metadata.uid == $uid)
   ' <<< "$current" > /dev/null \
     || {
       cluster_operation_lock_fail "operation lock owner changed; refusing to update another operation's lock"
@@ -55,6 +60,7 @@ cluster_operation_lock_update() {
       cluster_operation_lock_fail "could not update operation lock phase"
       return 1
     }
+  cluster_operation_lock_current_phase=$phase
 }
 
 cluster_operation_lock_release() {

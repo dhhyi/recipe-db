@@ -371,7 +371,10 @@ command=recovery-reset
 release_migration_claimed=false
 release_mutation_started=false
 pod_watch_pid=
-recovery_command_release() { :; }
+recovery_command_release() { printf 'recovery-command-release\n' >> "$MOCK_LOG"; }
+restore_backup_record_cleanup_failure() {
+  printf 'restore-backup-failure-recording\n' >> "$MOCK_LOG"
+}
 release_recovery_reopen_cleanup() { :; }
 cluster_operation_lock_release() {
   echo erroneous-primary-release >> "$MOCK_LOG"
@@ -402,6 +405,9 @@ EOF
     : > "$MOCK_LOG"
     run bash harness.sh
     [ "$status" -ne 0 ]
+    awk '/^restore-backup-failure-recording$/ {recorded=1}
+      /^recovery-command-release$/ {if (!recorded) exit 1; recorded=0; releases++}
+      END {exit !(releases > 0)}' "$MOCK_LOG"
     jq -e '.metadata.uid == "lease-1" and .metadata.annotations["recipe-db/phase"] == "acquired"' lease.json
     jq -e '.status == "reset-planned" and .reset.acquisitionPending == true
       and .reset.leaseUid == null and (.holder | startswith("reset-"))' "$RECOVERY_STATE/restore-state.json"
@@ -415,6 +421,9 @@ EOF
     : > "$MOCK_LOG"
     run bash harness.sh
     [ "$status" -ne 0 ]
+    awk '/^restore-backup-failure-recording$/ {recorded=1}
+      /^recovery-command-release$/ {if (!recorded) exit 1; recorded=0; releases++}
+      END {exit !(releases > 0)}' "$MOCK_LOG"
     jq -e --arg holder "$holder" '.spec.holderIdentity == $holder and .metadata.uid == "lease-1"
       and .metadata.annotations["recipe-db/phase"] == "acquired"' lease.json
     jq -e '.status == "reset-planned" and .reset.acquisitionPending == true
@@ -427,6 +436,9 @@ EOF
     printf '{"volumes":{"recipes":"1Gi","images":"1Gi"}}\n' > work/config.json
     run bash harness.sh
     [ "$status" -eq 0 ]
+    awk '/^restore-backup-failure-recording$/ {recorded=1}
+      /^recovery-command-release$/ {if (!recorded) exit 1; recorded=0; releases++}
+      END {exit !(releases > 0)}' "$MOCK_LOG"
     jq -e --arg holder "$holder" '.spec.holderIdentity == $holder and .metadata.uid == "lease-1"
       and .metadata.annotations["recipe-db/phase"] == "reset-ready"' lease.json
     jq -e --arg holder "$holder" '.holder == $holder and .reset.leaseUid == "lease-1"

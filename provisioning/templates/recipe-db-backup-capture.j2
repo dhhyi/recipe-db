@@ -17,6 +17,14 @@ elif [[ $# == 3 && $1 == release-capture ]]; then
   action=$1
   path=$2
   candidate=$3
+elif [[ $# == 6 && $1 == restore-capture || $# == 6 && $1 == restore-upload-retry ||
+  $# == 6 && $1 == restore-maintenance-resume ]]; then
+  action=$1
+  path=$2
+  restore_id=$3
+  restore_holder=$4
+  restore_lease_uid=$5
+  confirmation=$6
 else
   printf 'backup capture requires an action and its absolute state or snapshot directory\n' >&2
   exit 1
@@ -93,6 +101,34 @@ case "$action" in
     }
     exec /usr/local/bin/mise exec -- bash /opt/recipe-db/.scripts/production-k3d.sh \
       --release-sources-from-git release-backup-capture /etc/recipe-db/backup-values.yaml "$path" "$candidate"
+    ;;
+  restore-capture | restore-upload-retry | restore-maintenance-resume)
+    [[ $path == "/var/lib/recipe-db-backup/restore-captures/$restore_id" &&
+      -d $path && ! -L $path ]] || {
+      printf 'restore-owned capture requires its exact retained private state directory\n' >&2
+      exit 1
+    }
+    if [[ $action == restore-capture ]]; then
+      [[ ! -e $path/restore-capture-state.json && ! -L $path/restore-capture-state.json ||
+        -f $path/restore-capture-state.json && ! -L $path/restore-capture-state.json ]] || {
+        printf 'restore-owned capture progress state is invalid\n' >&2
+        exit 1
+      }
+    else
+      [[ -f $path/restore-capture-state.json && ! -L $path/restore-capture-state.json ]] || {
+        printf 'restore-owned capture progress state is missing or invalid\n' >&2
+        exit 1
+      }
+    fi
+    case "$action" in
+      restore-capture) lifecycle_action=restore-backup-capture ;;
+      restore-upload-retry) lifecycle_action=restore-backup-upload-retry ;;
+      restore-maintenance-resume) lifecycle_action=restore-backup-maintenance-resume ;;
+    esac
+    exec /usr/local/bin/mise exec -- bash /opt/recipe-db/.scripts/production-k3d.sh \
+      --release-sources-from-git "$lifecycle_action" /etc/recipe-db/backup-values.yaml /etc/recipe-db/backup-values.yaml \
+      /etc/recipe-db/backup.json "$path" "$restore_id" "$restore_holder" \
+      "$restore_lease_uid" "$confirmation"
     ;;
   *)
     printf 'unsupported backup capture action\n' >&2

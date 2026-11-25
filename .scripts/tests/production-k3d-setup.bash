@@ -15,6 +15,7 @@ setup() {
   cp "$BATS_TEST_DIRNAME/../lib/cluster-operation-lock.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/production-storage.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/production-restore.sh" .scripts/lib/
+  cp "$BATS_TEST_DIRNAME/../lib/production-restore-backup.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/production-recovery.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/release-data-cache.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../validate-production-image-index.sh" .scripts/

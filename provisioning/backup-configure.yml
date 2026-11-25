@@ -20,6 +20,43 @@
       - google-oauth-client-secret
       - oauth2-cookie-secret
       - acme-account-email
+  pre_tasks:
+    - name: Generate a unique backup configuration holder
+      tags: always
+      ansible.builtin.command: cat /proc/sys/kernel/random/uuid
+      register: backup_configure_uuid
+      changed_when: false
+
+    - name: Claim cluster ownership before changing backup inputs
+      tags: always
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - --kubeconfig
+          - /etc/recipe-db/backup-kubeconfig.yaml
+          - --namespace
+          - kube-system
+          - create
+          - -f
+          - "-"
+          - -o
+          - json
+        stdin: "{{ {'apiVersion': 'coordination.k8s.io/v1', 'kind': 'Lease', 'metadata': {'name': 'recipe-db-deploy', 'namespace': 'kube-system', 'labels': {'app.kubernetes.io/part-of': 'recipe-db'}, 'annotations': {'recipe-db/operation': 'backup-configure', 'recipe-db/phase': 'acquired'}}, 'spec': {'holderIdentity': 'backup-configure-' ~ (backup_configure_uuid.stdout | trim)}} | to_json }}"
+      register: backup_configure_claim
+      no_log: true
+
+    - name: Verify the backup configuration Lease identity
+      tags: always
+      ansible.builtin.assert:
+        that:
+          - (backup_configure_claim.stdout | from_json).metadata.name == 'recipe-db-deploy'
+          - (backup_configure_claim.stdout | from_json).metadata.namespace == 'kube-system'
+          - (backup_configure_claim.stdout | from_json).metadata.uid | length > 0
+          - (backup_configure_claim.stdout | from_json).metadata.resourceVersion | length > 0
+          - (backup_configure_claim.stdout | from_json).spec.holderIdentity == 'backup-configure-' ~ (backup_configure_uuid.stdout | trim)
+      no_log: true
+
   tasks:
     - name: Keep scheduled capture disabled while installing operator inputs
       tags: backup-uploader
@@ -40,6 +77,41 @@
       ansible.builtin.stat:
         path: /etc/recipe-db/backup.json
       register: backup_configuration
+
+    - name: Check whether the Pi cluster configuration is available
+      ansible.builtin.stat:
+        path: /etc/recipe-db/backup-kubeconfig.yaml
+        get_checksum: false
+      register: backup_kubeconfig
+      no_log: true
+
+    - name: Inspect retained restore ownership before changing backup inputs
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - --kubeconfig
+          - /etc/recipe-db/backup-kubeconfig.yaml
+          - --namespace
+          - kube-system
+          - get
+          - lease
+          - recipe-db-deploy
+          - --ignore-not-found
+          - -o
+          - json
+      register: backup_restore_lease
+      changed_when: false
+      when: backup_kubeconfig.stat.exists
+      no_log: true
+
+    - name: Refuse input alignment while a restore Lease is retained
+      ansible.builtin.assert:
+        that:
+          - (backup_restore_lease.stdout | length == 0) or ((backup_restore_lease.stdout | from_json).metadata.name is not defined) or ((backup_restore_lease.stdout | from_json).metadata.annotations['recipe-db/operation'] != 'restore')
+        fail_msg: A retained restore owns the Pi; install aligned backup inputs before restore or stop for separate operator approval.
+      when: backup_kubeconfig.stat.exists
+      no_log: true
 
     - name: Inspect maintenance state without displaying private details
       tags: backup-uploader
@@ -258,4 +330,23 @@
         owner: root
         group: root
         mode: "0600"
+      no_log: true
+
+  post_tasks:
+    - name: Release only the acquired backup configuration Lease
+      tags: always
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - --kubeconfig
+          - /etc/recipe-db/backup-kubeconfig.yaml
+          - --namespace
+          - kube-system
+          - delete
+          - --raw
+          - /apis/coordination.k8s.io/v1/namespaces/kube-system/leases/recipe-db-deploy
+          - -f
+          - "-"
+        stdin: "{{ {'apiVersion': 'v1', 'kind': 'DeleteOptions', 'preconditions': {'uid': (backup_configure_claim.stdout | from_json).metadata.uid, 'resourceVersion': (backup_configure_claim.stdout | from_json).metadata.resourceVersion}} | to_json }}"
       no_log: true

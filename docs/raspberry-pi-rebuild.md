@@ -164,7 +164,7 @@ mise exec -- kubectl --kubeconfig "$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
 
 If the existing host and disk are trustworthy and only application data needs replacing, use the [existing-cluster restore cookbook](production-existing-cluster-restore.md) instead of rebuilding. Continue here for a lost or suspect host.
 
-First [authorize Drive interactively on the new Pi](google-drive-authorization.md#1-authorize-on-a-new-pi). No authorized rclone config is restored from operator home. Then follow the [production recovery guide](production-kubernetes.md#fresh-deployment-restore), which explains how to download and verify the backup and its matching release artifact. If the verified package was already downloaded before the rebuild, authorization can wait until backup configuration in step 8.
+First [authorize Drive interactively on the new Pi](google-drive-authorization.md#1-authorize-on-a-new-pi). No authorized rclone config is restored from operator home. Then follow the [production recovery guide](production-kubernetes.md#fresh-deployment-restore), which explains how to download and verify the backup and its matching release artifact. For a cutover release that must be backed up before sign-off, prepare the private backup inputs for that exact artifact and install them with `backup-configure.yml` before importing when possible; this install leaves the timer disabled. See [restore-owned Pi capture and local rehearsal](production-kubernetes.md#restore-owned-pi-capture-and-local-rehearsal) for the retained-Lease capture and exact-package rehearsal. If the verified package was already downloaded before the rebuild, Drive authorization can wait until backup configuration.
 
 Set the paths below to your backup manifest and archive. Use a new directory for restore progress. Restore into the empty cluster—**do not deploy the application first**.
 
@@ -191,11 +191,16 @@ If restore fails, keep the target isolated and follow the [failure-recovery proc
 KUBECONFIG="$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
   mise run production-k3d restore-status "$VALUES" "$STATE"
 HOLDER=$(jq -er .holder "$STATE/restore-state.json")
+```
+
+For a cutover restore, stop here: capturing a Pi backup of the restored release and successfully rehearsing that exact package locally are required before sign-off. Follow the [restore-owned Pi capture and local rehearsal procedure](production-kubernetes.md#restore-owned-pi-capture-and-local-rehearsal). Do not run `restore-reopen` until both steps succeed. For other restores, inspect status and approve reopening only after confirming the intended target, retained Lease, passed read checks and observed maintenance mode:
+
+```sh
 KUBECONFIG="$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
   mise run production-k3d restore-reopen "$VALUES" "$STATE" "OPEN-RESTORE-$BACKUP_ID-$HOLDER"
 ```
 
-Inspect status and approve reopening only after confirming the intended target, retained Lease, passed read checks and observed maintenance mode. If reopening fails or its result is uncertain, inspect status and preserve the state and Lease; do not assume writes stayed blocked or restore the previous backup automatically.
+If reopening fails or its result is uncertain, inspect status and preserve the state and Lease; do not assume writes stayed blocked or restore the previous backup automatically.
 
 Before sign-off, verify reads:
 

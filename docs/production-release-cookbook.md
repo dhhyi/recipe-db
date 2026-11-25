@@ -705,7 +705,7 @@ ssh-add ~/.config/recipe-db/ssh/recipe-db-pi \
     backup-configure.yml --ask-become-pass
 ```
 
-Require a successful play recap. This records a new configuration timestamp and leaves scheduled capture disabled; it does not replace Drive authorization. Exit the container shell, [capture and verify an ordinary backup](#verify-an-ordinary-backup), then [re-enable the schedule](#verify-a-backup-then-re-enable-its-schedule) only when appropriate. Require a capture after restore and this installation, with off-device verification and a baseline matching the restored artifact and revision. `verified-unchanged` is acceptable only for that matching restored-release baseline; it verifies existing remote objects and is not a new upload. Do not continue through the retained-release steps below.
+Require a successful play recap. This records a new configuration timestamp and leaves scheduled capture disabled; it does not replace Drive authorization. The play requires the Pi cluster and private backup kubeconfig and claims the shared Lease before touching the timer or inputs. If it fails after claiming ownership, the `backup-configure-...` Lease remains: confirm the playbook has stopped, disable and verify the timer, inspect the Lease and use `lock-recover` only on that exact holder. Rerun configuration before capturing; do not recover a restore or backup Lease this way. Exit the container shell, [capture and verify an ordinary backup](#verify-an-ordinary-backup), then [re-enable the schedule](#verify-a-backup-then-re-enable-its-schedule) only when appropriate. Require a capture after restore and this installation, with off-device verification and a baseline matching the restored artifact and revision. `verified-unchanged` is acceptable only for that matching restored-release baseline; it verifies existing remote objects and is not a new upload. Do not continue through the retained-release steps below.
 
 ### Run the normal backup service
 
@@ -781,6 +781,6 @@ ssh-add ~/.config/recipe-db/ssh/recipe-db-pi \
     backup-enable.yml --ask-become-pass
 ```
 
-For a completed release, enable the schedule only after successful finalization. The playbook independently requires a verified backup check after the latest configuration installation and that maintenance has ended.
+For a completed release, enable the schedule only after successful finalization. The playbook independently requires a verified backup check after the latest configuration installation, that maintenance has ended, and that no cluster operation retains the Pi Lease. It briefly claims that Lease while rechecking status and enabling the timer; it refuses to proceed if ownership cannot be acquired. If an unsuccessful run leaves a `backup-enable-...` Lease, confirm the playbook has stopped, disable and verify the timer, and inspect the Lease before using `lock-recover` on that exact holder. Never use that recovery to release a restore or backup Lease.
 
 **Success:** the Pi runs `RELEASE`, managed tooling remains pinned, the public website was checked, the normal backup service captured and remotely verified the candidate after alignment with every actual storage-version marker, the operator accepted and published the sequential GitHub Release, cleanup followed publication, and scheduled capture was resumed only afterward if appropriate.

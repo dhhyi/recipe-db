@@ -1708,7 +1708,7 @@ restore_stop_forward() {
 }
 
 restore_forward() {
-  local resource=$1 port=$2 file=$3 pid forward_namespace=$namespace deadline=$((SECONDS + timeout))
+  local resource=$1 port=$2 file=$3 pid forward_namespace=$namespace deadline=$((SECONDS + timeout)) forwarded_port
   [[ $resource != deployment/traefik ]] || forward_namespace=kube-system
   # Launch the executable, not the kube shell function, so the saved PID owns the tunnel.
   kubectl --kubeconfig "$work/kubeconfig" --context "$context" --namespace "$forward_namespace" \
@@ -1718,7 +1718,14 @@ restore_forward() {
   if [[ $resource == service/browse ]]; then restore_browse_pid=$pid; else restore_forward_pid=$pid; fi
   while ((SECONDS < deadline)); do
     if grep -q '^Forwarding from 127.0.0.1:' "$file"; then
-      sed -n 's/^Forwarding from 127.0.0.1:\([0-9]*\) -> .*/\1/p' "$file" | head -n 1
+      forwarded_port=$(sed -n 's/^Forwarding from 127.0.0.1:\([0-9]*\) -> .*/\1/p' "$file")
+      [[ -n $forwarded_port ]] || return 1
+      if [[ $resource == service/browse ]]; then
+        restore_browse_port=$forwarded_port
+      else
+        restore_graphql_port=$forwarded_port
+      fi
+      printf '%s\n' "$forwarded_port"
       return 0
     fi
     kill -0 "$pid" 2> /dev/null || return 1
@@ -1924,9 +1931,12 @@ restore_load_saved_operation() {
   restore_state=$state
   restore_cluster_state=true
   jq -e --arg target "$target" --arg cluster "$cluster" --arg context "$context" \
-    --arg ns "$namespace" --arg configSha256 "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" '
+    --arg ns "$namespace" --arg configSha256 "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" \
+    --arg backupConfigSha256 "$(production_backup_config_sha256 "$work/config.json")" '
     .version == 1 and .target == $target and .cluster == $cluster
-    and .context == $context and .namespace == $ns and .configSha256 == $configSha256
+    and .context == $context and .namespace == $ns
+    and (.configSha256 == $configSha256
+      or .backupConfigSha256 == $backupConfigSha256)
     and (.backupId | type == "string" and test("^backup-[0-9]{14}-[0-9]+$"))
     and (.holder | type == "string" and length > 0)
     and (.artifact | type == "string" and
@@ -1968,8 +1978,8 @@ restore_load_saved_operation() {
   ' <<< "$current" > /dev/null \
     || production_fail "saved restore does not own the exact recorded Lease; inspect status and do not reopen"
   recovery_identity || production_fail "cannot verify the saved restore target identity"
-  jq -e --slurpfile actual "$work/reset-identity.json" \
-    '.restoreIdentity == $actual[0]' "$restore_state/restore-state.json" > /dev/null \
+  production_restore_identity_matches "$restore_state/restore-state.json" \
+    "$work/reset-identity.json" "$work/config.json" \
     || production_fail "restore target PVC/PV or cluster identity changed; preserve access barriers and investigate"
   jq -e '(.migrationRecovery.probeRecipeId // null) == null' \
     "$restore_state/restore-state.json" > /dev/null \
@@ -2555,9 +2565,11 @@ restore_run() {
     jq -n --arg backupId "$expected" --arg holder "$lock_holder" --arg target "$target" \
       --arg cluster "$cluster" --arg context "$context" --arg ns "$namespace" --arg artifact "$artifact" \
       --arg revision "$revision" --arg configSha256 "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" \
+      --arg backupConfigSha256 "$(production_backup_config_sha256 "$work/config.json")" \
       --arg leaseUid "$restore_operation_lease_uid" --arg routesSha256 "$routes_sha256" \
       '{version:1,backupId:$backupId,holder:$holder,target:$target,cluster:$cluster,context:$context,
         namespace:$ns,artifact:$artifact,revision:$revision,configSha256:$configSha256,
+        backupConfigSha256:$backupConfigSha256,
         restoreMode:"standalone",leaseUid:$leaseUid,routesSha256:$routesSha256,
         writesMayHaveOpened:false,
         publicRoutesMayBeOpen:false,
@@ -2569,8 +2581,10 @@ restore_run() {
   fi
   if [[ $mode == existing-reset ]]; then
     restore_state_update --arg routesSha256 "$routes_sha256" \
+      --arg backupConfigSha256 "$(production_backup_config_sha256 "$work/config.json")" \
       '. as $previous |
         .restoreMode="existing-reset" | .leaseUid=.reset.leaseUid | .routesSha256=$routesSha256
+        | .backupConfigSha256=$backupConfigSha256
         | .reset.exposureHistory=((.reset.exposureHistory // []) + [{
             backupId:$previous.backupId,status:$previous.status,phase:$previous.phase,
             writesMayHaveOpened:($previous.writesMayHaveOpened // false),
