@@ -1737,12 +1737,29 @@ restore_backup_record_failure() {
 }
 
 restore_backup_verify_pending_reads() {
-  local expected_lease_phase=$1 status_file=$2
+  local config_file=$1 expected_lease_phase=$2 status_file=$3 pid
   restore_state=$work/restore-backup-state
-  mkdir -p "$restore_state"
+  mkdir -p "$restore_state" || return 1
   jq -er '.data["restore-state.json"]' "$work/restore-backup-configmap.json" \
-    > "$restore_state/restore-state.json"
-  restore_status "$restore_state" > "$status_file"
+    > "$restore_state/restore-state.json" || return 1
+  for pid in "${restore_forward_pid:-}" "${restore_browse_pid:-}"; do
+    [[ -n $pid ]] || continue
+    kill "$pid" 2> /dev/null || true
+    wait "$pid" 2> /dev/null || true
+  done
+  restore_forward_pid=
+  restore_browse_pid=
+  restore_graphql_port=
+  restore_browse_port=
+  if [[ ${release_sources_from_git:-false} == true ]]; then
+    bash "$root/.scripts/production-k3d.sh" --release-sources-from-git \
+      restore-status "$config_file" "$restore_state" > "$status_file" \
+      || return 1
+  else
+    bash "$root/.scripts/production-k3d.sh" \
+      restore-status "$config_file" "$restore_state" > "$status_file" \
+      || return 1
+  fi
   jq -e --arg id "$restore_backup_restore_id" --arg phase "$expected_lease_phase" '
     .savedProgress.backupId == $id
     and .savedProgress.status == "awaiting-signoff"
@@ -1756,24 +1773,12 @@ restore_backup_verify_pending_reads() {
     and .observed.publicRoutes.normalRoutesObserved
     and .savedStateMatchesCluster
     and (.writesMayHaveOpened | not)
-  ' "$status_file" > /dev/null \
-    || production_fail "restore no longer serves verified read-only traffic"
-  local pid
-  for pid in "${restore_forward_pid:-}" "${restore_browse_pid:-}"; do
-    [[ -n $pid ]] || continue
-    kill "$pid" 2> /dev/null || true
-    wait "$pid" 2> /dev/null || true
-  done
-  restore_forward_pid=
-  restore_browse_pid=
-  restore_graphql_port=
-  restore_browse_port=
+  ' "$status_file" > /dev/null || return 1
   restore_forward deployment/traefik 3000 "$work/restore-backup-graphql-forward.log" > /dev/null \
-    || production_fail "cannot open the read-only GraphQL verification path"
+    || return 1
   restore_forward service/browse 3000 "$work/restore-backup-browse-forward.log" > /dev/null \
-    || production_fail "cannot open the read-only website verification path"
-  restore_verify_reads \
-    || production_fail "restored application reads failed after Pi backup maintenance"
+    || return 1
+  restore_verify_reads || return 1
 }
 
 restore_backup_prepare_snapshot() {

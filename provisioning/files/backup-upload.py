@@ -1366,8 +1366,9 @@ def run_restore_capture_action(config, action, restore_id, holder, lease_uid, co
         }
     if (state.get("status"), state.get("phase")) not in expected_states:
         raise BackupError("restart-failure", "restore-capture-phase-mismatch")
-    backup_timer_disabled()
     try:
+        if action != "restore-capture":
+            backup_timer_disabled()
         run_capture_command(
             config, action, str(root), restore_id, holder, lease_uid, confirmation,
         )
@@ -1628,7 +1629,7 @@ def main():
     parser.add_argument("action", choices=(
         "nightly", "status", "maintenance-enter", "release-upload",
         "restore-capture", "restore-upload-retry", "restore-maintenance-resume",
-        "restore-publish",
+        "restore-publish", "check-timer",
     ))
     parser.add_argument("--config", required=True)
     parser.add_argument("--restore-id")
@@ -1642,6 +1643,9 @@ def main():
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, interrupt)
+    if args.action == "check-timer":
+        backup_timer_disabled()
+        return 0
     ensure_private_dir(config["stateDirectory"])
     ensure_private_dir(config["stagingDirectory"])
     if args.action == "status":

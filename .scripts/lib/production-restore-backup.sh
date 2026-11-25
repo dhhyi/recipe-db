@@ -53,7 +53,7 @@ restore_backup_progress() {
 }
 
 restore_backup_finish_maintenance() {
-  local state_directory=$1
+  local config_file=$1 state_directory=$2
   restore_backup_progress upload-verified maintenance-pending "$backup_id"
   restore_backup_set_lease_phase restore-backup-maintenance-pending
   backup_restore_maintenance || {
@@ -61,12 +61,20 @@ restore_backup_finish_maintenance() {
     return 1
   }
   restore_backup_set_lease_phase restore-backup-maintenance-pending
-  restore_backup_verify_pending_reads restore-backup-maintenance-pending \
-    "$work/restore-backup-final-status.json"
+  if ! restore_backup_verify_pending_reads "$config_file" restore-backup-maintenance-pending \
+    "$work/restore-backup-final-status.json"; then
+    printf 'production: final read-only verification failed; reblocking GraphQL and retaining restore ownership\n' >&2
+    backup_reblock_graphql || true
+    return 1
+  fi
   restore_backup_record_completion "$state_directory"
   restore_backup_set_lease_phase awaiting-signoff
   printf 'production: verified Pi backup %s; read-only maintenance and restore Lease %s retained; sign-off is still pending\n' \
     "$backup_id" "$restore_backup_holder"
+}
+
+restore_backup_check_timer() {
+  python3 "$root/provisioning/files/backup-upload.py" check-timer --config "$1"
 }
 
 restore_backup_capture() {
@@ -81,9 +89,12 @@ restore_backup_capture() {
   backup_id=
   lock_holder=$holder
   cluster_operation_lock_holder=$holder
+  restore_backup_set_lease_phase restore-backup-capturing
+  restore_backup_started=true
+  restore_backup_check_timer "$uploader_config" \
+    || production_fail "backup timer must be disabled before restore-owned capture"
   copy_image=$(jq -er '.infrastructure.maintenance' "$work/config.json")
   restore_backup_prepare_snapshot
-  restore_backup_set_lease_phase restore-backup-capturing
   backup_establish_barrier || production_fail "could not maintain the restore write barrier"
   cluster_operation_lock_update backend-transition || production_fail "could not record the backend transition"
   backup_start_modes || production_fail "could not place backup participants in backup mode"
@@ -103,7 +114,7 @@ restore_backup_capture() {
   }
   restore_backup_verify_upload "$state_directory"
   restore_backup_progress upload-verified maintenance-pending "$backup_id"
-  restore_backup_finish_maintenance "$state_directory"
+  restore_backup_finish_maintenance "$config_file" "$state_directory"
 }
 
 restore_backup_upload_retry() {
@@ -161,7 +172,7 @@ restore_backup_maintenance_resume() {
     return
   fi
   restore_backup_progress upload-verified maintenance-pending "$backup_id"
-  restore_backup_finish_maintenance "$state_directory"
+  restore_backup_finish_maintenance "$config_file" "$state_directory"
 }
 
 restore_backup_check_confirmations() {
@@ -179,6 +190,29 @@ restore_backup_check_confirmations() {
   esac
   [[ $confirmation == "$expected" ]] \
     || production_fail "restore-owned capture requires the exact operation-specific confirmation"
+}
+
+restore_backup_phase_is_allowed() {
+  case "$1:$2:$3" in
+    restore-backup-capture:capture:awaiting-signoff | \
+      restore-backup-capture:capture:restore-backup-capture-failed | \
+      restore-backup-upload-retry:upload-pending:restore-backup-upload-failed | \
+      restore-backup-upload-retry:capture:restore-backup-upload-pending | \
+      restore-backup-upload-retry:upload-pending:restore-backup-upload-pending | \
+      restore-backup-maintenance-resume:maintenance-pending:restore-backup-maintenance-failed | \
+      restore-backup-maintenance-resume:maintenance-pending:restore-backup-maintenance-pending | \
+      restore-backup-maintenance-resume:maintenance-pending:projection-refresh | \
+      restore-backup-maintenance-resume:maintenance-pending:awaiting-signoff | \
+      restore-backup-maintenance-resume:upload-pending:restore-backup-upload-pending | \
+      restore-backup-maintenance-resume:maintenance:restore-backup-maintenance-pending | \
+      restore-backup-maintenance-resume:maintenance:restore-backup-maintenance-failed | \
+      restore-backup-maintenance-resume:maintenance:awaiting-signoff)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 restore_backup_load_operation() {
@@ -283,36 +317,20 @@ restore_backup_load_operation() {
   locked=true
   retain_lock=true
   restore_backup_expected_phase=$(jq -r '.phase' "$restore_backup_state_path")
-  case "$command:$restore_backup_expected_phase:$restore_backup_current_phase" in
-    restore-backup-capture:capture:awaiting-signoff | \
-      restore-backup-capture:capture:restore-backup-capture-failed) ;;
-
-    restore-backup-upload-retry:upload-pending:restore-backup-upload-failed | \
-      restore-backup-upload-retry:capture:restore-backup-upload-pending | \
-      restore-backup-upload-retry:upload-pending:restore-backup-upload-pending) ;;
-
-    restore-backup-maintenance-resume:maintenance-pending:restore-backup-maintenance-failed) ;;
-
-    restore-backup-maintenance-resume:maintenance-pending:restore-backup-maintenance-pending) ;;
-
-    restore-backup-maintenance-resume:maintenance-pending:awaiting-signoff | \
-      restore-backup-maintenance-resume:upload-pending:restore-backup-upload-pending) ;;
-
-    restore-backup-maintenance-resume:maintenance:restore-backup-maintenance-pending | \
-      restore-backup-maintenance-resume:maintenance:restore-backup-maintenance-failed | \
-      restore-backup-maintenance-resume:maintenance:awaiting-signoff) ;;
-
-    *)
-      production_fail "restore-owned capture progress or retained Lease phase does not permit this action"
-      ;;
-  esac
+  restore_backup_phase_is_allowed "$command" "$restore_backup_expected_phase" \
+    "$restore_backup_current_phase" \
+    || production_fail "restore-owned capture progress or retained Lease phase does not permit this action"
   if [[ $command == restore-backup-capture ]]; then
     mkdir -m 700 "$work/restore-backup-state"
     cp "$work/restore-backup-state.json" "$work/restore-backup-state/restore-state.json"
-    restore_backup_verify_pending_reads awaiting-signoff "$work/restore-backup-status.json"
+    restore_backup_verify_pending_reads "$config_file" awaiting-signoff \
+      "$work/restore-backup-status.json" \
+      || production_fail "restore no longer serves verified read-only traffic"
   elif [[ $command == restore-backup-maintenance-resume &&
     $restore_backup_current_phase == awaiting-signoff ]]; then
-    restore_backup_verify_pending_reads awaiting-signoff "$work/restore-backup-status.json"
+    restore_backup_verify_pending_reads "$config_file" awaiting-signoff \
+      "$work/restore-backup-status.json" \
+      || production_fail "restore no longer serves verified read-only traffic"
     restore_backup_current_graphql_mode=maintenance
   elif [[ $command == restore-backup-maintenance-resume ]]; then
     kube get deployments -o json > "$work/restore-backup-current-deployments.json" \
@@ -323,8 +341,9 @@ restore_backup_load_operation() {
         .env[]? | select(.name == "MODE") | .value][0] // empty
     ' "$work/restore-backup-current-deployments.json")
     if [[ $restore_backup_current_graphql_mode == maintenance ]]; then
-      restore_backup_verify_pending_reads "$restore_backup_current_phase" \
-        "$work/restore-backup-status.json"
+      restore_backup_verify_pending_reads "$config_file" "$restore_backup_current_phase" \
+        "$work/restore-backup-status.json" \
+        || production_fail "restore no longer serves verified read-only traffic"
     elif [[ $restore_backup_current_graphql_mode != backup ]]; then
       production_fail "maintenance resume requires GraphQL to remain blocked in backup or verified read-only maintenance"
     fi

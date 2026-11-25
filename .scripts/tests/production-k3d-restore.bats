@@ -1245,6 +1245,19 @@ EOF
   [[ $output != *"different private credential"* ]]
 }
 
+@test "restore-owned maintenance resumes after interrupted projection refresh" {
+  cp "$BATS_TEST_DIRNAME/../lib/production-restore-backup.sh" .scripts/lib/
+  source .scripts/lib/production-restore-backup.sh
+
+  run restore_backup_phase_is_allowed restore-backup-maintenance-resume \
+    maintenance-pending projection-refresh
+  [ "$status" -eq 0 ]
+
+  run restore_backup_phase_is_allowed restore-backup-maintenance-resume \
+    capture restore-backup-capture-failed
+  [ "$status" -ne 0 ]
+}
+
 @test "restore-owned completion records read evidence before the final Lease transition" {
   cp "$BATS_TEST_DIRNAME/../lib/production-restore-backup.sh" .scripts/lib/
   cat > completion-order.sh << 'EOF'
@@ -1258,11 +1271,12 @@ restore_backup_progress() { printf 'progress:%s\n' "$*" >> "$MOCK_LOG.lifecycle"
 restore_backup_set_lease_phase() { printf 'lease:%s\n' "$1" >> "$MOCK_LOG.lifecycle"; }
 backup_restore_maintenance() { printf 'maintenance\n' >> "$MOCK_LOG.lifecycle"; }
 restore_backup_verify_pending_reads() {
-  printf 'verify:%s\n' "$1" >> "$MOCK_LOG.lifecycle"
+  printf 'verify:%s\n' "$2" >> "$MOCK_LOG.lifecycle"
   [[ ${RESTORE_READS_FAIL:-false} != true ]]
 }
+backup_reblock_graphql() { printf 'reblock\n' >> "$MOCK_LOG.lifecycle"; }
 restore_backup_record_completion() { printf 'completion\n' >> "$MOCK_LOG.lifecycle"; }
-restore_backup_finish_maintenance "$FIXTURE_ROOT/uploader-state"
+restore_backup_finish_maintenance "$FIXTURE_ROOT/config.yaml" "$FIXTURE_ROOT/uploader-state"
 EOF
   run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" bash completion-order.sh
   [ "$status" -eq 0 ]
@@ -1271,6 +1285,8 @@ EOF
   : > "$MOCK_LOG.lifecycle"
   run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" RESTORE_READS_FAIL=true bash completion-order.sh
   [ "$status" -ne 0 ]
+  run grep -Fxq 'reblock' "$MOCK_LOG.lifecycle"
+  [ "$status" -eq 0 ]
   run grep -Fxq 'lease:awaiting-signoff' "$MOCK_LOG.lifecycle"
   [ "$status" -ne 0 ]
   run grep -Fxq 'completion' "$MOCK_LOG.lifecycle"
@@ -1293,6 +1309,9 @@ CONFIG
   printf '{"stateDirectory":"%s"}\n' "$FIXTURE_ROOT/capture-work" > "$FIXTURE_ROOT/uploader.json"
   printf '{}\n' > "$FIXTURE_ROOT/etc/backup-values.yaml"
   printf '%s\n' "$ARTIFACT" > "$FIXTURE_ROOT/etc/backup-release-ref"
+  if [[ ${BACKUP_REFERENCE_DRIFT:-false} == true ]]; then
+    printf '%s\n' 'wrong-release-reference' > "$FIXTURE_ROOT/etc/backup-release-ref"
+  fi
   config_sha=$(production_backup_config_sha256 "$FIXTURE_ROOT/work/config.json")
   restore_id=backup-20261101120000-1
   holder=restore-holder
@@ -1343,6 +1362,7 @@ restore_backup_snapshot="$FIXTURE_ROOT/capture-work/restore-captures/backup-2026
 restore_backup_holder=restore-holder
 restore_backup_restore_id=backup-20261101120000-1
 restore_backup_state_directory="$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1"
+root=$PWD
 connect() { printf 'connect\n' >> "$MOCK_LOG.pipeline"; }
 recovery_command_acquire() {
   printf 'claim\n' >> "$MOCK_LOG.pipeline"
@@ -1367,7 +1387,11 @@ production_storage_preflight() {
   [[ $cluster_operation_lock_holder == restore-holder ]]
   printf 'storage-preflight\n' >> "$MOCK_LOG.pipeline"
 }
-restore_backup_verify_pending_reads() { printf 'reads:%s\n' "$1" >> "$MOCK_LOG.pipeline"; }
+restore_backup_verify_pending_reads() { printf 'reads:%s\n' "$2" >> "$MOCK_LOG.pipeline"; }
+restore_backup_check_timer() {
+  printf 'check-timer\n' >> "$MOCK_LOG.pipeline"
+  [[ ${TIMER_ENABLED:-false} != true ]]
+}
 restore_backup_prepare_snapshot() {
   backup_id=backup-20261101120100-2
   snapshot=$restore_backup_snapshot
@@ -1410,6 +1434,10 @@ EOF
   grep -Fxq 'claim' "$MOCK_LOG.pipeline"
   grep -Fxq 'verify-inputs' "$MOCK_LOG.pipeline"
   grep -Fxq 'storage-preflight' "$MOCK_LOG.pipeline"
+  [ "$(grep -n 'lease:restore-backup-capturing' "$MOCK_LOG.pipeline" | cut -d: -f1)" -lt \
+    "$(grep -n 'check-timer' "$MOCK_LOG.pipeline" | cut -d: -f1)" ]
+  [ "$(grep -n 'check-timer' "$MOCK_LOG.pipeline" | cut -d: -f1)" -lt \
+    "$(grep -n '^barrier$' "$MOCK_LOG.pipeline" | cut -d: -f1)" ]
   [ "$(grep -n '^claim$' "$MOCK_LOG.pipeline" | cut -d: -f1)" -lt \
     "$(grep -n '^storage-preflight$' "$MOCK_LOG.pipeline" | cut -d: -f1)" ]
   grep -Fxq "capture:pending:$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/snapshot" \
@@ -1438,6 +1466,22 @@ EOF
   [ "$status" -ne 0 ]
   [[ $output == *"exact pending restore Lease is missing or changed"* ]]
   run grep -Eq '^storage-preflight$|^capture:' "$MOCK_LOG.pipeline"
+  [ "$status" -ne 0 ]
+
+  : > "$MOCK_LOG.pipeline"
+  run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" BACKUP_REFERENCE_DRIFT=true \
+    bash capture-pipeline.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"backup release inputs do not match the retained restored release"* ]]
+  run grep -Eq '^storage-preflight$|^check-timer$|^capture:' "$MOCK_LOG.pipeline"
+  [ "$status" -ne 0 ]
+
+  : > "$MOCK_LOG.pipeline"
+  run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" TIMER_ENABLED=true \
+    bash capture-pipeline.sh
+  [ "$status" -ne 0 ]
+  grep -Fxq 'check-timer' "$MOCK_LOG.pipeline"
+  run grep -Eq '^barrier$|^capture:' "$MOCK_LOG.pipeline"
   [ "$status" -ne 0 ]
 
   : > "$MOCK_LOG.pipeline"

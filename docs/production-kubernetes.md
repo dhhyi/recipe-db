@@ -368,7 +368,7 @@ sudo /usr/local/sbin/recipe-db-backup-upload restore-capture \
   --confirmation "CAPTURE-RESTORE-$RESTORE_ID-$RESTORE_HOLDER"
 ```
 
-The uploader serializes this request with its existing service lock and refuses an enabled/active timer. The lifecycle also takes the recovery-command claim, validates the saved restore, retained Lease UID and holder, immutable release reference, installed credential contents, Pi PVC identities and read-only routes, then uses the existing complete-volume backup, validation and remote-readback path. This one-off restore-owned upload does not prune existing remote points, preserving the off-device previous-release backup; keep the timer disabled until rehearsal and sign-off are complete. GraphQL may be unavailable in backup mode during capture; writes remain blocked. Never use `backup-exit` or `restore-reopen`.
+The uploader serializes this request with its existing service lock. The lifecycle takes the recovery-command claim, validates the saved restore, retained Lease UID and holder, immutable release reference, installed credential contents, Pi PVC identities and read-only routes, then records the capture phase and checks that the timer is disabled before creating a snapshot or changing workloads. A failed check retains the restore Lease in a failed capture phase; do not use `restore-reopen`. A valid request uses the existing complete-volume backup, validation and remote-readback path. This one-off restore-owned upload does not prune existing remote points, preserving the off-device previous-release backup; keep the timer disabled until rehearsal and sign-off are complete. GraphQL may be unavailable in backup mode during capture; writes remain blocked. Never use `backup-exit` or `restore-reopen`.
 
 If the command fails, stop and inspect status before any retry:
 
@@ -378,7 +378,31 @@ sudo systemctl is-enabled recipe-db-backup.timer
 sudo systemctl is-active recipe-db-backup.timer
 ```
 
-Keep the restore Lease, capture state and barrier. `restore-upload-retry` is allowed only for the same complete validated snapshot after an upload failure; it never recaptures. After a verified upload, or when maintenance restoration was interrupted, use `restore-maintenance-resume` with the exact same IDs and Lease UID. Do not retry automatically or use either action if status or phase is uncertain. A maintenance-resume failure that leaves the cluster in backup mode requires operator direction.
+Keep the restore Lease, capture state and barrier. On the **Raspberry Pi POSIX shell**, retry only the upload of the same complete validated snapshot after an upload failure; this never recaptures:
+
+Use the exact `RESTORE_ID`, `RESTORE_HOLDER`, and `RESTORE_LEASE_UID` values transferred for the original capture.
+
+```sh
+sudo /usr/local/sbin/recipe-db-backup-upload restore-upload-retry \
+  --config /etc/recipe-db/backup.json \
+  --restore-id "$RESTORE_ID" \
+  --restore-holder "$RESTORE_HOLDER" \
+  --restore-lease-uid "$RESTORE_LEASE_UID" \
+  --confirmation "RETRY-UPLOAD-RESTORE-$RESTORE_ID-$RESTORE_HOLDER"
+```
+
+After a verified upload, or when returning GraphQL to maintenance was interrupted, resume using the exact same IDs and Lease UID. This also resumes an interruption during projection refresh:
+
+```sh
+sudo /usr/local/sbin/recipe-db-backup-upload restore-maintenance-resume \
+  --config /etc/recipe-db/backup.json \
+  --restore-id "$RESTORE_ID" \
+  --restore-holder "$RESTORE_HOLDER" \
+  --restore-lease-uid "$RESTORE_LEASE_UID" \
+  --confirmation "RESUME-MAINTENANCE-RESTORE-$RESTORE_ID-$RESTORE_HOLDER"
+```
+
+Do not retry automatically or use either action if status or phase is uncertain. A maintenance-resume failure that leaves the cluster in backup mode requires operator direction.
 
 After capture succeeds, verify Pi uploader status is `complete` for this restore and a distinct backup ID, then rerun the workstation `restore-status` and `lock-status` checks above. Require the same Lease UID and holder, `awaiting-signoff`, GraphQL maintenance, successful public reads, and writes still blocked. Confirm the timer remains disabled and do not sign off yet.
 
