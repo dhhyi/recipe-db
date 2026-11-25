@@ -843,6 +843,106 @@ else:
                         self.assertIn("disable", events)
                         self.assertEqual("delete" in events, scenario == "timer-failure")
 
+    def test_backup_configuration_claims_ownership_before_timer_or_input_changes(self):
+        for scenario in ("success", "restore-owned", "enable-owned", "unavailable",
+                         "task-failure", "replaced-lease"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                executable = root / "fake-command"
+                executable.write_text("""#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+
+root = Path(os.environ["FAKE_ROOT"])
+lease = root / "lease.json"
+scenario = os.environ["FAKE_SCENARIO"]
+args = sys.argv[1:]
+if "create" in args:
+    if scenario == "unavailable" or lease.exists():
+        sys.exit(1)
+    claim = json.load(sys.stdin)
+    claim["metadata"].update(uid="configure-uid", resourceVersion="1")
+    lease.write_text(json.dumps(claim))
+    print(json.dumps(claim))
+elif "delete" in args:
+    current = json.loads(lease.read_text())
+    conditions = json.load(sys.stdin)["preconditions"]
+    if conditions != {"uid": current["metadata"]["uid"],
+                      "resourceVersion": current["metadata"]["resourceVersion"]}:
+        sys.exit(1)
+    lease.unlink()
+elif args[0] in ("disable", "apply"):
+    current = json.loads(lease.read_text())
+    assert current["metadata"]["annotations"]["recipe-db/operation"] == "backup-configure"
+    if args[0] == "disable":
+        (root / "timer-disabled").write_text("yes")
+    else:
+        try:
+            fd = os.open(lease, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            os.close(fd)
+            sys.exit(3)
+        if scenario == "task-failure":
+            sys.exit(1)
+        if scenario == "replaced-lease":
+            lease.write_text(json.dumps({"metadata": {"uid": "restore-uid", "resourceVersion": "2",
+                             "annotations": {"recipe-db/operation": "restore"}}}))
+        (root / "inputs-applied").write_text("yes")
+else:
+    sys.exit(2)
+""")
+                executable.chmod(0o755)
+                lease = root / "lease.json"
+                if scenario in ("restore-owned", "enable-owned"):
+                    operation = "restore" if scenario == "restore-owned" else "backup-enable"
+                    lease.write_text(json.dumps({
+                        "metadata": {"uid": "existing-uid", "resourceVersion": "1",
+                                     "annotations": {"recipe-db/operation": operation}},
+                    }))
+                play = yaml.safe_load((ROOT / "backup-configure.yml").read_text())[0]
+                play.update(hosts="localhost", connection="local", become=False)
+                for task in play["pre_tasks"] + play["post_tasks"]:
+                    command = task.get("ansible.builtin.command")
+                    if isinstance(command, dict) and command["argv"][0] == "/usr/local/bin/k3s":
+                        command["argv"][0] = str(executable)
+                timer = play["tasks"][0]
+                del timer["ansible.builtin.systemd_service"]
+                timer["ansible.builtin.command"] = {"argv": [str(executable), "disable"]}
+                play["tasks"] = [timer, {
+                    "name": "Simulate input alignment", "tags": "backup-uploader",
+                    "ansible.builtin.command": {"argv": [str(executable), "apply"]},
+                }]
+                playbook = root / "play.yml"
+                playbook.write_text(yaml.safe_dump([play]))
+                env = dict(os.environ, FAKE_ROOT=str(root), FAKE_SCENARIO=scenario,
+                           ANSIBLE_LOCAL_TEMP=str(root / "ansible-local"),
+                           ANSIBLE_REMOTE_TEMP=str(root / "ansible-remote"))
+                result = subprocess.run(
+                    ["ansible-playbook", "-i", "localhost,", str(playbook), "--tags", "backup-uploader"],
+                    env=env, capture_output=True, text=True, check=False,
+                )
+                if scenario == "success":
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertTrue((root / "timer-disabled").exists())
+                    self.assertTrue((root / "inputs-applied").exists())
+                    self.assertFalse(lease.exists())
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    if scenario in ("restore-owned", "enable-owned", "unavailable"):
+                        self.assertFalse((root / "timer-disabled").exists())
+                        self.assertFalse((root / "inputs-applied").exists())
+                        if scenario != "unavailable":
+                            self.assertEqual(json.loads(lease.read_text())["metadata"]["uid"], "existing-uid")
+                    elif scenario == "task-failure":
+                        self.assertTrue((root / "timer-disabled").exists())
+                        self.assertEqual(json.loads(lease.read_text())["metadata"]["uid"], "configure-uid")
+                    else:
+                        self.assertEqual(json.loads(lease.read_text())["metadata"]["uid"], "restore-uid")
+
     def test_backup_release_reference_requires_the_canonical_immutable_digest(self):
         setup = yaml.safe_load((ROOT / "backup-configure.yml").read_text())[0]
         read_inputs = next(task for task in setup["tasks"]
