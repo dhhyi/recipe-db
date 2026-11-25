@@ -334,6 +334,7 @@ This procedure applies after a clean Pi restore has reached `awaiting-signoff`. 
 On the **workstation fish shell**, confirm the pending restore and save the exact Lease UID. Keep `VALUES`, `STATE`, and all downloaded package files private:
 
 ```fish
+set -gx KUBECONFIG "$HOME/.config/recipe-db/kubeconfig/pi.yaml"
 umask 077
 set -g RESTORE_STATUS "$STATE/restore-status.json"
 mise run production-k3d restore-status "$VALUES" "$STATE" > "$RESTORE_STATUS"
@@ -376,6 +377,7 @@ If the command fails, stop and inspect status before any retry:
 sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
 sudo systemctl is-enabled recipe-db-backup.timer
 sudo systemctl is-active recipe-db-backup.timer
+sudo jq -er '.maxStagingBytes // 8589934592' /etc/recipe-db/backup.json
 ```
 
 Keep the restore Lease, capture state and barrier. On the **Raspberry Pi POSIX shell**, retry only the upload of the same complete validated snapshot after an upload failure; this never recaptures:
@@ -417,9 +419,10 @@ and mise run --raw retrieve-verified-backup --backup-id '<exact-new-backupId>' \
   "$BACKUP_DIRECTORY" > "$RUN_DIRECTORY/retrieval.json"
 ```
 
-Use the returned manifest and archive paths; keep the Pi package and receipt private. For the rehearsal, copy the private local-target values from `.secrets/local-values.yaml`, give them a new `recipe-db-rehearsal-<unique-suffix>` cluster/context and unused loopback HTTP/API ports, and keep the restored release's exact source revision and required local secrets available. Do not deploy application workloads first. Create the separate local cluster, then run the ordinary restore and its read-only checks against that exact Pi package:
+Use the returned manifest and archive paths; keep the Pi package and receipt private. Carry the Pi's printed `maxStagingBytes` value to the workstation as `PI_MAX_STAGING_BYTES`; the final restore argument applies the same staging limit to the exact package. For the rehearsal, copy the private local-target values from `.secrets/local-values.yaml`, give them a new `recipe-db-rehearsal-<unique-suffix>` cluster/context and unused loopback HTTP/API ports, and keep the restored release's exact source revision and required local secrets available. Do not deploy application workloads first. Create the separate local cluster, then run the ordinary restore and its read-only checks against that exact Pi package:
 
 ```fish
+set -g PI_MAX_STAGING_BYTES '<maxStagingBytes printed on the Pi; default is 8589934592>'
 set -g LOCAL_VALUES "$RUN_DIRECTORY/local-values.yaml"
 cp "$PWD/.secrets/local-values.yaml" "$LOCAL_VALUES"
 set -gx LOCAL_CLUSTER "recipe-db-rehearsal-$RESTORE_ID"
@@ -434,7 +437,7 @@ and set -g PACKAGE_ARCHIVE (jq -er .archive "$RUN_DIRECTORY/retrieval.json")
 and set -g LOCAL_STATE "$RUN_DIRECTORY/local-restore"
 and mise run production-k3d --release-sources-from-git restore "$LOCAL_VALUES" \
   "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" '<exact-new-backupId>' "$LOCAL_STATE" \
-  "RESTORE-<exact-new-backupId>"
+  "RESTORE-<exact-new-backupId>" "$PI_MAX_STAGING_BYTES"
 and mise run production-k3d restore-status "$LOCAL_VALUES" "$LOCAL_STATE" \
   > "$RUN_DIRECTORY/local-restore-status.json"
 ```

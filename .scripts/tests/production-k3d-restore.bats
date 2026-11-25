@@ -1042,6 +1042,39 @@ run_restore_abandon() {
   [ ! -e "$MOCK_LOG.lease" ]
 }
 
+@test "failed restore-owned capture phase blocks reopening and deployment handoff" {
+  restore_fixture
+  run_restore
+  [ "$status" -eq 0 ]
+  local holder
+  holder=$(jq -er .holder "$RESTORE_STATE/restore-state.json")
+  jq '.metadata.annotations["recipe-db/phase"]="restore-backup-maintenance-failed"' \
+    "$MOCK_LOG.lease" > "$MOCK_LOG.lease.next"
+  mv "$MOCK_LOG.lease.next" "$MOCK_LOG.lease"
+
+  run bash .scripts/production-k3d.sh restore-reopen "$VALUES" "$RESTORE_STATE" \
+    "OPEN-RESTORE-$RESTORE_ID-$holder"
+  [ "$status" -ne 0 ]
+  [[ $output == *"reopening requires the exact pending-sign-off Lease phase"* ]]
+  jq -e '.status == "awaiting-signoff" and .phase == "pending-signoff"
+    and (.writesMayHaveOpened | not)' "$RESTORE_STATE/restore-state.json"
+  jq -e --arg holder "$holder" '
+    .spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/phase"] == "restore-backup-maintenance-failed"
+  ' \
+    "$MOCK_LOG.lease"
+
+  export MOCK_LOCK=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"recipe-db-deploy cluster operation lock exists or cannot be acquired"* ]]
+  jq -e --arg holder "$holder" '
+    .spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/phase"] == "restore-backup-maintenance-failed"
+  ' \
+    "$MOCK_LOG.lease"
+}
+
 @test "failed reopening records possible writes and retains ownership behind maintenance" {
   restore_fixture
   run_restore
@@ -1095,7 +1128,7 @@ run_restore_abandon() {
     "$FIXTURE_ROOT/imported/tags/opaque.bin"
 }
 
-@test "separate local rehearsal restores the exact Pi-produced package with read-only checks" {
+@test "separate local rehearsal restores the synthetic Pi backup package with read-only checks" {
   restore_real_package_fixture
   python3 - "$FIXTURE_ROOT" << 'PY'
 import importlib.util
