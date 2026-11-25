@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -1425,6 +1426,7 @@ def run_restore_capture_action(config, action, restore_id, holder, lease_uid, co
     if action == "restore-maintenance-resume" and state.get("phase") == "upload-pending" \
             and not verified_upload_status(config, state.get("backupId")):
         raise BackupError("restart-failure", "maintenance-upload-verification-missing")
+    previous_publisher_failure = state.get("pendingPublisherFailure") if state else None
     try:
         if action != "restore-capture":
             backup_timer_disabled()
@@ -1472,9 +1474,21 @@ def run_restore_capture_action(config, action, restore_id, holder, lease_uid, co
                     "upload-pending": "upload-failed",
                     "maintenance-pending": "maintenance-failed",
                 }.get(phase, "failed")
+            pending = state.get("pendingPublisherFailure")
+            publisher_failure = None
+            if error.code == "capture-command-failed" \
+                    and action in ("restore-capture", "restore-upload-retry") \
+                    and phase == "upload-pending" and isinstance(pending, dict) \
+                    and pending != previous_publisher_failure \
+                    and pending.get("backupId") == state.get("backupId") \
+                    and pending.get("status") in ("capture-failure", "upload-failure",
+                                                   "restart-failure", "retention-failure", "interrupted") \
+                    and isinstance(pending.get("code"), str) \
+                    and re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", pending["code"]):
+                publisher_failure = {"status": pending["status"], "code": pending["code"]}
             restore_capture_write(
                 state_path, restore_id, holder, lease_uid, status, phase,
-                failureCode=error.code,
+                failureCode=error.code, publisherFailure=publisher_failure,
             )
         write_status(config, error.status, error.code, state.get("backupId"))
         raise
@@ -1497,10 +1511,33 @@ def run_restore_publish(config, snapshot):
             root, config, force_upload=True, allow_upload_pending=True,
             preserve_remote_points=True,
         )
-    except BackupError:
-        raise
-    if result != "verified-upload" or not verified_upload_status(config, state.get("backupId")):
-        raise BackupError("upload-failure", "restore-capture-remote-verification-mismatch")
+        if result != "verified-upload" or not verified_upload_status(config, state.get("backupId")):
+            raise BackupError("upload-failure", "restore-capture-remote-verification-mismatch")
+    except (BackupError, OSError, ValueError, TypeError) as error:
+        failure = error if isinstance(error, BackupError) else BackupError("capture-failure", "publisher-local-operation")
+        progress_path = root.parent / "restore-capture-state.json"
+        operation = state.get("restoreOperation")
+        try:
+            progress = read_json(progress_path)
+            if isinstance(operation, dict) \
+                    and restore_capture_identity(
+                        progress, operation.get("backupId"), operation.get("holder"), operation.get("leaseUid"),
+                    ) \
+                    and progress.get("backupId") == state.get("backupId") \
+                    and progress.get("phase") == "upload-pending":
+                restore_capture_write(
+                    progress_path, operation["backupId"], operation["holder"], operation["leaseUid"],
+                    progress["status"], progress["phase"],
+                    pendingPublisherFailure={
+                        "backupId": state["backupId"], "status": failure.status, "code": failure.code,
+                        "attempt": secrets.token_hex(16),
+                    },
+                )
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError, BackupError):
+            pass
+        if failure is error:
+            raise
+        raise failure from error
     return result
 
 
@@ -1652,6 +1689,10 @@ def attach_restore_capture_status(config, value):
                         key: capture.get(key) for key in
                         ("restoreBackupId", "status", "phase", "backupId", "updatedAt", "failureCode")
                     }
+                    if capture.get("status") == "upload-failed" \
+                            and capture.get("failureCode") == "capture-command-failed" \
+                            and isinstance(capture.get("publisherFailure"), dict):
+                        value["restoreCapture"]["publisherFailure"] = capture["publisherFailure"]
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 value["restoreCapture"] = {"status": "capture-failure", "phase": "invalid-state"}
     return value
@@ -1772,6 +1813,13 @@ def main():
     if args.action == "check-timer":
         backup_timer_disabled()
         return 0
+    if args.action == "restore-publish":
+        if not args.snapshot or any((
+            args.restore_id, args.restore_holder, args.restore_lease_uid, args.confirmation,
+        )):
+            parser.error("restore-publish requires only --snapshot")
+        print(run_restore_publish(config, args.snapshot))
+        return 0
     ensure_private_dir(config["stateDirectory"])
     ensure_private_dir(config["stagingDirectory"])
     if args.action == "status":
@@ -1782,13 +1830,6 @@ def main():
         return 0
     if args.action == "release-upload":
         print(run_release_upload(config))
-        return 0
-    if args.action == "restore-publish":
-        if not args.snapshot or any((
-            args.restore_id, args.restore_holder, args.restore_lease_uid, args.confirmation,
-        )):
-            parser.error("restore-publish requires only --snapshot")
-        print(run_restore_publish(config, args.snapshot))
         return 0
     if args.action in ("restore-capture", "restore-upload-retry", "restore-maintenance-resume"):
         if not all((args.restore_id, args.restore_holder, args.restore_lease_uid, args.confirmation)) \

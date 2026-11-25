@@ -829,6 +829,225 @@ raise SystemExit(0)
         self.assertTrue(backup.verified_upload_status(self.config, backup_id))
         prune.assert_not_called()
 
+    def test_restore_capture_reports_current_publisher_failure_without_losing_outer_failure(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        backup_id = "backup-20261101120100-2"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        state_path = capture_state / "restore-capture-state.json"
+        snapshot_path = snapshot(capture_state / "snapshot", backup_id=backup_id)
+        backup.atomic_json(snapshot_path / "backup-state.json", {
+            "stateVersion": 2, "backupId": backup_id, "status": "backup-mode", "phase": "upload-pending",
+            "source": backup.read_json(snapshot_path / "manifest.json")["source"],
+            "restoreOperation": {"backupId": restore_id, "holder": holder, "leaseUid": lease_uid},
+        })
+
+        def publisher_failure(*args, **kwargs):
+            backup.write_status(self.config, "upload-failure", "remote-name-collision", backup_id)
+            raise backup.BackupError("upload-failure", "remote-name-collision")
+
+        def capture(config, action, *args):
+            backup.restore_capture_write(
+                state_path, restore_id, holder, lease_uid, "upload-pending", "upload-pending",
+                backupId=backup_id,
+            )
+            with patch.dict(os.environ, {"RECIPE_DB_RESTORE_CAPTURE_ACTIVE": "1"}), \
+                    patch.object(backup, "upload_snapshot", side_effect=publisher_failure):
+                with self.assertRaisesRegex(backup.BackupError, "remote-name-collision"):
+                    backup.run_restore_publish(config, snapshot_path)
+            backup.restore_capture_write(
+                state_path, restore_id, holder, lease_uid, "upload-failed", "upload-pending",
+                backupId=backup_id, failureCode="operation-failed",
+            )
+            raise backup.BackupError("restart-failure", "capture-command-failed")
+
+        for action, confirmation, initial in (
+            ("restore-capture", f"CAPTURE-RESTORE-{restore_id}-{holder}", ("in-progress", "capture")),
+            ("restore-upload-retry", f"RETRY-UPLOAD-RESTORE-{restore_id}-{holder}",
+             ("upload-failed", "upload-pending")),
+        ):
+            with self.subTest(action=action):
+                backup.restore_capture_write(
+                    state_path, restore_id, holder, lease_uid, *initial, backupId=backup_id,
+                )
+                with patch.object(backup, "backup_timer_disabled"), \
+                        patch.object(backup, "run_capture_command", side_effect=capture):
+                    with self.assertRaisesRegex(backup.BackupError, "capture-command-failed"):
+                        backup.run_restore_capture_action(
+                            self.config, action, restore_id, holder, lease_uid, confirmation,
+                        )
+                status = backup.report_status(self.config)
+                self.assertEqual((status["status"], status["code"]),
+                                 ("restart-failure", "capture-command-failed"))
+                self.assertEqual(status["restoreCapture"]["publisherFailure"], {
+                    "status": "upload-failure", "code": "remote-name-collision",
+                })
+
+        with patch.object(backup, "backup_timer_disabled"), \
+                patch.object(backup, "run_capture_command",
+                             side_effect=backup.BackupError("restart-failure", "capture-command-failed")):
+            with self.assertRaisesRegex(backup.BackupError, "capture-command-failed"):
+                backup.run_restore_capture_action(
+                    self.config, "restore-upload-retry", restore_id, holder, lease_uid,
+                    f"RETRY-UPLOAD-RESTORE-{restore_id}-{holder}",
+                )
+        self.assertNotIn("publisherFailure", backup.report_status(self.config)["restoreCapture"])
+
+        backup.write_status(self.config, "verified-upload", "remote-readback", backup_id)
+        with patch.object(backup, "restore_capture_lease_is_retained", return_value=True), \
+                patch.object(backup, "backup_timer_disabled"), \
+                patch.object(backup, "run_capture_command", side_effect=capture):
+            with self.assertRaisesRegex(backup.BackupError, "capture-command-failed"):
+                backup.run_restore_capture_action(
+                    self.config, "restore-upload-retry", restore_id, holder, lease_uid,
+                    f"RETRY-UPLOAD-RESTORE-{restore_id}-{holder}",
+                )
+            status = backup.report_status(self.config)
+        self.assertEqual(status["verifiedUpload"]["backupId"], backup_id)
+        self.assertEqual(status["restoreCapture"]["publisherFailure"]["code"], "remote-name-collision")
+        self.assertEqual(status["restoreCapture"]["lastAttempt"]["code"], "capture-command-failed")
+
+    def test_restore_publisher_does_not_attach_failure_to_another_restore(self):
+        restore_id = "backup-20261101120000-1"
+        backup_id = "backup-20261101120100-2"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        state_path = capture_state / "restore-capture-state.json"
+        backup.restore_capture_write(
+            state_path, restore_id, "restore-holder", "lease-uid-1",
+            "upload-pending", "upload-pending", backupId=backup_id,
+        )
+        snapshot_path = snapshot(capture_state / "snapshot", backup_id=backup_id)
+        capture = {
+            "stateVersion": 2, "backupId": backup_id, "status": "backup-mode", "phase": "upload-pending",
+            "restoreOperation": {"backupId": restore_id, "holder": "restore-holder", "leaseUid": "lease-uid-1"},
+        }
+        for mismatch in ("holder", "backup-id", "progress-phase"):
+            with self.subTest(mismatch=mismatch):
+                capture["restoreOperation"]["holder"] = "another-holder" if mismatch == "holder" else "restore-holder"
+                capture["backupId"] = "backup-20261101120100-9" if mismatch == "backup-id" else backup_id
+                backup.restore_capture_write(
+                    state_path, restore_id, "restore-holder", "lease-uid-1", "upload-pending",
+                    "capture" if mismatch == "progress-phase" else "upload-pending", backupId=backup_id,
+                )
+                backup.atomic_json(snapshot_path / "backup-state.json", capture)
+                with patch.dict(os.environ, {"RECIPE_DB_RESTORE_CAPTURE_ACTIVE": "1"}), \
+                        patch.object(backup, "upload_snapshot",
+                                     side_effect=backup.BackupError("upload-failure", "remote-name-collision")):
+                    with self.assertRaisesRegex(backup.BackupError, "remote-name-collision"):
+                        backup.run_restore_publish(self.config, snapshot_path)
+                self.assertNotIn("pendingPublisherFailure", backup.read_json(state_path))
+
+    def test_restore_publisher_failure_survives_child_process_and_shell_progress(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        backup_id = "backup-20261101120100-2"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        state_path = capture_state / "restore-capture-state.json"
+        backup.restore_capture_write(
+            state_path, restore_id, holder, lease_uid, "upload-pending", "upload-pending", backupId=backup_id,
+        )
+        snapshot_path = snapshot(capture_state / "snapshot", backup_id=backup_id)
+        backup.atomic_json(snapshot_path / "backup-state.json", {
+            "stateVersion": 2, "backupId": backup_id, "status": "backup-mode", "phase": "upload-pending",
+            "source": backup.read_json(snapshot_path / "manifest.json")["source"],
+            "restoreOperation": {"backupId": restore_id, "holder": holder, "leaseUid": lease_uid},
+        })
+        hook = self.root / "python-hook"
+        hook.mkdir()
+        (hook / "sitecustomize.py").write_text(
+            "from pathlib import Path\n"
+            "original = Path.mkdir\n"
+            "def fail(self, *args, **kwargs):\n"
+            "    if self.name == 'staging':\n"
+            "        raise OSError('PRIVATE-FILESYSTEM-DETAIL')\n"
+            "    return original(self, *args, **kwargs)\n"
+            "Path.mkdir = fail\n"
+        )
+
+        def capture(config, action, *args):
+            env = dict(os.environ, RECIPE_DB_RESTORE_CAPTURE_ACTIVE="1")
+            if code == "remote-operation":
+                env["FAKE_RCLONE_FAIL"] = "mkdir"
+            else:
+                env["PYTHONPATH"] = str(hook)
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "files/backup-upload.py"), "restore-publish",
+                 "--config", str(self.config_path), "--snapshot", str(snapshot_path)],
+                env=env, capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(code, result.stderr)
+            self.assertNotIn("SENSITIVE-RCLONE-ERROR", result.stderr)
+            self.assertNotIn("PRIVATE-FILESYSTEM-DETAIL", result.stderr)
+            subprocess.run(
+                ["bash", "-c",
+                 'source "$1"; restore_backup_state_path=$2; '
+                 'restore_backup_progress upload-failed upload-pending "$3" operation-failed',
+                 "_", str(ROOT.parent / ".scripts/lib/production-restore-backup.sh"), str(state_path), backup_id],
+                check=True,
+            )
+            raise backup.BackupError("restart-failure", "capture-command-failed")
+
+        for code, error_status in (("remote-operation", "upload-failure"),
+                                   ("publisher-local-operation", "capture-failure")):
+            with self.subTest(code=code):
+                with patch.object(backup, "backup_timer_disabled"), \
+                        patch.object(backup, "run_capture_command", side_effect=capture):
+                    with self.assertRaisesRegex(backup.BackupError, "capture-command-failed"):
+                        backup.run_restore_capture_action(
+                            self.config, "restore-upload-retry", restore_id, holder, lease_uid,
+                            f"RETRY-UPLOAD-RESTORE-{restore_id}-{holder}",
+                        )
+                status = backup.report_status(self.config)
+                self.assertEqual(status["restoreCapture"]["publisherFailure"], {
+                    "status": error_status, "code": code,
+                })
+
+    def test_restore_publish_records_verification_mismatch(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        backup_id = "backup-20261101120100-2"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        state_path = capture_state / "restore-capture-state.json"
+        backup.restore_capture_write(
+            state_path, restore_id, holder, lease_uid, "upload-pending", "upload-pending", backupId=backup_id,
+        )
+        snapshot_path = snapshot(capture_state / "snapshot", backup_id=backup_id)
+        backup.atomic_json(snapshot_path / "backup-state.json", {
+            "stateVersion": 2, "backupId": backup_id, "status": "backup-mode", "phase": "upload-pending",
+            "restoreOperation": {"backupId": restore_id, "holder": holder, "leaseUid": lease_uid},
+        })
+
+        def capture(config, action, *args):
+            with patch.dict(os.environ, {"RECIPE_DB_RESTORE_CAPTURE_ACTIVE": "1"}), \
+                    patch.object(backup, "upload_snapshot", return_value="verified-upload"), \
+                    patch.object(backup, "verified_upload_status", return_value=False):
+                with self.assertRaisesRegex(backup.BackupError, "restore-capture-remote-verification-mismatch"):
+                    backup.run_restore_publish(config, snapshot_path)
+            backup.restore_capture_write(
+                state_path, restore_id, holder, lease_uid, "upload-failed", "upload-pending",
+                backupId=backup_id, failureCode="operation-failed",
+            )
+            raise backup.BackupError("restart-failure", "capture-command-failed")
+
+        with patch.object(backup, "backup_timer_disabled"), \
+                patch.object(backup, "run_capture_command", side_effect=capture):
+            with self.assertRaisesRegex(backup.BackupError, "capture-command-failed"):
+                backup.run_restore_capture_action(
+                    self.config, "restore-upload-retry", restore_id, holder, lease_uid,
+                    f"RETRY-UPLOAD-RESTORE-{restore_id}-{holder}",
+                )
+        self.assertEqual(backup.report_status(self.config)["restoreCapture"]["publisherFailure"], {
+            "status": "upload-failure", "code": "restore-capture-remote-verification-mismatch",
+        })
+
     def test_restore_upload_retry_records_enabled_timer_refusal(self):
         restore_id = "backup-20261101120000-1"
         holder = "restore-holder"
