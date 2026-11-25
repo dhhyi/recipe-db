@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -93,6 +94,22 @@ class BackupUploadTests(unittest.TestCase):
         self.assertEqual(status["restoreCapture"]["status"], "upload-failed")
         self.assertEqual(status["restoreCapture"]["phase"], "upload-pending")
         self.assertEqual(status["restoreCapture"]["backupId"], "backup-20261101120100-2")
+
+    def test_status_skips_restore_capture_directories_without_progress_files(self):
+        incomplete = self.state / "restore-captures" / "backup-20261101115900-1"
+        incomplete.mkdir(parents=True)
+        capture_state = self.state / "restore-captures" / "backup-20261101120000-1"
+        capture_state.mkdir()
+        backup.restore_capture_write(
+            capture_state / "restore-capture-state.json",
+            "backup-20261101120000-1", "restore-holder", "lease-uid-1",
+            "upload-failed", "upload-pending",
+        )
+
+        status = backup.report_status(self.config)
+
+        self.assertEqual(status["restoreCapture"]["restoreBackupId"], "backup-20261101120000-1")
+        self.assertEqual(status["restoreCapture"]["status"], "upload-failed")
 
     def test_status_reports_installed_closeout_capability_not_cached_capability(self):
         self.assertEqual(backup.report_status(self.config)["migrationRecoveryCloseoutVersion"], 1)
@@ -274,9 +291,9 @@ raise SystemExit(0)
                 backupId="backup-20261101120100-2",
             )
 
-        with patch.object(backup, "subprocess") as subprocess_mock, \
+        with patch.object(backup.subprocess, "run") as subprocess_run, \
                 patch.object(backup, "run_capture_command", side_effect=resume):
-            subprocess_mock.run.side_effect = [
+            subprocess_run.side_effect = [
                 SimpleNamespace(returncode=1, stdout="disabled\n"),
                 SimpleNamespace(returncode=3, stdout="inactive\n"),
             ]
@@ -308,9 +325,9 @@ raise SystemExit(0)
                 "upload-verified", "maintenance-pending", backupId=backup_id,
             )
 
-        with patch.object(backup, "subprocess") as subprocess_mock, \
+        with patch.object(backup.subprocess, "run") as subprocess_run, \
                 patch.object(backup, "run_capture_command", side_effect=resume):
-            subprocess_mock.run.side_effect = [
+            subprocess_run.side_effect = [
                 SimpleNamespace(returncode=1, stdout="disabled\n"),
                 SimpleNamespace(returncode=3, stdout="inactive\n"),
             ]
@@ -462,11 +479,12 @@ raise SystemExit(0)
             )
             raise backup.BackupError("maintenance-failure", "maintenance-resume-interrupted")
 
-        with patch.object(backup, "subprocess") as subprocess_mock, \
+        with patch.object(backup.subprocess, "run") as subprocess_run, \
                 patch.object(backup, "run_capture_command", side_effect=resume):
-            subprocess_mock.run.side_effect = [
+            subprocess_run.side_effect = [
                 SimpleNamespace(returncode=1, stdout="disabled\n"),
                 SimpleNamespace(returncode=3, stdout="inactive\n"),
+                SimpleNamespace(returncode=1, stdout=""),
             ]
             with self.assertRaisesRegex(backup.BackupError, "maintenance-resume-interrupted"):
                 backup.run_restore_capture_action(
@@ -479,6 +497,60 @@ raise SystemExit(0)
         self.assertEqual(attempt["backupId"], backup_id)
         self.assertEqual(attempt["restoreBackupId"], restore_id)
         self.assertEqual(attempt["code"], "maintenance-resume-interrupted")
+
+    def test_reopened_restore_stops_protecting_current_backup_status(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        backup_id = "backup-20261101120100-2"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        state_path = capture_state / "restore-capture-state.json"
+        backup.restore_capture_write(
+            state_path, restore_id, holder, lease_uid, "complete", "maintenance",
+            backupId=backup_id,
+        )
+        snapshot_path = snapshot(capture_state / "snapshot", backup_id=backup_id)
+        manifest = backup.read_json(snapshot_path / "manifest.json")
+        backup.atomic_json(snapshot_path / "backup-state.json", {
+            "stateVersion": 2, "backupId": backup_id, "status": "backup-mode",
+            "phase": "upload-pending", "source": manifest["source"],
+            "restoreOperation": {
+                "backupId": restore_id, "holder": holder, "leaseUid": lease_uid,
+            },
+        })
+        backup.write_status(self.config, "verified-upload", "remote-readback", backup_id)
+        lease = {
+            "apiVersion": "coordination.k8s.io/v1",
+            "kind": "Lease",
+            "metadata": {
+                "name": "recipe-db-deploy", "namespace": "kube-system", "uid": lease_uid,
+                "labels": {"app.kubernetes.io/part-of": "recipe-db"},
+                "annotations": {
+                    "recipe-db/operation": "restore",
+                    "recipe-db/release": manifest["source"]["artifact"],
+                },
+            },
+            "spec": {"holderIdentity": holder},
+        }
+        with patch.object(backup.subprocess, "run", side_effect=[
+                SimpleNamespace(returncode=0, stdout=json.dumps(lease)),
+                SimpleNamespace(returncode=0, stdout="{}\n"),
+        ]):
+            self.assertIsNotNone(backup.protected_restore_verified_upload(self.config))
+            backup.write_status(self.config, "capture-failure", "nightly-failed", backup_id)
+
+        self.assertEqual(backup.read_json(state_path)["status"], "complete")
+        self.assertEqual(backup.read_json(backup.status_path(self.config))["status"], "capture-failure")
+        self.assertFalse(backup.status_path(self.config).with_name("maintenance-attempt.json").exists())
+
+        replacement = json.loads(json.dumps(lease))
+        replacement["metadata"]["uid"] = "replacement-lease-uid"
+        with patch.object(backup.subprocess, "run", return_value=SimpleNamespace(
+                returncode=0, stdout=json.dumps(replacement))):
+            self.assertFalse(backup.restore_capture_lease_is_retained(
+                self.config, backup.read_json(state_path), manifest["source"]["artifact"],
+            ))
 
     def test_restore_maintenance_resume_accepts_upload_pending_after_remote_readback(self):
         restore_id = "backup-20261101120000-1"
@@ -582,6 +654,87 @@ raise SystemExit(0)
         self.assertEqual(state["failureCode"], "backup-timer-enabled")
         self.assertEqual(backup.read_json(backup.status_path(self.config))["code"],
                          "backup-timer-enabled")
+
+    def test_timer_refusal_during_upload_retry_preserves_upload_retry_state(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        confirmation = f"RETRY-UPLOAD-RESTORE-{restore_id}-{holder}"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        state_path = capture_state / "restore-capture-state.json"
+        backup.restore_capture_write(
+            state_path, restore_id, holder, lease_uid, "in-progress", "upload-pending",
+            backupId="backup-20261101120100-2",
+        )
+
+        with patch.object(backup, "backup_timer_disabled",
+                          side_effect=backup.BackupError("capture-failure", "backup-timer-enabled")), \
+                patch.object(backup, "run_capture_command") as capture:
+            with self.assertRaisesRegex(backup.BackupError, "backup-timer-enabled"):
+                backup.run_restore_capture_action(
+                    self.config, "restore-upload-retry", restore_id, holder, lease_uid, confirmation,
+                )
+
+        capture.assert_not_called()
+        state = backup.read_json(state_path)
+        self.assertEqual((state["status"], state["phase"]), ("upload-failed", "upload-pending"))
+        self.assertEqual(state["failureCode"], "backup-timer-enabled")
+        self.assertEqual(backup.read_json(backup.status_path(self.config))["code"],
+                         "backup-timer-enabled")
+
+    def test_sigterm_during_upload_retry_preserves_upload_retry_state(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        state_path = capture_state / "restore-capture-state.json"
+        backup.restore_capture_write(
+            state_path, restore_id, holder, lease_uid, "in-progress", "upload-pending",
+            backupId="backup-20261101120100-2",
+        )
+        marker = self.root / "capture-started"
+        capture = self.root / "capture"
+        capture.write_text(f"#!/bin/sh\n: > {marker}\nexec sleep 30\n")
+        capture.chmod(0o700)
+        systemctl = self.bin / "systemctl"
+        systemctl.write_text("""#!/bin/sh
+case "$1" in
+  is-enabled) printf 'disabled\\n'; exit 1 ;;
+  is-active) printf 'inactive\\n'; exit 3 ;;
+  *) exit 2 ;;
+esac
+""")
+        systemctl.chmod(0o700)
+        environment = os.environ.copy()
+        environment["PATH"] = f"{self.bin}{os.pathsep}{environment['PATH']}"
+        process = subprocess.Popen(
+            [
+                sys.executable, str(ROOT / "files" / "backup-upload.py"), "restore-upload-retry",
+                "--config", str(self.config_path), "--restore-id", restore_id,
+                "--restore-holder", holder, "--restore-lease-uid", lease_uid,
+                "--confirmation", f"RETRY-UPLOAD-RESTORE-{restore_id}-{holder}",
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment,
+        )
+        try:
+            deadline = time.monotonic() + 10
+            while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(marker.exists(), "restore upload retry never started capture")
+            process.send_signal(signal.SIGTERM)
+            _, stderr = process.communicate(timeout=15)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
+        self.assertNotEqual(process.returncode, 0)
+        self.assertIn("capture-interrupted", stderr)
+        state = backup.read_json(state_path)
+        self.assertEqual((state["status"], state["phase"]), ("upload-failed", "upload-pending"))
+        self.assertEqual(state["failureCode"], "capture-interrupted")
 
     def test_check_timer_cli_verifies_the_timer(self):
         with patch.object(backup, "safe_config", return_value=self.config), \

@@ -333,7 +333,11 @@ This procedure applies after a clean Pi restore has reached `awaiting-signoff`. 
 
 On the **workstation fish shell**, confirm the pending restore and save the exact Lease UID. Keep `VALUES`, `STATE`, and all downloaded package files private:
 
+Use the exact absolute values-file and state-directory paths from the original restore; replace `<original-operation>` below with its existing state directory. Do not create a new restore state directory.
+
 ```fish
+set -g VALUES "$PWD/.secrets/fresh-target-values.yaml"
+set -g STATE "$PWD/.backups/restore-<original-operation>"
 set -gx KUBECONFIG "$HOME/.config/recipe-db/kubeconfig/pi.yaml"
 umask 077
 set -g RESTORE_STATUS "$STATE/restore-status.json"
@@ -447,12 +451,35 @@ Replace both `<exact-new-backupId>` values with the `backupId` returned by retri
 On success, record the result before cleanup and then remove only this rehearsal's local resources:
 
 ```fish
-jq -n --arg id '<exact-new-backupId>' --arg cluster "$LOCAL_CLUSTER" \
+jq -e --arg id '<exact-new-backupId>' '
+  .savedProgress.backupId == $id
+  and .savedProgress.status == "awaiting-signoff"
+  and .savedProgress.phase == "pending-signoff"
+  and .savedProgress.import.status == "complete"
+  and .savedProgress.readChecks.status == "passed"
+  and .lease.ownedByRestore
+  and .lease.phase == "awaiting-signoff"
+  and .observed.graphql.mode == "maintenance"
+  and .observed.publicRoutes.normalRoutesObserved
+  and .savedStateMatchesCluster
+  and ((.writesMayHaveOpened // false) | not)
+' "$RUN_DIRECTORY/local-restore-status.json" > /dev/null
+jq -e --arg id '<exact-new-backupId>' '
+  .backupId == $id and .status == "awaiting-signoff" and .phase == "pending-signoff"
+  and .import.status == "complete" and .readChecks.status == "passed"
+  and ((.writesMayHaveOpened // false) | not)
+' "$LOCAL_STATE/restore-state.json" > /dev/null
+and jq -n --arg id '<exact-new-backupId>' --arg cluster "$LOCAL_CLUSTER" \
   --slurpfile state "$LOCAL_STATE/restore-state.json" '
   {status:"passed",backupId:$id,sourceRelease:{artifact:$state[0].artifact,
     revision:$state[0].revision},localTarget:{cluster:$cluster,
     importStatus:$state[0].import.status,readChecksStatus:$state[0].readChecks.status}}
 ' > "$RUN_DIRECTORY/evidence.json"
+and jq -e --arg id '<exact-new-backupId>' '
+  .status == "passed" and .backupId == $id
+  and .localTarget.importStatus == "complete"
+  and .localTarget.readChecksStatus == "passed"
+' "$RUN_DIRECTORY/evidence.json" > /dev/null
 and mise run production-k3d delete "$LOCAL_VALUES" \
   "DELETE-$LOCAL_CLUSTER-AND-ALL-DATA"
 and rm -rf "$BACKUP_DIRECTORY" "$LOCAL_STATE" "$LOCAL_VALUES"

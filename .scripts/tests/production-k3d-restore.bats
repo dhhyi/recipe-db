@@ -1332,6 +1332,80 @@ EOF
   run restore_backup_phase_is_allowed restore-backup-maintenance-resume \
     capture restore-backup-capture-failed
   [ "$status" -ne 0 ]
+
+  run restore_backup_phase_is_allowed restore-backup-upload-retry \
+    capture restore-backup-capture-failed
+  [ "$status" -eq 0 ]
+}
+
+@test "restore capture retry verifies reads against its retained Lease failure phase" {
+  cp "$BATS_TEST_DIRNAME/../lib/production-restore-backup.sh" .scripts/lib/
+  cat > load-operation.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source .scripts/lib/production-restore-backup.sh
+target=pi
+command=restore-backup-capture
+namespace=recipe-db
+cluster=recipe-db-pi
+context=recipe-db-pi
+work="$FIXTURE_ROOT/work"
+mkdir -p "$work" "$FIXTURE_ROOT/etc" "$FIXTURE_ROOT/state/restore-captures/backup-20261101120000-1"
+config_file="$FIXTURE_ROOT/etc/backup-values.yaml"
+uploader_config="$FIXTURE_ROOT/uploader.json"
+directory="$FIXTURE_ROOT/state/restore-captures/backup-20261101120000-1"
+artifact=ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+revision=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+printf '{}\n' > "$config_file"
+printf '{"stateDirectory":"%s"}\n' "$FIXTURE_ROOT/state" > "$uploader_config"
+printf '%s\n' "$artifact" > "$FIXTURE_ROOT/etc/backup-release-ref"
+printf '{"storageClass":"local-path"}\n' > "$work/config.json"
+config_hash=$(sha256sum "$work/config.json" | cut -d ' ' -f 1)
+jq -n --arg hash "$config_hash" --arg artifact "$artifact" --arg revision "$revision" '{
+  version:1,backupId:"backup-20261101120000-1",holder:"restore-holder",
+  leaseUid:"lease-uid-1",status:"awaiting-signoff",phase:"pending-signoff",
+  target:"pi",cluster:"recipe-db-pi",context:"recipe-db-pi",namespace:"recipe-db",
+  configSha256:$hash,artifact:$artifact,revision:$revision,
+  import:{status:"complete"},readChecks:{status:"passed"},
+  writesMayHaveOpened:false,probeRecipeId:null
+}' > "$FIXTURE_ROOT/restore-state.json"
+jq -n --arg artifact "$artifact" '{
+  metadata:{uid:"lease-uid-1",resourceVersion:"42",
+    labels:{"app.kubernetes.io/part-of":"recipe-db"},
+    annotations:{"recipe-db/phase":"restore-backup-capture-failed",
+      "recipe-db/operation":"restore","recipe-db/release":$artifact}},
+  spec:{holderIdentity:"restore-holder"}
+}' > "$FIXTURE_ROOT/lease.json"
+jq -n --rawfile state "$FIXTURE_ROOT/restore-state.json" '{
+  metadata:{namespace:"recipe-db",labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+  data:{"restore-state.json":$state}
+}' > "$FIXTURE_ROOT/configmap.json"
+jq -n '{
+  format:"recipe-db-restore-capture",formatVersion:1,
+  restoreBackupId:"backup-20261101120000-1",restoreHolder:"restore-holder",
+  restoreLeaseUid:"lease-uid-1",status:"capture-failed",phase:"capture"
+}' > "$directory/restore-capture-state.json"
+restore_backup_check_confirmations() { :; }
+connect() { :; }
+recovery_command_acquire() { :; }
+kube() { cat "$FIXTURE_ROOT/configmap.json"; }
+cluster_operation_lock_status() { cat "$FIXTURE_ROOT/lease.json"; }
+production_backup_config_sha256() { sha256sum "$1" | cut -d ' ' -f 1; }
+production_storage_preflight() { :; }
+pull_release() { :; }
+render() { :; }
+restore_backup_verify_inputs() { :; }
+recovery_identity() { :; }
+production_restore_identity_matches() { return 0; }
+restore_backup_verify_pending_reads() { printf '%s\n' "$2" > "$FIXTURE_ROOT/read-phase"; }
+restore_backup_load_operation "$config_file" "$uploader_config" "$directory" \
+  backup-20261101120000-1 restore-holder lease-uid-1 \
+  CAPTURE-RESTORE-backup-20261101120000-1-restore-holder
+EOF
+  chmod 700 load-operation.sh
+  run env FIXTURE_ROOT="$FIXTURE_ROOT" bash load-operation.sh
+  [ "$status" -eq 0 ]
+  [ "$(cat "$FIXTURE_ROOT/read-phase")" = restore-backup-capture-failed ]
 }
 
 @test "restore-owned completion records read evidence before the final Lease transition" {
@@ -1634,7 +1708,46 @@ EOF
   [ "$status" -ne 0 ]
 }
 
-@test "failed recovery-command release marks completed restore capture failed" {
+@test "restore backup failure advances progress and exact Lease phase" {
+  cp "$BATS_TEST_DIRNAME/../lib/production-restore-backup.sh" .scripts/lib/
+  source .scripts/lib/production-restore-backup.sh
+
+  work="$FIXTURE_ROOT/work"
+  mkdir -p "$work"
+  restore_backup_state_path="$FIXTURE_ROOT/restore-capture-state.json"
+  restore_backup_started=true
+  restore_backup_current_phase=awaiting-signoff
+  restore_backup_holder=restore-holder
+  restore_backup_lease_uid="lease-uid-1"
+  restore_backup_artifact=ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  cluster_operation_lock_current_phase=awaiting-signoff
+  command=restore-backup-capture
+  jq -n '{
+    format:"recipe-db-restore-capture",formatVersion:1,
+    restoreBackupId:"backup-20261101120000-1",restoreHolder:"restore-holder",
+    restoreLeaseUid:"lease-uid-1",status:"complete",phase:"maintenance",
+    backupId:"backup-20261101120100-2"
+  }' > "$restore_backup_state_path"
+  jq -n --arg artifact "$restore_backup_artifact" '{
+    metadata:{uid:"lease-uid-1",resourceVersion:"42",
+      labels:{"app.kubernetes.io/part-of":"recipe-db"},
+      annotations:{"recipe-db/phase":"awaiting-signoff",
+        "recipe-db/operation":"restore","recipe-db/release":$artifact}},
+    spec:{holderIdentity:"restore-holder"}
+  }' > "$FIXTURE_ROOT/lease.json"
+  cluster_operation_lock_status() { cat "$FIXTURE_ROOT/lease.json"; }
+  cluster_operation_lock_kubectl() {
+    cp "${@: -1}" "$FIXTURE_ROOT/lease.json"
+  }
+
+  restore_backup_record_cleanup_failure 1
+  jq -e '.status == "maintenance-failed" and .phase == "maintenance-pending"' \
+    "$restore_backup_state_path"
+  jq -e '.metadata.annotations["recipe-db/phase"] == "restore-backup-maintenance-failed"' \
+    "$FIXTURE_ROOT/lease.json"
+}
+
+@test "recovery command release failure alone leaves verified restore ownership unchanged" {
   cp "$BATS_TEST_DIRNAME/../lib/production-restore-backup.sh" .scripts/lib/
   source .scripts/lib/production-restore-backup.sh
 
@@ -1667,13 +1780,11 @@ EOF
     cp "${@: -1}" "$FIXTURE_ROOT/lease.json"
   }
 
-  cleanup_result=0
-  if ! recovery_command_release; then cleanup_result=1; fi
-  [ "$cleanup_result" -eq 1 ]
-  restore_backup_record_cleanup_failure "$cleanup_result"
-  jq -e '.status == "maintenance-failed" and .phase == "maintenance-pending"' \
-    "$restore_backup_state_path"
-  jq -e '.metadata.annotations["recipe-db/phase"] == "restore-backup-maintenance-failed"' \
+  restore_backup_record_cleanup_failure 0
+  run recovery_command_release
+  [ "$status" -ne 0 ]
+  jq -e '.status == "complete" and .phase == "maintenance"' "$restore_backup_state_path"
+  jq -e '.metadata.annotations["recipe-db/phase"] == "awaiting-signoff"' \
     "$FIXTURE_ROOT/lease.json"
 }
 
@@ -1682,6 +1793,9 @@ EOF
   mkdir -p "$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/snapshot"
   chmod 700 "$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/snapshot"
   printf '{"stateDirectory":"%s"}\n' "$FIXTURE_ROOT/capture-work" > "$FIXTURE_ROOT/uploader.json"
+  cat > "$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/restore-capture-state.json" << 'EOF'
+{"format":"recipe-db-restore-capture","formatVersion":1,"restoreBackupId":"backup-20261101120000-1","restoreHolder":"restore-holder","restoreLeaseUid":"lease-uid-1","status":"capture-failed","phase":"capture"}
+EOF
   cat > "$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/snapshot/backup-state.json" << 'EOF'
 {"backupId":"backup-20261101120100-2","status":"backup-mode","phase":"upload-pending","restoreOperation":{"backupId":"backup-20261101120000-1","holder":"restore-holder","leaseUid":"lease-uid-1"}}
 EOF
@@ -1694,7 +1808,16 @@ restore_backup_state_directory="$FIXTURE_ROOT/capture-work/restore-captures/back
 restore_backup_holder=restore-holder
 restore_backup_current_graphql_mode=maintenance
 restore_backup_current_phase=restore-backup-maintenance-pending
-restore_backup_load_operation() { printf 'load\n' >> "$MOCK_LOG.pipeline"; }
+command=restore-backup-upload-retry
+restore_backup_load_operation() {
+  if [[ $command == restore-backup-upload-retry ]]; then
+    restore_backup_expected_phase=$(jq -er .phase "$restore_backup_state_directory/restore-capture-state.json")
+    restore_backup_current_phase=restore-backup-capture-failed
+    restore_backup_phase_is_allowed "$command" "$restore_backup_expected_phase" \
+      "$restore_backup_current_phase" || return 1
+  fi
+  printf 'load\n' >> "$MOCK_LOG.pipeline"
+}
 backup_load_state() {
   snapshot=$1
   backup_id=$(jq -er .backupId "$snapshot/backup-state.json")
@@ -1720,6 +1843,7 @@ EOF
 
   : > "$MOCK_LOG.pipeline"
   cat >> retry-pipeline.sh << 'EOF'
+command=restore-backup-maintenance-resume
 restore_backup_maintenance_resume "$FIXTURE_ROOT/config.json" "$FIXTURE_ROOT/uploader.json" \
   "$restore_backup_state_directory" backup-20261101120000-1 restore-holder lease-uid-1 \
   "RESUME-MAINTENANCE-RESTORE-backup-20261101120000-1-restore-holder"

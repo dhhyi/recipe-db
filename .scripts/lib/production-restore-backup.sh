@@ -266,6 +266,7 @@ restore_backup_phase_is_allowed() {
       restore-backup-capture:capture:restore-backup-capture-failed | \
       restore-backup-upload-retry:upload-pending:restore-backup-upload-failed | \
       restore-backup-upload-retry:capture:restore-backup-upload-pending | \
+      restore-backup-upload-retry:capture:restore-backup-capture-failed | \
       restore-backup-upload-retry:upload-pending:restore-backup-upload-pending | \
       restore-backup-maintenance-resume:maintenance-pending:restore-backup-maintenance-failed | \
       restore-backup-maintenance-resume:maintenance-pending:restore-backup-maintenance-pending | \
@@ -410,7 +411,7 @@ restore_backup_load_operation() {
   if [[ $command == restore-backup-capture ]]; then
     mkdir -m 700 "$work/restore-backup-state"
     cp "$work/restore-backup-state.json" "$work/restore-backup-state/restore-state.json"
-    restore_backup_verify_pending_reads "$config_file" awaiting-signoff \
+    restore_backup_verify_pending_reads "$config_file" "$restore_backup_current_phase" \
       "$work/restore-backup-status.json" \
       || production_fail "restore no longer serves verified read-only traffic"
   elif [[ $command == restore-backup-maintenance-resume &&

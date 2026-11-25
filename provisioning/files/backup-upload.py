@@ -787,8 +787,52 @@ def protected_restore_verified_upload(config):
                 or manifest.get("source") != capture.get("source"):
             continue
         if verified_upload_status(config, backup_id):
-            matches.append(state)
-    return matches[0] if len(matches) == 1 else None
+            matches.append((state, manifest["source"]["artifact"]))
+    if len(matches) != 1:
+        return None
+    state, artifact = matches[0]
+    return state if restore_capture_lease_is_retained(config, state, artifact) else None
+
+
+def restore_capture_lease_is_retained(config, state, artifact):
+    env = capture_environment(config)
+    try:
+        result = subprocess.run(
+            [
+                "/usr/local/bin/k3s", "kubectl", "--kubeconfig", env["KUBECONFIG"],
+                "--namespace", "kube-system", "--request-timeout=10s",
+                "get", "lease", "recipe-db-deploy", "--ignore-not-found", "-o", "json",
+            ],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, check=False, timeout=15, env=env,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+    if result.returncode:
+        return True
+    try:
+        lease = json.loads(result.stdout) if result.stdout.strip() else {}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return True
+    if lease == {}:
+        return False
+    if not isinstance(lease, dict):
+        return True
+    metadata = lease.get("metadata")
+    spec = lease.get("spec")
+    annotations = metadata.get("annotations") if isinstance(metadata, dict) else None
+    labels = metadata.get("labels") if isinstance(metadata, dict) else None
+    if lease.get("apiVersion") != "coordination.k8s.io/v1" or lease.get("kind") != "Lease" \
+            or not isinstance(metadata, dict) or metadata.get("name") != "recipe-db-deploy" \
+            or metadata.get("namespace") != "kube-system" or metadata.get("deletionTimestamp") is not None \
+            or not isinstance(annotations, dict) or not isinstance(labels, dict) \
+            or not isinstance(spec, dict):
+        return True
+    return metadata.get("uid") == state.get("restoreLeaseUid") \
+        and spec.get("holderIdentity") == state.get("restoreHolder") \
+        and labels.get("app.kubernetes.io/part-of") == "recipe-db" \
+        and annotations.get("recipe-db/operation") == "restore" \
+        and annotations.get("recipe-db/release") == artifact
 
 
 def enter_maintenance(config):
@@ -1392,7 +1436,10 @@ def run_restore_capture_action(config, action, restore_id, holder, lease_uid, co
             phase = state.get("phase", "capture")
             status = state.get("status", "failed")
             if status == "in-progress":
-                status = "failed"
+                status = {
+                    "upload-pending": "upload-failed",
+                    "maintenance-pending": "maintenance-failed",
+                }.get(phase, "failed")
             restore_capture_write(
                 state_path, restore_id, holder, lease_uid, status, phase,
                 failureCode=error.code,
@@ -1558,11 +1605,13 @@ def run_nightly(config):
 def attach_restore_capture_status(config, value):
     restore_captures = Path(config["stateDirectory"]) / "restore-captures"
     if restore_captures.is_dir() and not restore_captures.is_symlink():
-        candidates = sorted(
-            (path / "restore-capture-state.json" for path in restore_captures.iterdir()
-             if path.is_dir() and not path.is_symlink()),
-            key=lambda path: path.stat().st_mtime,
-        )
+        candidates = []
+        for directory in restore_captures.iterdir():
+            state_path = directory / "restore-capture-state.json"
+            if directory.is_dir() and not directory.is_symlink() \
+                    and not state_path.is_symlink() and state_path.is_file():
+                candidates.append(state_path)
+        candidates.sort(key=lambda path: path.stat().st_mtime)
         if candidates:
             try:
                 capture = read_json(candidates[-1])
