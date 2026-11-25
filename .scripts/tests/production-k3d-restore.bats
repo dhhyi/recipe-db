@@ -1326,6 +1326,10 @@ EOF
   [ "$status" -eq 0 ]
 
   run restore_backup_phase_is_allowed restore-backup-maintenance-resume \
+    upload-pending restore-backup-upload-failed
+  [ "$status" -eq 0 ]
+
+  run restore_backup_phase_is_allowed restore-backup-maintenance-resume \
     maintenance-pending projection-refresh
   [ "$status" -eq 0 ]
 
@@ -1826,6 +1830,7 @@ set -euo pipefail
 source .scripts/lib/production-restore-backup.sh
 restore_backup_snapshot="$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/snapshot"
 restore_backup_state_directory="$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1"
+restore_backup_state_path="$restore_backup_state_directory/restore-capture-state.json"
 restore_backup_holder=restore-holder
 restore_backup_current_graphql_mode=maintenance
 restore_backup_current_phase=restore-backup-maintenance-pending
@@ -1865,6 +1870,9 @@ EOF
   : > "$MOCK_LOG.pipeline"
   cat >> retry-pipeline.sh << 'EOF'
 command=restore-backup-maintenance-resume
+jq --arg id "${MOCK_RECORDED_BACKUP_ID:-backup-20261101120100-2}" \
+  '.backupId=$id' "$restore_backup_state_path" > "$restore_backup_state_path.next"
+mv "$restore_backup_state_path.next" "$restore_backup_state_path"
 restore_backup_maintenance_resume "$FIXTURE_ROOT/config.json" "$FIXTURE_ROOT/uploader.json" \
   "$restore_backup_state_directory" backup-20261101120000-1 restore-holder lease-uid-1 \
   "RESUME-MAINTENANCE-RESTORE-backup-20261101120000-1-restore-holder"
@@ -1873,6 +1881,11 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(grep -n 'completion:' "$MOCK_LOG.pipeline" | cut -d: -f1)" -lt \
     "$(grep -n 'lease:awaiting-signoff' "$MOCK_LOG.pipeline" | cut -d: -f1)" ]
+
+  run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" \
+    MOCK_RECORDED_BACKUP_ID=backup-20261101120100-3 bash retry-pipeline.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"maintenance resume requires the exact recorded snapshot"* ]]
 }
 
 @test "restore verification retains and cleans up both port-forward processes" {
@@ -1907,6 +1920,8 @@ EOF
   set_value '.timeoutSeconds=8'
   run_restore
   [ "$status" -eq 0 ]
+  local expected_backup_config
+  expected_backup_config=$(jq -er .backupConfigSha256 "$RESTORE_STATE/restore-state.json")
   local pending_guard="recovery-guard-$RESTORE_ID"
   jq -e --arg name "$pending_guard" \
     'any(.items[]; .kind == "Job" and .metadata.name == $name)' "$MOCK_LOG.restore-guard"
@@ -1974,18 +1989,20 @@ EOF
     and .reset.pendingRestore == null' "$RESTORE_STATE/restore-state.json"
   [ -e "$MOCK_LOG.lease" ]
   [ ! -e "$MOCK_LOG.reopening" ]
-  jq '.writesMayHaveOpened=true | .publicRoutesMayBeOpen=true' \
+  jq '.writesMayHaveOpened=true | .publicRoutesMayBeOpen=true | del(.backupConfigSha256)' \
     "$RESTORE_STATE/restore-state.json" > "$RESTORE_STATE/restore-state.next"
   mv "$RESTORE_STATE/restore-state.next" "$RESTORE_STATE/restore-state.json"
   jq '.data["restore-state.json"] |=
-    (fromjson | .writesMayHaveOpened=true | .publicRoutesMayBeOpen=true | tojson)' \
+    (fromjson | .writesMayHaveOpened=true | .publicRoutesMayBeOpen=true | del(.backupConfigSha256) | tojson)' \
     "$MOCK_LOG.cluster-restore-state" > "$MOCK_LOG.cluster-restore-state.next"
   mv "$MOCK_LOG.cluster-restore-state.next" "$MOCK_LOG.cluster-restore-state"
   export MOCK_RESTORE_READ_FAIL=true
   run bash .scripts/production-k3d.sh recovery-restore "$VALUES" "$RESTORE_STATE" \
     "$RESTORE_ALT_MANIFEST" "$RESTORE_ALT_ARCHIVE" "$alternate_id" "RESTORE-$alternate_id"
   [ "$status" -ne 0 ]
-  jq -e --arg id "$alternate_id" '.backupId == $id and .status == "recovery-required"
+  jq -e --arg id "$alternate_id" --arg config "$expected_backup_config" \
+    '.backupId == $id and .status == "recovery-required"
+    and .backupConfigSha256 == $config
     and .phase == "verifying-reads" and .import.status == "complete"
     and .readChecks.status == "failed" and .writesMayHaveOpened == false
     and .publicRoutesMayBeOpen == false

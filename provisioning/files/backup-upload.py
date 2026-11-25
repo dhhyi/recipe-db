@@ -782,6 +782,8 @@ def protected_restore_verified_upload(config):
                 or state.get("backupId") != backup_id \
                 or (state.get("status"), state.get("phase")) not in {
                     ("in-progress", "upload-pending"),
+                    ("upload-pending", "upload-pending"),
+                    ("upload-failed", "upload-pending"),
                     ("upload-verified", "maintenance-pending"),
                     ("maintenance-failed", "maintenance-pending"),
                     ("complete", "maintenance"),
@@ -1400,6 +1402,7 @@ def run_restore_capture_action(config, action, restore_id, holder, lease_uid, co
             ("in-progress", "maintenance-pending"),
             ("in-progress", "upload-pending"),
             ("upload-pending", "upload-pending"),
+            ("upload-failed", "upload-pending"),
             ("complete", "maintenance"),
         }
     elif action == "restore-upload-retry":
@@ -1419,6 +1422,9 @@ def run_restore_capture_action(config, action, restore_id, holder, lease_uid, co
         }
     if state is not None and (state.get("status"), state.get("phase")) not in expected_states:
         raise BackupError("restart-failure", "restore-capture-phase-mismatch")
+    if action == "restore-maintenance-resume" and state.get("phase") == "upload-pending" \
+            and not verified_upload_status(config, state.get("backupId")):
+        raise BackupError("restart-failure", "maintenance-upload-verification-missing")
     try:
         if action != "restore-capture":
             backup_timer_disabled()
@@ -1437,6 +1443,20 @@ def run_restore_capture_action(config, action, restore_id, holder, lease_uid, co
                 or not BACKUP_ID_PATTERN.fullmatch(state["backupId"]) \
                 or state["backupId"] == restore_id:
             raise BackupError("restart-failure", "restore-capture-result-unverified")
+        if action == "restore-maintenance-resume":
+            attempt_path = status_path(config).with_name("maintenance-attempt.json")
+            try:
+                attempt = read_json(attempt_path) if attempt_path.exists() or attempt_path.is_symlink() else None
+            except FileNotFoundError:
+                attempt = None
+            except (OSError, ValueError, json.JSONDecodeError) as error:
+                raise BackupError("restart-failure", "restore-capture-attempt-read-failed") from error
+            if isinstance(attempt, dict) and attempt.get("backupId") == state["backupId"] \
+                    and attempt.get("restoreBackupId") == restore_id:
+                try:
+                    attempt_path.unlink(missing_ok=True)
+                except OSError as error:
+                    raise BackupError("restart-failure", "restore-capture-attempt-clear-failed") from error
         return state
     except BackupError as error:
         try:
@@ -1640,6 +1660,9 @@ def attach_restore_capture_status(config, value):
 def attach_restore_capture_attempt(config, value, verified_upload):
     capture = value.get("restoreCapture")
     if not isinstance(capture, dict) or (capture.get("status"), capture.get("phase")) not in {
+            ("in-progress", "upload-pending"),
+            ("upload-pending", "upload-pending"),
+            ("upload-failed", "upload-pending"),
             ("upload-verified", "maintenance-pending"),
             ("maintenance-failed", "maintenance-pending"),
             ("complete", "maintenance"),

@@ -401,6 +401,80 @@ raise SystemExit(0)
 
         self.assertEqual((result["status"], result["phase"]), ("complete", "maintenance"))
 
+    def test_successful_restore_resume_clears_only_its_own_failure_attempt(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        backup_id = "backup-20261101120100-2"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        state_path = capture_state / "restore-capture-state.json"
+        attempt_path = backup.status_path(self.config).with_name("maintenance-attempt.json")
+
+        def resume(config, action, path, operation_id, operation_holder, operation_uid, confirmation):
+            backup.restore_capture_write(
+                state_path, restore_id, holder, lease_uid, "complete", "maintenance", backupId=backup_id,
+            )
+
+        for attempt_restore_id, attempt_backup_id in (
+                (restore_id, backup_id),
+                ("backup-20261101120000-9", backup_id),
+                (restore_id, "backup-20261101120100-9"),
+        ):
+            with self.subTest(attempt_restore_id=attempt_restore_id, attempt_backup_id=attempt_backup_id):
+                backup.restore_capture_write(
+                    state_path, restore_id, holder, lease_uid,
+                    "maintenance-failed", "maintenance-pending", backupId=backup_id,
+                )
+                backup.write_status(self.config, "verified-upload", "remote-readback", backup_id)
+                backup.atomic_json(attempt_path, {
+                    "restoreBackupId": attempt_restore_id, "backupId": attempt_backup_id,
+                    "status": "maintenance-failure", "code": "maintenance-resume-interrupted",
+                    "lastCheck": "2026-11-01T12:01:00+00:00",
+                })
+                with patch.object(backup, "backup_timer_disabled"), \
+                        patch.object(backup, "run_capture_command", side_effect=resume):
+                    backup.run_restore_capture_action(
+                        self.config, "restore-maintenance-resume", restore_id, holder, lease_uid,
+                        f"RESUME-MAINTENANCE-RESTORE-{restore_id}-{holder}",
+                    )
+                self.assertEqual(attempt_path.exists(),
+                                 (attempt_restore_id, attempt_backup_id) != (restore_id, backup_id))
+                self.assertEqual(backup.report_status(self.config)["status"], "verified-upload")
+
+    def test_restore_resume_fails_if_matching_attempt_cannot_be_cleared(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        backup_id = "backup-20261101120100-2"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        state_path = capture_state / "restore-capture-state.json"
+        backup.restore_capture_write(
+            state_path, restore_id, holder, lease_uid,
+            "maintenance-failed", "maintenance-pending", backupId=backup_id,
+        )
+        attempt_path = backup.status_path(self.config).with_name("maintenance-attempt.json")
+        backup.atomic_json(attempt_path, {
+            "restoreBackupId": restore_id, "backupId": backup_id,
+            "status": "maintenance-failure", "code": "maintenance-resume-interrupted",
+        })
+
+        def resume(*args):
+            backup.restore_capture_write(
+                state_path, restore_id, holder, lease_uid, "complete", "maintenance", backupId=backup_id,
+            )
+
+        with patch.object(backup, "backup_timer_disabled"), \
+                patch.object(backup, "run_capture_command", side_effect=resume), \
+                patch.object(Path, "unlink", side_effect=PermissionError("read-only")):
+            with self.assertRaisesRegex(backup.BackupError, "restore-capture-attempt-clear-failed"):
+                backup.run_restore_capture_action(
+                    self.config, "restore-maintenance-resume", restore_id, holder, lease_uid,
+                    f"RESUME-MAINTENANCE-RESTORE-{restore_id}-{holder}",
+                )
+        self.assertTrue(attempt_path.exists())
+
     def test_restore_maintenance_resume_recovers_completion_before_lease_update(self):
         restore_id = "backup-20261101120000-1"
         holder = "restore-holder"
@@ -660,6 +734,61 @@ raise SystemExit(0)
 
         self.assertEqual((result["status"], result["phase"]), ("complete", "maintenance"))
         self.assertTrue(snapshot_path.is_dir())
+
+    def test_verified_restore_upload_survives_upload_failure_and_can_resume(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        backup_id = "backup-20261101120100-2"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        state_path = capture_state / "restore-capture-state.json"
+        snapshot_path = snapshot(capture_state / "snapshot", backup_id=backup_id)
+        manifest = backup.read_json(snapshot_path / "manifest.json")
+        backup.atomic_json(snapshot_path / "backup-state.json", {
+            "stateVersion": 2, "backupId": backup_id, "status": "backup-mode",
+            "phase": "upload-pending", "source": manifest["source"],
+            "restoreOperation": {"backupId": restore_id, "holder": holder, "leaseUid": lease_uid},
+        })
+
+        for saved_status in ("upload-pending", "upload-failed"):
+            with self.subTest(saved_status=saved_status):
+                backup.restore_capture_write(
+                    state_path, restore_id, holder, lease_uid, saved_status, "upload-pending",
+                    backupId=backup_id,
+                )
+                backup.write_status(self.config, "verified-upload", "remote-readback", backup_id)
+                with patch.object(backup, "restore_capture_lease_is_retained", return_value=True):
+                    backup.write_status(self.config, "upload-failure", "interrupted", backup_id)
+                self.assertTrue(backup.verified_upload_status(self.config, backup_id))
+                status = backup.report_status(self.config)
+                self.assertEqual((status["status"], status["code"]), ("upload-failure", "interrupted"))
+                self.assertEqual(status["verifiedUpload"]["backupId"], backup_id)
+
+                with patch.object(backup, "backup_timer_disabled"), \
+                        patch.object(backup, "run_capture_command") as resume:
+                    resume.side_effect = lambda *args: backup.restore_capture_write(
+                        state_path, restore_id, holder, lease_uid,
+                        "complete", "maintenance", backupId=backup_id,
+                    )
+                    backup.run_restore_capture_action(
+                        self.config, "restore-maintenance-resume", restore_id, holder, lease_uid,
+                        f"RESUME-MAINTENANCE-RESTORE-{restore_id}-{holder}",
+                    )
+                self.assertFalse(backup.status_path(self.config).with_name("maintenance-attempt.json").exists())
+
+        backup.restore_capture_write(
+            state_path, restore_id, holder, lease_uid, "upload-failed", "upload-pending",
+            backupId=backup_id,
+        )
+        backup.write_status(self.config, "verified-upload", "remote-readback", "backup-20261101120100-9")
+        with patch.object(backup, "run_capture_command") as resume:
+            with self.assertRaisesRegex(backup.BackupError, "maintenance-upload-verification-missing"):
+                backup.run_restore_capture_action(
+                    self.config, "restore-maintenance-resume", restore_id, holder, lease_uid,
+                    f"RESUME-MAINTENANCE-RESTORE-{restore_id}-{holder}",
+                )
+        resume.assert_not_called()
 
     def test_restore_upload_does_not_prune_previous_release_backup(self):
         snapshot_path = self.make_snapshot()

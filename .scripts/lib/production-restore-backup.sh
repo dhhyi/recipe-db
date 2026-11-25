@@ -224,6 +224,8 @@ restore_backup_maintenance_resume() {
   state_directory=$(jq -er '.stateDirectory' "$uploader_config")
   snapshot=$restore_backup_snapshot
   backup_load_state "$snapshot"
+  jq -e --arg id "$backup_id" '.backupId == $id' "$restore_backup_state_path" > /dev/null \
+    || production_fail "maintenance resume requires the exact recorded snapshot"
   restore_backup_verify_upload "$state_directory"
   jq -e --arg restoreId "$restore_id" --arg holder "$holder" --arg uid "$lease_uid" '
     .restoreOperation == {backupId:$restoreId,holder:$holder,leaseUid:$uid}
@@ -278,6 +280,7 @@ restore_backup_phase_is_allowed() {
       restore-backup-maintenance-resume:maintenance-pending:projection-refresh | \
       restore-backup-maintenance-resume:maintenance-pending:awaiting-signoff | \
       restore-backup-maintenance-resume:upload-pending:restore-backup-upload-pending | \
+      restore-backup-maintenance-resume:upload-pending:restore-backup-upload-failed | \
       restore-backup-maintenance-resume:maintenance:restore-backup-maintenance-pending | \
       restore-backup-maintenance-resume:maintenance:restore-backup-maintenance-failed | \
       restore-backup-maintenance-resume:maintenance:awaiting-signoff)

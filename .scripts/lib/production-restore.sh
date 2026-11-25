@@ -2581,8 +2581,10 @@ restore_run() {
   fi
   if [[ $mode == existing-reset ]]; then
     restore_state_update --arg routesSha256 "$routes_sha256" \
+      --arg backupConfigSha256 "$(production_backup_config_sha256 "$work/config.json")" \
       '. as $previous |
         .restoreMode="existing-reset" | .leaseUid=.reset.leaseUid | .routesSha256=$routesSha256
+        | .backupConfigSha256=$backupConfigSha256
         | .reset.exposureHistory=((.reset.exposureHistory // []) + [{
             backupId:$previous.backupId,status:$previous.status,phase:$previous.phase,
             writesMayHaveOpened:($previous.writesMayHaveOpened // false),
