@@ -13,6 +13,7 @@ This guide is the technical reference for maintainers and operators using Recipe
   - [Snapshot capture](#snapshot-capture)
   - [Verified remote packaging](#verified-remote-packaging)
   - [Fresh-deployment restore](#fresh-deployment-restore)
+    - [Restore-owned Pi capture and local rehearsal](#restore-owned-pi-capture-and-local-rehearsal)
 - [Operator configuration and secrets](#operator-configuration-and-secrets)
 - [Create, render, deploy and inspect](#create-render-deploy-and-inspect)
   - [Production HTTPS on the Pi](#production-https-on-the-pi)
@@ -325,6 +326,112 @@ mise run production-k3d restore-abandon "$VALUES" "$STATE_DIRECTORY" \
 ```
 
 Abandonment does not make partial volumes reusable. Collect any investigation evidence by hand before discarding data, then either select another genuinely fresh target or follow the separately confirmed [existing-cluster reset procedure](production-existing-cluster-restore.md). Automated failure tests are not evidence of a live Pi recovery. The integrated disposable-k3d rehearsal belongs to #108, and operator-approved Drive/Pi acceptance to #107.
+
+#### Restore-owned Pi capture and local rehearsal
+
+This procedure applies after a clean Pi restore has reached `awaiting-signoff`. It makes one backup of the restored immutable release without signing off, reopening writes, or releasing the restore Lease. Keep the backup timer disabled. For a rebuilt host, first authorize Drive interactively using the [fresh-host procedure](google-drive-authorization.md#1-authorize-on-a-new-pi) and install the [operator-held backup inputs](production-configuration.md#private-workstation-directory) with `backup-configure.yml` before importing when possible. Set the installed immutable release reference and values for the exact package release. If inputs are not aligned, stop; this capture path refuses misaligned inputs and does not perform alignment.
+
+On the **workstation fish shell**, confirm the pending restore and save the exact Lease UID. Keep `VALUES`, `STATE`, and all downloaded package files private:
+
+```fish
+umask 077
+set -g RESTORE_STATUS "$STATE/restore-status.json"
+mise run production-k3d restore-status "$VALUES" "$STATE" > "$RESTORE_STATUS"
+and jq -e '.savedProgress.status == "awaiting-signoff"
+  and .savedProgress.phase == "pending-signoff"
+  and .savedProgress.readChecks.status == "passed"
+  and .observed.graphql.mode == "maintenance"
+  and .observed.publicRoutes.normalRoutesObserved
+  and .savedStateMatchesCluster
+  and (.writesMayHaveOpened | not)' "$RESTORE_STATUS"
+and set -g RESTORE_ID (jq -er .backupId "$STATE/restore-state.json")
+and set -g RESTORE_HOLDER (jq -er .holder "$STATE/restore-state.json")
+and set -g RESTORE_ARTIFACT (jq -er .artifact "$STATE/restore-state.json")
+and mise run production-k3d lock-status "$VALUES" > "$STATE/restore-lease.json"
+and set -g RESTORE_LEASE_UID (jq -er --arg holder "$RESTORE_HOLDER" \
+  --arg artifact "$RESTORE_ARTIFACT" '
+  select(.spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/operation"] == "restore"
+    and .metadata.annotations["recipe-db/release"] == $artifact
+    and .metadata.annotations["recipe-db/phase"] == "awaiting-signoff")
+  | .metadata.uid' "$STATE/restore-lease.json")
+```
+
+Transfer `RESTORE_ID`, `RESTORE_HOLDER`, and `RESTORE_LEASE_UID` to the operator at the Pi. On the **Raspberry Pi POSIX shell**, request the capture explicitly:
+
+```sh
+sudo /usr/local/sbin/recipe-db-backup-upload restore-capture \
+  --config /etc/recipe-db/backup.json \
+  --restore-id "$RESTORE_ID" \
+  --restore-holder "$RESTORE_HOLDER" \
+  --restore-lease-uid "$RESTORE_LEASE_UID" \
+  --confirmation "CAPTURE-RESTORE-$RESTORE_ID-$RESTORE_HOLDER"
+```
+
+The uploader serializes this request with its existing service lock and refuses an enabled/active timer. The lifecycle also takes the recovery-command claim, validates the saved restore, retained Lease UID and holder, immutable release reference, installed credential contents, Pi PVC identities and read-only routes, then uses the existing complete-volume backup, validation and remote-readback path. This one-off restore-owned upload does not prune existing remote points, preserving the off-device previous-release backup; keep the timer disabled until rehearsal and sign-off are complete. GraphQL may be unavailable in backup mode during capture; writes remain blocked. Never use `backup-exit` or `restore-reopen`.
+
+If the command fails, stop and inspect status before any retry:
+
+```sh
+sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
+sudo systemctl is-enabled recipe-db-backup.timer
+sudo systemctl is-active recipe-db-backup.timer
+```
+
+Keep the restore Lease, capture state and barrier. `restore-upload-retry` is allowed only for the same complete validated snapshot after an upload failure; it never recaptures. After a verified upload, or when maintenance restoration was interrupted, use `restore-maintenance-resume` with the exact same IDs and Lease UID. Do not retry automatically or use either action if status or phase is uncertain. A maintenance-resume failure that leaves the cluster in backup mode requires operator direction.
+
+After capture succeeds, verify Pi uploader status is `complete` for this restore and a distinct backup ID, then rerun the workstation `restore-status` and `lock-status` checks above. Require the same Lease UID and holder, `awaiting-signoff`, GraphQL maintenance, successful public reads, and writes still blocked. Confirm the timer remains disabled and do not sign off yet.
+
+Retrieve the **exact** new Pi backup into a new private workstation directory using the existing authenticated retrieval command:
+
+```fish
+set -g RUN_DIRECTORY "$HOME/.local/share/recipe-db/rehearsals/pi-restore-$RESTORE_ID"
+mkdir -p "$HOME/.local/share/recipe-db/rehearsals"
+and mkdir "$RUN_DIRECTORY"
+and set -g BACKUP_DIRECTORY "$RUN_DIRECTORY/backup"
+and mise run --raw retrieve-verified-backup --backup-id '<exact-new-backupId>' \
+  "$BACKUP_DIRECTORY" > "$RUN_DIRECTORY/retrieval.json"
+```
+
+Use the returned manifest and archive paths; keep the Pi package and receipt private. For the rehearsal, copy the private local-target values from `.secrets/local-values.yaml`, give them a new `recipe-db-rehearsal-<unique-suffix>` cluster/context and unused loopback HTTP/API ports, and keep the restored release's exact source revision and required local secrets available. Do not deploy application workloads first. Create the separate local cluster, then run the ordinary restore and its read-only checks against that exact Pi package:
+
+```fish
+set -g LOCAL_VALUES "$RUN_DIRECTORY/local-values.yaml"
+cp "$PWD/.secrets/local-values.yaml" "$LOCAL_VALUES"
+set -gx LOCAL_CLUSTER "recipe-db-rehearsal-$RESTORE_ID"
+and mise exec -- yq -i 'del(.rehearsalId) |
+  .cluster = strenv(LOCAL_CLUSTER) |
+  .context = "k3d-" + strenv(LOCAL_CLUSTER) |
+  .httpPort = 18080 | .apiPort = 16445 |
+  .origin = "http://127.0.0.1:18080"' "$LOCAL_VALUES"
+and mise run production-k3d create-new "$LOCAL_VALUES"
+and set -g PACKAGE_MANIFEST (jq -er .manifest "$RUN_DIRECTORY/retrieval.json")
+and set -g PACKAGE_ARCHIVE (jq -er .archive "$RUN_DIRECTORY/retrieval.json")
+and set -g LOCAL_STATE "$RUN_DIRECTORY/local-restore"
+and mise run production-k3d --release-sources-from-git restore "$LOCAL_VALUES" \
+  "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" '<exact-new-backupId>' "$LOCAL_STATE" \
+  "RESTORE-<exact-new-backupId>"
+and mise run production-k3d restore-status "$LOCAL_VALUES" "$LOCAL_STATE" \
+  > "$RUN_DIRECTORY/local-restore-status.json"
+```
+
+Replace both `<exact-new-backupId>` values with the `backupId` returned by retrieval. Require `awaiting-signoff`, complete import and passed read checks. Do not reopen the local restore. Save a small data-free evidence record with the exact backup/release identity, local cluster, and restore/read-check result. Only after successful verification, delete the local cluster with its exact `DELETE-<cluster>-AND-ALL-DATA` confirmation and remove the downloaded package and temporary local restore files. Preserve the data-free evidence and verified Pi backup. If rehearsal fails or is interrupted, do not delete or reset the local cluster, data or package: record their paths and stop for investigation.
+
+On success, record the result before cleanup and then remove only this rehearsal's local resources:
+
+```fish
+jq -n --arg id '<exact-new-backupId>' --arg cluster "$LOCAL_CLUSTER" \
+  --slurpfile state "$LOCAL_STATE/restore-state.json" '
+  {status:"passed",backupId:$id,sourceRelease:{artifact:$state[0].artifact,
+    revision:$state[0].revision},localTarget:{cluster:$cluster,
+    importStatus:$state[0].import.status,readChecksStatus:$state[0].readChecks.status}}
+' > "$RUN_DIRECTORY/evidence.json"
+and mise run production-k3d delete "$LOCAL_VALUES" \
+  "DELETE-$LOCAL_CLUSTER-AND-ALL-DATA"
+and rm -rf "$BACKUP_DIRECTORY" "$LOCAL_STATE" "$LOCAL_VALUES"
+```
+
+Do not run the cleanup commands unless the saved restore status and evidence both show a complete import and passed read checks, and cluster deletion succeeds. On any failure or interruption, keep every local copy and the cluster for investigation.
 
 ### Failed migration recovery
 

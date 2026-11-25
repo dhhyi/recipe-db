@@ -41,6 +41,41 @@
         path: /etc/recipe-db/backup.json
       register: backup_configuration
 
+    - name: Check whether the Pi cluster configuration is available
+      ansible.builtin.stat:
+        path: /etc/recipe-db/backup-kubeconfig.yaml
+        get_checksum: false
+      register: backup_kubeconfig
+      no_log: true
+
+    - name: Inspect retained restore ownership before changing backup inputs
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - --kubeconfig
+          - /etc/recipe-db/backup-kubeconfig.yaml
+          - --namespace
+          - kube-system
+          - get
+          - lease
+          - recipe-db-deploy
+          - --ignore-not-found
+          - -o
+          - json
+      register: backup_restore_lease
+      changed_when: false
+      when: backup_kubeconfig.stat.exists
+      no_log: true
+
+    - name: Refuse input alignment while a restore Lease is retained
+      ansible.builtin.assert:
+        that:
+          - (backup_restore_lease.stdout | length == 0) or ((backup_restore_lease.stdout | from_json).metadata.name is not defined) or ((backup_restore_lease.stdout | from_json).metadata.annotations['recipe-db/operation'] != 'restore')
+        fail_msg: A retained restore owns the Pi; install aligned backup inputs before restore or stop for separate operator approval.
+      when: backup_kubeconfig.stat.exists
+      no_log: true
+
     - name: Inspect maintenance state without displaying private details
       tags: backup-uploader
       ansible.builtin.command:

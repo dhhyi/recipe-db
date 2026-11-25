@@ -1095,6 +1095,448 @@ run_restore_abandon() {
     "$FIXTURE_ROOT/imported/tags/opaque.bin"
 }
 
+@test "separate local rehearsal restores the exact Pi-produced package with read-only checks" {
+  restore_real_package_fixture
+  python3 - "$FIXTURE_ROOT" << 'PY'
+import importlib.util
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location(
+    "upload", root / "provisioning/files/backup-upload.py")
+upload = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(upload)
+snapshot = root / "capture"
+package_root = root / "pi-package"
+package_root.mkdir()
+manifest = json.loads((snapshot / "manifest.json").read_text())
+manifest["source"].update(target="pi", cluster="recipe-db-pi", context="explicit-pi")
+(snapshot / "manifest.json").write_bytes(upload.json_bytes(manifest))
+package = upload.create_package(
+    snapshot, package_root, manifest, "pi-rehearsal", upload.DEFAULT_MAX_STAGING_BYTES)
+for name in (package["manifest"], package["archive"]):
+    (package_root / name).chmod(0o600)
+(root / "pi-package-paths.json").write_text(json.dumps(package))
+PY
+  RESTORE_MANIFEST="$FIXTURE_ROOT/pi-package/$(jq -r .manifest "$FIXTURE_ROOT/pi-package-paths.json")"
+  RESTORE_ARCHIVE="$FIXTURE_ROOT/pi-package/$(jq -r .archive "$FIXTURE_ROOT/pi-package-paths.json")"
+  set_value '.timeoutSeconds=8'
+
+  run_restore
+  [ "$status" -eq 0 ] || {
+    printf '%s\n' "$output"
+    return 1
+  }
+  jq -e --arg id "$RESTORE_ID" '
+    .source.target == "pi" and .source.cluster == "recipe-db-pi" and .backupId == $id
+  ' "$RESTORE_MANIFEST" > /dev/null
+  jq -e '.status == "awaiting-signoff" and .import.status == "complete"
+    and .readChecks.status == "passed" and .writesMayHaveOpened == false' \
+    "$RESTORE_STATE/restore-state.json"
+  [ -e "$MOCK_LOG.lease" ]
+  [ ! -e "$MOCK_LOG.restore-mutation-attempt" ]
+}
+
+@test "Lease phase updates reject a replacement UID even when holder is unchanged" {
+  source .scripts/lib/cluster-operation-lock.sh
+  work=$FIXTURE_ROOT
+  cluster_operation_lock_holder=restore-holder
+  cluster_operation_lock_expected_uid=old-lease-uid
+  jq -n '{
+    metadata:{name:"recipe-db-deploy",namespace:"kube-system",uid:"new-lease-uid",
+      resourceVersion:"4",labels:{"app.kubernetes.io/part-of":"recipe-db"},
+      annotations:{"recipe-db/phase":"awaiting-signoff"}},
+    spec:{holderIdentity:"restore-holder"}
+  }' > "$MOCK_LOG.lease"
+  cp "$MOCK_LOG.lease" "$MOCK_LOG.lease-before-update"
+  cluster_operation_lock_kubectl() {
+    case "$1" in
+      get) cat "$MOCK_LOG.lease" ;;
+      replace) cp "${*: -1}" "$MOCK_LOG.lease" ;;
+      *) return 1 ;;
+    esac
+  }
+
+  run cluster_operation_lock_update restore-backup-capturing
+  [ "$status" -ne 0 ]
+  cmp "$MOCK_LOG.lease-before-update" "$MOCK_LOG.lease"
+
+  cluster_operation_lock_expected_uid=new-lease-uid
+  run cluster_operation_lock_update restore-backup-capturing
+  [ "$status" -eq 0 ]
+  jq -e '.metadata.uid == "new-lease-uid"
+    and .metadata.annotations["recipe-db/phase"] == "restore-backup-capturing"
+    and .spec.holderIdentity == "restore-holder"' "$MOCK_LOG.lease"
+}
+
+@test "Pi backup config identity normalizes private secret paths but not release inputs" {
+  source .scripts/lib/production-config.sh
+  local workstation_hash pi_hash changed_hash
+  workstation_hash=$(production_backup_config_sha256 "$VALUES")
+  set_value '.secrets."auth-accounts.json"="/etc/recipe-db/application-inputs/accounts-for-pi.json"'
+  pi_hash=$(production_backup_config_sha256 "$VALUES")
+  [ "$pi_hash" = "$workstation_hash" ]
+
+  set_value '.origin="http://127.0.0.1:8081"'
+  changed_hash=$(production_backup_config_sha256 "$VALUES")
+  [ "$changed_hash" != "$workstation_hash" ]
+}
+
+@test "restore-owned capture compares installed inputs with restored credentials" {
+  cp "$BATS_TEST_DIRNAME/../lib/production-restore-backup.sh" .scripts/lib/
+  mkdir -m 700 "$FIXTURE_ROOT/operator-inputs" "$FIXTURE_ROOT/input-work"
+  printf 'accounts-from-restore\n' > "$FIXTURE_ROOT/operator-inputs/auth-accounts.json"
+  printf 'oauth-client-from-restore' > "$FIXTURE_ROOT/operator-inputs/google-oauth-client-secret"
+  printf 'cookie-from-restore' > "$FIXTURE_ROOT/operator-inputs/oauth2-cookie-secret"
+  printf 'restore-contact@example.org' > "$FIXTURE_ROOT/operator-inputs/acme-account-email"
+  python3 - "$FIXTURE_ROOT" << 'PY'
+import base64, json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+inputs = root / "operator-inputs"
+runtime = {
+    key: base64.b64encode((inputs / key).read_bytes()).decode()
+    for key in ("auth-accounts.json", "google-oauth-client-secret", "oauth2-cookie-secret")
+}
+(root / "runtime-secret.json").write_text(json.dumps({
+    "metadata": {"namespace": "recipe-db", "labels": {
+        "app.kubernetes.io/part-of": "recipe-db"}},
+    "data": runtime,
+}))
+(root / "acme-secret.json").write_text(json.dumps({
+    "metadata": {"labels": {"app.kubernetes.io/part-of": "recipe-db"}},
+    "data": {"email": base64.b64encode(
+        (inputs / "acme-account-email").read_bytes()).decode()},
+}))
+PY
+  cat > verify-inputs.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source .scripts/lib/production-restore-backup.sh
+work=$FIXTURE_ROOT/input-work
+namespace=recipe-db
+operator_secret_keys=(auth-accounts.json google-oauth-client-secret oauth2-cookie-secret)
+production_fail() { printf 'production: %s\n' "$*" >&2; exit 1; }
+production_secrets() {
+  local key
+  for key in "${operator_secret_keys[@]}"; do
+    cp "$FIXTURE_ROOT/operator-inputs/$key" "$work/$key"
+  done
+  cp "$FIXTURE_ROOT/operator-inputs/acme-account-email" "$work/acme-account-email"
+}
+kube() {
+  case "$*" in
+    "get secret recipe-db-runtime -o json") cat "$FIXTURE_ROOT/runtime-secret.json" ;;
+    "--namespace kube-system get secret recipe-db-acme-contact -o json") cat "$FIXTURE_ROOT/acme-secret.json" ;;
+    *) return 1 ;;
+  esac
+}
+restore_backup_verify_inputs
+EOF
+  chmod 700 verify-inputs.sh
+  run env FIXTURE_ROOT="$FIXTURE_ROOT" bash verify-inputs.sh
+  [ "$status" -eq 0 ]
+
+  printf 'different private credential' > "$FIXTURE_ROOT/operator-inputs/google-oauth-client-secret"
+  run env FIXTURE_ROOT="$FIXTURE_ROOT" bash verify-inputs.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"installed backup inputs do not match the retained restored release"* ]]
+  [[ $output != *"different private credential"* ]]
+}
+
+@test "restore-owned completion records read evidence before the final Lease transition" {
+  cp "$BATS_TEST_DIRNAME/../lib/production-restore-backup.sh" .scripts/lib/
+  cat > completion-order.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source .scripts/lib/production-restore-backup.sh
+work=$FIXTURE_ROOT
+backup_id=backup-20261101120100-2
+restore_backup_holder=restore-holder
+restore_backup_progress() { printf 'progress:%s\n' "$*" >> "$MOCK_LOG.lifecycle"; }
+restore_backup_set_lease_phase() { printf 'lease:%s\n' "$1" >> "$MOCK_LOG.lifecycle"; }
+backup_restore_maintenance() { printf 'maintenance\n' >> "$MOCK_LOG.lifecycle"; }
+restore_backup_verify_pending_reads() {
+  printf 'verify:%s\n' "$1" >> "$MOCK_LOG.lifecycle"
+  [[ ${RESTORE_READS_FAIL:-false} != true ]]
+}
+restore_backup_record_completion() { printf 'completion\n' >> "$MOCK_LOG.lifecycle"; }
+restore_backup_finish_maintenance "$FIXTURE_ROOT/uploader-state"
+EOF
+  run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" bash completion-order.sh
+  [ "$status" -eq 0 ]
+  [ "$(cat "$MOCK_LOG.lifecycle")" = $'progress:upload-verified maintenance-pending backup-20261101120100-2\nlease:restore-backup-maintenance-pending\nmaintenance\nlease:restore-backup-maintenance-pending\nverify:restore-backup-maintenance-pending\ncompletion\nlease:awaiting-signoff' ]
+
+  : > "$MOCK_LOG.lifecycle"
+  run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" RESTORE_READS_FAIL=true bash completion-order.sh
+  [ "$status" -ne 0 ]
+  run ! grep -Fxq 'lease:awaiting-signoff' "$MOCK_LOG.lifecycle"
+  [ "$status" -eq 0 ]
+  run ! grep -Fxq 'completion' "$MOCK_LOG.lifecycle"
+  [ "$status" -eq 0 ]
+}
+
+@test "restore-owned capture publishes one complete snapshot before maintenance and refuses recapture" {
+  cp "$BATS_TEST_DIRNAME/../lib/production-restore-backup.sh" .scripts/lib/
+  cat > capture-pipeline.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source .scripts/lib/production-config.sh
+source .scripts/lib/production-restore-backup.sh
+if [[ ${REUSE_STATE:-false} != true ]]; then
+  rm -rf "$FIXTURE_ROOT/capture-work" "$FIXTURE_ROOT/work" "$FIXTURE_ROOT/etc"
+  mkdir -m 700 -p "$FIXTURE_ROOT/capture-work" "$FIXTURE_ROOT/work" "$FIXTURE_ROOT/etc"
+  cat > "$FIXTURE_ROOT/work/config.json" << 'CONFIG'
+{"target":"pi","cluster":"recipe-db-pi","context":"explicit-pi","namespace":"recipe-db","storageClass":"recipe-db-retained","infrastructure":{"maintenance":"nginx:1.28"},"secrets":{"auth-accounts.json":"/secret/auth-accounts.json"}}
+CONFIG
+  printf '{"stateDirectory":"%s"}\n' "$FIXTURE_ROOT/capture-work" > "$FIXTURE_ROOT/uploader.json"
+  printf '{}\n' > "$FIXTURE_ROOT/etc/backup-values.yaml"
+  printf '%s\n' "$ARTIFACT" > "$FIXTURE_ROOT/etc/backup-release-ref"
+  config_sha=$(production_backup_config_sha256 "$FIXTURE_ROOT/work/config.json")
+  restore_id=backup-20261101120000-1
+  holder=restore-holder
+  lease_uid=lease-uid-1
+  restore_identity='{"namespace":"recipe-db","pvcs":[]}'
+  mkdir -m 700 -p "$FIXTURE_ROOT/capture-work/restore-captures/$restore_id"
+  jq -n --arg id "$restore_id" --arg holder "$holder" --arg uid "$lease_uid" \
+    '{format:"recipe-db-restore-capture",formatVersion:1,restoreBackupId:$id,
+      restoreHolder:$holder,restoreLeaseUid:$uid,status:"capture",phase:"capture"}' \
+    > "$FIXTURE_ROOT/capture-work/restore-captures/$restore_id/restore-capture-state.json"
+  jq -n --arg id "$restore_id" --arg holder "$holder" --arg uid "$lease_uid" \
+    --arg configSha "$config_sha" --arg artifact "$ARTIFACT" --arg revision "$MOCK_REVISION" \
+    --argjson identity "$restore_identity" '
+    {version:1,backupId:$id,holder:$holder,leaseUid:$uid,status:"awaiting-signoff",
+      phase:"pending-signoff",target:"pi",cluster:"recipe-db-pi",context:"explicit-pi",
+      namespace:"recipe-db",backupConfigSha256:$configSha,artifact:$artifact,
+      revision:$revision,import:{status:"complete"},readChecks:{status:"passed"},
+      writesMayHaveOpened:false,probeRecipeId:null,restoreIdentity:$identity}
+  ' > "$FIXTURE_ROOT/restore-state.json"
+  jq -n --arg ns recipe-db --slurpfile state "$FIXTURE_ROOT/restore-state.json" '
+    {metadata:{namespace:$ns,labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+      data:{"restore-state.json":($state[0]|tojson)}}
+  ' > "$FIXTURE_ROOT/restore-configmap.json"
+  jq -n --arg uid "$lease_uid" --arg holder "$holder" --arg artifact "$ARTIFACT" '{
+    metadata:{name:"recipe-db-deploy",uid:$uid,resourceVersion:"42",
+      labels:{"app.kubernetes.io/part-of":"recipe-db"},
+      annotations:{"recipe-db/phase":"awaiting-signoff",
+        "recipe-db/operation":"restore","recipe-db/release":$artifact}},
+    spec:{holderIdentity:$holder}
+  }' > "$FIXTURE_ROOT/lease.json"
+  jq -n '{items:[{metadata:{name:"graphql"},
+    spec:{template:{spec:{containers:[{name:"graphql",
+      env:[{name:"MODE",value:"backup"}]}]}}}}]}' > "$FIXTURE_ROOT/deployments.json"
+fi
+if [[ ${LEASE_UID_DRIFT:-false} == true ]]; then
+  jq '.metadata.uid="replacement-lease-uid"' "$FIXTURE_ROOT/lease.json" \
+    > "$FIXTURE_ROOT/lease.next"
+  mv "$FIXTURE_ROOT/lease.next" "$FIXTURE_ROOT/lease.json"
+fi
+work="$FIXTURE_ROOT/work"
+command=restore-backup-capture
+target=pi
+cluster=recipe-db-pi
+context=explicit-pi
+namespace=recipe-db
+timeout=10
+restore_backup_snapshot="$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/snapshot"
+restore_backup_holder=restore-holder
+restore_backup_restore_id=backup-20261101120000-1
+restore_backup_state_directory="$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1"
+connect() { printf 'connect\n' >> "$MOCK_LOG.pipeline"; }
+recovery_command_acquire() {
+  printf 'claim\n' >> "$MOCK_LOG.pipeline"
+  if [[ ${CLAIM_BUSY:-false} == true ]]; then
+    printf 'claim-busy\n' >> "$MOCK_LOG.pipeline"
+    return 1
+  fi
+}
+kube() {
+  case "$*" in
+    "get configmap recipe-db-restore -o json") cat "$FIXTURE_ROOT/restore-configmap.json" ;;
+    "get deployments -o json") cat "$FIXTURE_ROOT/deployments.json" ;;
+    *) printf 'unexpected kube command: %s\n' "$*" >&2; return 1 ;;
+  esac
+}
+pull_release() { revision=$MOCK_REVISION; }
+render() { :; }
+restore_backup_verify_inputs() { printf 'verify-inputs\n' >> "$MOCK_LOG.pipeline"; }
+recovery_identity() { printf '%s\n' '{"namespace":"recipe-db","pvcs":[]}' > "$work/reset-identity.json"; }
+cluster_operation_lock_status() { cat "$FIXTURE_ROOT/lease.json"; }
+production_storage_preflight() {
+  [[ $cluster_operation_lock_holder == restore-holder ]]
+  printf 'storage-preflight\n' >> "$MOCK_LOG.pipeline"
+}
+restore_backup_verify_pending_reads() { printf 'reads:%s\n' "$1" >> "$MOCK_LOG.pipeline"; }
+restore_backup_prepare_snapshot() {
+  backup_id=backup-20261101120100-2
+  snapshot=$restore_backup_snapshot
+  restore_backup_started=true
+  mkdir -p "$(dirname "$snapshot")"
+  mkdir -m 700 "$snapshot"
+  printf 'prepare\n' >> "$MOCK_LOG.pipeline"
+}
+restore_backup_set_lease_phase() {
+  jq --arg phase "$1" '.metadata.annotations["recipe-db/phase"]=$phase' \
+    "$FIXTURE_ROOT/lease.json" > "$FIXTURE_ROOT/lease.next"
+  mv "$FIXTURE_ROOT/lease.next" "$FIXTURE_ROOT/lease.json"
+  printf 'lease:%s\n' "$1" >> "$MOCK_LOG.pipeline"
+}
+cluster_operation_lock_update() { printf 'claim:%s\n' "$1" >> "$MOCK_LOG.pipeline"; }
+backup_establish_barrier() { printf 'barrier\n' >> "$MOCK_LOG.pipeline"; }
+backup_start_modes() { printf 'backup-modes\n' >> "$MOCK_LOG.pipeline"; }
+backup_state_write() { printf 'backup-state:%s:%s\n' "$1" "$2" >> "$MOCK_LOG.pipeline"; }
+backup_cleanup_job() { printf 'cleanup\n' >> "$MOCK_LOG.pipeline"; }
+backup_scale_zero() { printf 'scale-zero\n' >> "$MOCK_LOG.pipeline"; }
+backup_capture() { printf 'capture:%s:%s\n' "$1" "$snapshot" >> "$MOCK_LOG.pipeline"; }
+backup_write_manifest() { printf 'manifest\n' >> "$MOCK_LOG.pipeline"; }
+restore_backup_publish_snapshot() {
+  printf 'publish:%s:%s\n' "$1" "$snapshot" >> "$MOCK_LOG.pipeline"
+  [[ ${PUBLISH_FAIL:-false} != true ]]
+}
+restore_backup_verify_upload() { printf 'verified-upload:%s\n' "$1" >> "$MOCK_LOG.pipeline"; }
+backup_restore_maintenance() { printf 'restore-maintenance\n' >> "$MOCK_LOG.pipeline"; }
+restore_backup_record_completion() {
+  printf 'completion\n' >> "$MOCK_LOG.pipeline"
+  restore_backup_progress complete maintenance "$backup_id"
+}
+restore_backup_capture "$FIXTURE_ROOT/etc/backup-values.yaml" "$FIXTURE_ROOT/uploader.json" \
+  "$restore_backup_state_directory" "$restore_backup_restore_id" "$restore_backup_holder" \
+  lease-uid-1 "CAPTURE-RESTORE-backup-20261101120000-1-restore-holder"
+EOF
+  chmod 700 capture-pipeline.sh
+  run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" bash capture-pipeline.sh
+  [ "$status" -eq 0 ]
+  grep -Fxq 'claim' "$MOCK_LOG.pipeline"
+  grep -Fxq 'verify-inputs' "$MOCK_LOG.pipeline"
+  grep -Fxq 'storage-preflight' "$MOCK_LOG.pipeline"
+  [ "$(grep -n '^claim$' "$MOCK_LOG.pipeline" | cut -d: -f1)" -lt \
+    "$(grep -n '^storage-preflight$' "$MOCK_LOG.pipeline" | cut -d: -f1)" ]
+  grep -Fxq "capture:pending:$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/snapshot" \
+    "$MOCK_LOG.pipeline"
+  grep -Fxq "publish:$FIXTURE_ROOT/uploader.json:$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/snapshot" \
+    "$MOCK_LOG.pipeline"
+  [ "$(grep -n 'verified-upload:' "$MOCK_LOG.pipeline" | cut -d: -f1)" -lt \
+    "$(grep -n 'restore-maintenance' "$MOCK_LOG.pipeline" | cut -d: -f1)" ]
+  [ "$(grep -n 'completion' "$MOCK_LOG.pipeline" | cut -d: -f1)" -lt \
+    "$(grep -n 'lease:awaiting-signoff' "$MOCK_LOG.pipeline" | cut -d: -f1)" ]
+  jq -e '.status == "complete" and .phase == "maintenance"
+    and .backupId == "backup-20261101120100-2"' \
+    "$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/restore-capture-state.json"
+
+  : > "$MOCK_LOG.pipeline"
+  run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" REUSE_STATE=true CLAIM_BUSY=true \
+    bash capture-pipeline.sh
+  [ "$status" -ne 0 ]
+  grep -Fxq 'claim-busy' "$MOCK_LOG.pipeline"
+  run ! grep -Eq '^storage-preflight$|^capture:' "$MOCK_LOG.pipeline"
+  [ "$status" -eq 0 ]
+
+  : > "$MOCK_LOG.pipeline"
+  run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" REUSE_STATE=true LEASE_UID_DRIFT=true \
+    bash capture-pipeline.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"exact pending restore Lease is missing or changed"* ]]
+  run ! grep -Eq '^storage-preflight$|^capture:' "$MOCK_LOG.pipeline"
+  [ "$status" -eq 0 ]
+
+  : > "$MOCK_LOG.pipeline"
+  run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" PUBLISH_FAIL=true bash capture-pipeline.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"upload failed; retain the exact Lease and snapshot"* ]]
+  [ -d "$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/snapshot" ]
+  run ! grep -Eq 'verified-upload:|restore-maintenance|completion|lease:awaiting-signoff' \
+    "$MOCK_LOG.pipeline"
+  [ "$status" -eq 0 ]
+
+  : > "$MOCK_LOG.pipeline"
+  run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" REUSE_STATE=true bash capture-pipeline.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"progress or retained Lease phase does not permit this action"* ]]
+  run ! grep -q '^capture:' "$MOCK_LOG.pipeline"
+  [ "$status" -eq 0 ]
+}
+
+@test "restore-owned retry and resume retain the exact uploaded snapshot" {
+  cp "$BATS_TEST_DIRNAME/../lib/production-restore-backup.sh" .scripts/lib/
+  mkdir -p "$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/snapshot"
+  chmod 700 "$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/snapshot"
+  printf '{"stateDirectory":"%s"}\n' "$FIXTURE_ROOT/capture-work" > "$FIXTURE_ROOT/uploader.json"
+  cat > "$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/snapshot/backup-state.json" << 'EOF'
+{"backupId":"backup-20261101120100-2","status":"backup-mode","phase":"upload-pending","restoreOperation":{"backupId":"backup-20261101120000-1","holder":"restore-holder","leaseUid":"lease-uid-1"}}
+EOF
+  cat > retry-pipeline.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source .scripts/lib/production-restore-backup.sh
+restore_backup_snapshot="$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1/snapshot"
+restore_backup_state_directory="$FIXTURE_ROOT/capture-work/restore-captures/backup-20261101120000-1"
+restore_backup_holder=restore-holder
+restore_backup_current_graphql_mode=maintenance
+restore_backup_current_phase=restore-backup-maintenance-pending
+restore_backup_load_operation() { printf 'load\n' >> "$MOCK_LOG.pipeline"; }
+backup_load_state() {
+  snapshot=$1
+  backup_id=$(jq -er .backupId "$snapshot/backup-state.json")
+  printf 'state:%s\n' "$snapshot" >> "$MOCK_LOG.pipeline"
+}
+restore_backup_progress() { printf 'progress:%s:%s:%s\n' "$1" "$2" "$3" >> "$MOCK_LOG.pipeline"; }
+restore_backup_set_lease_phase() { printf 'lease:%s\n' "$1" >> "$MOCK_LOG.pipeline"; }
+restore_backup_publish_snapshot() { printf 'publish:%s\n' "$snapshot" >> "$MOCK_LOG.pipeline"; }
+restore_backup_verify_upload() { printf 'verify-upload:%s:%s\n' "$1" "$backup_id" >> "$MOCK_LOG.pipeline"; }
+restore_backup_record_completion() { printf 'completion:%s\n' "$1" >> "$MOCK_LOG.pipeline"; }
+production_fail() { printf 'production: %s\n' "$*" >&2; exit 1; }
+restore_backup_upload_retry "$FIXTURE_ROOT/config.json" "$FIXTURE_ROOT/uploader.json" \
+  "$restore_backup_state_directory" backup-20261101120000-1 restore-holder lease-uid-1 \
+  "RETRY-UPLOAD-RESTORE-backup-20261101120000-1-restore-holder"
+EOF
+  chmod 700 retry-pipeline.sh
+  run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" bash retry-pipeline.sh
+  [ "$status" -eq 0 ]
+  grep -Fxq "publish:$FIXTURE_ROOT/capture-work/restore-captures/restore-id/snapshot" \
+    "$MOCK_LOG.pipeline"
+  run ! grep -Eq '^capture:|^restore-maintenance' "$MOCK_LOG.pipeline"
+  [ "$status" -eq 0 ]
+
+  : > "$MOCK_LOG.pipeline"
+  cat >> retry-pipeline.sh << 'EOF'
+restore_backup_maintenance_resume "$FIXTURE_ROOT/config.json" "$FIXTURE_ROOT/uploader.json" \
+  "$restore_backup_state_directory" backup-20261101120000-1 restore-holder lease-uid-1 \
+  "RESUME-MAINTENANCE-RESTORE-backup-20261101120000-1-restore-holder"
+EOF
+  run env FIXTURE_ROOT="$FIXTURE_ROOT" MOCK_LOG="$MOCK_LOG" bash retry-pipeline.sh
+  [ "$status" -eq 0 ]
+  [ "$(grep -n 'completion:' "$MOCK_LOG.pipeline" | cut -d: -f1)" -lt \
+    "$(grep -n 'lease:awaiting-signoff' "$MOCK_LOG.pipeline" | cut -d: -f1)" ]
+}
+
+@test "restore verification retains and cleans up both port-forward processes" {
+  export MOCK_RESTORE=true
+  source .scripts/lib/production-restore.sh
+  work=$FIXTURE_ROOT
+  namespace='recipe-db'
+  context=k3d-recipe-db-rehearsal
+  timeout=10
+  restore_forward deployment/traefik 3000 "$FIXTURE_ROOT/graphql-forward.log" || {
+    cat "$FIXTURE_ROOT/graphql-forward.log"
+    return 1
+  }
+  graphql_pid=$restore_forward_pid
+  [ "$restore_graphql_port" = 18081 ]
+  restore_forward service/browse 3000 "$FIXTURE_ROOT/browse-forward.log"
+  browse_pid=$restore_browse_pid
+  [ "$restore_browse_port" = 18082 ]
+  [ -n "$graphql_pid" ]
+  [ -n "$browse_pid" ]
+
+  kill "$graphql_pid" "$browse_pid"
+  wait "$graphql_pid" "$browse_pid" 2> /dev/null || true
+  run ! kill -0 "$graphql_pid" 2> /dev/null
+  [ "$status" -eq 0 ]
+  run ! kill -0 "$browse_pid" 2> /dev/null
+  [ "$status" -eq 0 ]
+}
+
 @test "pending restore can select another backup through preview reset and recovery restore" {
   restore_real_package_fixture
   set_value '.timeoutSeconds=8'

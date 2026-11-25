@@ -77,6 +77,22 @@ def snapshot(path, files=None, backup_id="backup-20261031T100000-1", captured_at
 
 
 class BackupUploadTests(unittest.TestCase):
+    def test_status_reports_restore_capture_without_a_check_record(self):
+        capture_state = self.state / "restore-captures" / "backup-20261101120000-1"
+        capture_state.mkdir(parents=True)
+        backup.restore_capture_write(
+            capture_state / "restore-capture-state.json",
+            "backup-20261101120000-1", "restore-holder", "lease-uid-1",
+            "upload-failed", "upload-pending", backupId="backup-20261101120100-2",
+        )
+
+        status = backup.report_status(self.config)
+
+        self.assertEqual(status["code"], "no-check-record")
+        self.assertEqual(status["restoreCapture"]["status"], "upload-failed")
+        self.assertEqual(status["restoreCapture"]["phase"], "upload-pending")
+        self.assertEqual(status["restoreCapture"]["backupId"], "backup-20261101120100-2")
+
     def test_status_reports_installed_closeout_capability_not_cached_capability(self):
         self.assertEqual(backup.report_status(self.config)["migrationRecoveryCloseoutVersion"], 1)
         backup.ensure_private_dir(self.state)
@@ -176,6 +192,319 @@ raise SystemExit(0)
 
     def make_snapshot(self, name="snapshot", **kwargs):
         return snapshot(self.root / name, **kwargs)
+
+    def test_restore_capture_records_a_distinct_completed_backup(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        backup_id = "backup-20261101120100-2"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        backup.restore_capture_write(
+            capture_state / "restore-capture-state.json", restore_id, holder, lease_uid,
+            "capture-failed", "capture", failureCode="operator-retry",
+        )
+
+        def capture(config, action, path, operation_id, operation_holder, operation_uid, confirmation):
+            self.assertEqual(action, "restore-capture")
+            self.assertEqual((operation_id, operation_holder, operation_uid),
+                             (restore_id, holder, lease_uid))
+            self.assertEqual(confirmation, f"CAPTURE-RESTORE-{restore_id}-{holder}")
+            backup.restore_capture_write(
+                Path(path) / "restore-capture-state.json", restore_id, holder, lease_uid,
+                "complete", "maintenance", backupId=backup_id,
+            )
+
+        with patch.object(backup, "subprocess") as subprocess_mock, \
+                patch.object(backup, "run_capture_command", side_effect=capture):
+            subprocess_mock.run.side_effect = [
+                SimpleNamespace(returncode=1, stdout="disabled\n"),
+                SimpleNamespace(returncode=3, stdout="inactive\n"),
+            ]
+            result = backup.run_restore_capture_action(
+                self.config, "restore-capture", restore_id, holder, lease_uid,
+                f"CAPTURE-RESTORE-{restore_id}-{holder}",
+            )
+
+        self.assertNotEqual(result["restoreBackupId"], result["backupId"])
+        self.assertEqual((result["status"], result["phase"]), ("complete", "maintenance"))
+
+    def test_restore_upload_retry_resumes_interrupted_state_without_recapture(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        backup.restore_capture_write(
+            capture_state / "restore-capture-state.json", restore_id, holder, lease_uid,
+            "capture-failed", "capture", backupId="backup-20261101120100-2",
+        )
+
+        def resume(config, action, path, operation_id, operation_holder, operation_uid, confirmation):
+            self.assertEqual(action, "restore-upload-retry")
+            self.assertEqual((operation_id, operation_holder, operation_uid),
+                             (restore_id, holder, lease_uid))
+            self.assertEqual(confirmation, f"RETRY-UPLOAD-RESTORE-{restore_id}-{holder}")
+            backup.restore_capture_write(
+                Path(path) / "restore-capture-state.json", restore_id, holder, lease_uid,
+                "upload-verified", "maintenance-pending",
+                backupId="backup-20261101120100-2",
+            )
+
+        with patch.object(backup, "subprocess") as subprocess_mock, \
+                patch.object(backup, "run_capture_command", side_effect=resume):
+            subprocess_mock.run.side_effect = [
+                SimpleNamespace(returncode=1, stdout="disabled\n"),
+                SimpleNamespace(returncode=3, stdout="inactive\n"),
+            ]
+            result = backup.run_restore_capture_action(
+                self.config, "restore-upload-retry", restore_id, holder, lease_uid,
+                f"RETRY-UPLOAD-RESTORE-{restore_id}-{holder}",
+            )
+
+        self.assertEqual((result["status"], result["phase"]),
+                         ("upload-verified", "maintenance-pending"))
+
+    def test_restore_upload_retry_accepts_interruption_before_failure_recording(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        backup_id = "backup-20261101120100-2"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        state_path = capture_state / "restore-capture-state.json"
+        backup.restore_capture_write(
+            state_path, restore_id, holder, lease_uid, "upload-pending", "upload-pending",
+            backupId=backup_id,
+        )
+
+        def resume(config, action, path, operation_id, operation_holder, operation_uid, confirmation):
+            self.assertEqual(action, "restore-upload-retry")
+            backup.restore_capture_write(
+                Path(path) / "restore-capture-state.json", restore_id, holder, lease_uid,
+                "upload-verified", "maintenance-pending", backupId=backup_id,
+            )
+
+        with patch.object(backup, "subprocess") as subprocess_mock, \
+                patch.object(backup, "run_capture_command", side_effect=resume):
+            subprocess_mock.run.side_effect = [
+                SimpleNamespace(returncode=1, stdout="disabled\n"),
+                SimpleNamespace(returncode=3, stdout="inactive\n"),
+            ]
+            result = backup.run_restore_capture_action(
+                self.config, "restore-upload-retry", restore_id, holder, lease_uid,
+                f"RETRY-UPLOAD-RESTORE-{restore_id}-{holder}",
+            )
+
+        self.assertEqual((result["status"], result["phase"]),
+                         ("upload-verified", "maintenance-pending"))
+
+    def test_restore_maintenance_resume_does_not_recapture(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        backup_id = "backup-20261101120100-2"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        backup.restore_capture_write(
+            capture_state / "restore-capture-state.json", restore_id, holder, lease_uid,
+            "maintenance-failed", "maintenance-pending", backupId=backup_id,
+        )
+
+        def resume(config, action, path, operation_id, operation_holder, operation_uid, confirmation):
+            self.assertEqual(action, "restore-maintenance-resume")
+            self.assertEqual((operation_id, operation_holder, operation_uid),
+                             (restore_id, holder, lease_uid))
+            self.assertEqual(confirmation, f"RESUME-MAINTENANCE-RESTORE-{restore_id}-{holder}")
+            backup.restore_capture_write(
+                Path(path) / "restore-capture-state.json", restore_id, holder, lease_uid,
+                "complete", "maintenance", backupId=backup_id,
+            )
+
+        with patch.object(backup, "subprocess") as subprocess_mock, \
+                patch.object(backup, "run_capture_command", side_effect=resume):
+            subprocess_mock.run.side_effect = [
+                SimpleNamespace(returncode=1, stdout="disabled\n"),
+                SimpleNamespace(returncode=3, stdout="inactive\n"),
+            ]
+            result = backup.run_restore_capture_action(
+                self.config, "restore-maintenance-resume", restore_id, holder, lease_uid,
+                f"RESUME-MAINTENANCE-RESTORE-{restore_id}-{holder}",
+            )
+
+        self.assertEqual((result["status"], result["phase"]), ("complete", "maintenance"))
+
+    def test_restore_maintenance_resume_recovers_completion_before_lease_update(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        backup_id = "backup-20261101120100-2"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        backup.restore_capture_write(
+            capture_state / "restore-capture-state.json", restore_id, holder, lease_uid,
+            "complete", "maintenance", backupId=backup_id,
+        )
+
+        with patch.object(backup, "subprocess") as subprocess_mock, \
+                patch.object(backup, "run_capture_command") as resume:
+            subprocess_mock.run.side_effect = [
+                SimpleNamespace(returncode=1, stdout="disabled\n"),
+                SimpleNamespace(returncode=3, stdout="inactive\n"),
+            ]
+            result = backup.run_restore_capture_action(
+                self.config, "restore-maintenance-resume", restore_id, holder, lease_uid,
+                f"RESUME-MAINTENANCE-RESTORE-{restore_id}-{holder}",
+            )
+
+        resume.assert_called_once()
+        self.assertEqual((result["status"], result["phase"]), ("complete", "maintenance"))
+
+    def test_restore_upload_retry_refuses_already_completed_capture(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        backup.restore_capture_write(
+            capture_state / "restore-capture-state.json", restore_id, holder, lease_uid,
+            "complete", "maintenance", backupId="backup-20261101120100-2",
+        )
+
+        with patch.object(backup, "run_capture_command") as capture:
+            with self.assertRaisesRegex(backup.BackupError, "restore-capture-phase-mismatch"):
+                backup.run_restore_capture_action(
+                    self.config, "restore-upload-retry", restore_id, holder, lease_uid,
+                    f"RETRY-UPLOAD-RESTORE-{restore_id}-{holder}",
+                )
+
+        capture.assert_not_called()
+
+    def test_restore_capture_refuses_unavailable_timer_status(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        confirmation = f"CAPTURE-RESTORE-{restore_id}-{holder}"
+
+        with patch.object(backup, "subprocess") as subprocess_mock, \
+                patch.object(backup, "run_capture_command") as capture:
+            subprocess_mock.run.return_value.returncode = 4
+            subprocess_mock.run.return_value.stdout = ""
+            with self.assertRaisesRegex(backup.BackupError, "backup-timer-status-failed"):
+                backup.run_restore_capture_action(
+                    self.config, "restore-capture", restore_id, holder, lease_uid, confirmation,
+                )
+
+        capture.assert_not_called()
+
+    def test_restore_capture_refuses_unknown_inactive_timer_response(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        backup.restore_capture_write(
+            capture_state / "restore-capture-state.json", restore_id, holder, lease_uid,
+            "in-progress", "capture",
+        )
+
+        with patch.object(backup, "subprocess") as subprocess_mock, \
+                patch.object(backup, "run_capture_command") as capture:
+            subprocess_mock.run.side_effect = [
+                SimpleNamespace(returncode=1, stdout="disabled\n"),
+                SimpleNamespace(returncode=3, stdout="unknown\n"),
+            ]
+            with self.assertRaisesRegex(backup.BackupError, "backup-timer-status-failed"):
+                backup.run_restore_capture_action(
+                    self.config, "restore-capture", restore_id, holder, lease_uid,
+                    f"CAPTURE-RESTORE-{restore_id}-{holder}",
+                )
+
+        capture.assert_not_called()
+
+    def test_restore_maintenance_failure_preserves_verified_upload_for_resume(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        backup_id = "backup-20261101120100-2"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        state_path = capture_state / "restore-capture-state.json"
+        backup.restore_capture_write(
+            state_path, restore_id, holder, lease_uid,
+            "maintenance-failed", "maintenance-pending", backupId=backup_id,
+        )
+        snapshot_path = snapshot(capture_state / "snapshot", backup_id=backup_id)
+        manifest = backup.read_json(snapshot_path / "manifest.json")
+        capture = {
+            "stateVersion": 2, "backupId": backup_id, "status": "maintenance-mode",
+            "phase": "maintenance-entered", "source": manifest["source"],
+            "restoreOperation": {
+                "backupId": restore_id, "holder": holder, "leaseUid": lease_uid,
+            },
+        }
+        backup.atomic_json(snapshot_path / "backup-state.json", capture)
+        backup.write_status(self.config, "verified-upload", "remote-readback", backup_id)
+        self.assertEqual(backup.read_json(backup.status_path(self.config))["status"], "verified-upload")
+        self.assertTrue((capture_state / "snapshot" / "manifest.json").is_file())
+        self.assertEqual(backup.read_json(state_path)["backupId"], backup_id)
+        self.assertEqual(backup.lifecycle_state(snapshot_path)["restoreOperation"], capture["restoreOperation"])
+        self.assertEqual(backup.read_json(snapshot_path / "manifest.json")["source"], capture["source"])
+        self.assertIsNotNone(backup.protected_restore_verified_upload(self.config))
+
+        def resume(config, action, path, operation_id, operation_holder, operation_uid, confirmation):
+            backup.restore_capture_write(
+                state_path, restore_id, holder, lease_uid,
+                "maintenance-failed", "maintenance-pending", backupId=backup_id,
+            )
+            raise backup.BackupError("maintenance-failure", "maintenance-resume-interrupted")
+
+        with patch.object(backup, "subprocess") as subprocess_mock, \
+                patch.object(backup, "run_capture_command", side_effect=resume):
+            subprocess_mock.run.side_effect = [
+                SimpleNamespace(returncode=1, stdout="disabled\n"),
+                SimpleNamespace(returncode=3, stdout="inactive\n"),
+            ]
+            with self.assertRaisesRegex(backup.BackupError, "maintenance-resume-interrupted"):
+                backup.run_restore_capture_action(
+                    self.config, "restore-maintenance-resume", restore_id, holder, lease_uid,
+                    f"RESUME-MAINTENANCE-RESTORE-{restore_id}-{holder}",
+                )
+
+        self.assertTrue(backup.verified_upload_status(self.config, backup_id))
+        attempt = backup.read_json(backup.status_path(self.config).with_name("maintenance-attempt.json"))
+        self.assertEqual(attempt["backupId"], backup_id)
+        self.assertEqual(attempt["restoreBackupId"], restore_id)
+        self.assertEqual(attempt["code"], "maintenance-resume-interrupted")
+
+    def test_restore_upload_does_not_prune_previous_release_backup(self):
+        snapshot_path = self.make_snapshot()
+        with patch.object(backup, "prune") as prune:
+            result = backup.upload_snapshot(
+                snapshot_path, self.config, force_upload=True, preserve_remote_points=True,
+            )
+
+        self.assertEqual(result, "verified-upload")
+        prune.assert_not_called()
+
+    def test_restore_capture_refuses_enabled_timer_before_lifecycle_action(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        confirmation = f"CAPTURE-RESTORE-{restore_id}-{holder}"
+
+        with patch.object(backup, "subprocess") as subprocess_mock, \
+                patch.object(backup, "run_capture_command") as capture:
+            subprocess_mock.run.return_value.returncode = 0
+            with self.assertRaisesRegex(backup.BackupError, "backup-timer-enabled"):
+                backup.run_restore_capture_action(
+                    self.config, "restore-capture", restore_id, holder, lease_uid, confirmation,
+                )
+
+        capture.assert_not_called()
+        state_path = backup.restore_capture_path(self.config, restore_id) / "restore-capture-state.json"
+        self.assertEqual((backup.read_json(state_path)["status"],
+                          backup.read_json(state_path)["phase"]), ("in-progress", "capture"))
 
     def test_normal_service_captures_candidate_and_retries_failed_upload_without_recapture(self):
         self.write_maintenance_capture()

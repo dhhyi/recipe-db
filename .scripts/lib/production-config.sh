@@ -8,6 +8,12 @@ production_fail() {
   exit 1
 }
 
+production_backup_config_sha256() {
+  jq -S 'if (.secrets | type) == "object" then
+    .secrets |= with_entries(.value = .key)
+  else . end' "$1" | sha256sum | cut -d ' ' -f 1
+}
+
 production_config() {
   [[ $1 = /* && -f $1 ]] || production_fail "values must be an absolute file path"
   yq -o=json eval-all '[.]' "$1" > "$work/config-documents.json"
@@ -95,6 +101,7 @@ production_config() {
       ($action == "deploy" or $action == "backup-run" or $action == "backup-enter"
         or $action == "maintenance-enter"
         or $action == "backup-capture" or $action == "maintenance-restore" or $action == "backup-exit"
+        or ($action | startswith("restore-backup-"))
         or $action == "release-stage" or $action == "release-fallback-stage"
         or $action == "release-migration-result"
         or $action == "release-migration-plan" or $action == "release-migration-next"

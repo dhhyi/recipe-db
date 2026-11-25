@@ -16,6 +16,8 @@ source "$root/.scripts/lib/production-storage.sh"
 source "$root/.scripts/lib/production-restore.sh"
 # shellcheck source=.scripts/lib/production-recovery.sh
 source "$root/.scripts/lib/production-recovery.sh"
+# shellcheck source=.scripts/lib/production-restore-backup.sh
+source "$root/.scripts/lib/production-restore-backup.sh"
 # shellcheck source=.scripts/lib/release-data-cache.sh
 source "$root/.scripts/lib/release-data-cache.sh"
 
@@ -32,7 +34,7 @@ if [[ $release_sources_from_git == true ]]; then
   [[ $command == release-* || $command == render || $command == maintenance-enter || $command == backup-enter ||
     $command == backup-capture || $command == maintenance-restore || $command == backup-run || $command == backup-exit ||
     $command == restore || $command == cutover-restore || $command == restore-status || $command == restore-recheck ||
-    $command == restore-reopen || $command == recovery-* ]] \
+    $command == restore-reopen || $command == restore-backup-* || $command == recovery-* ]] \
     || production_fail "Git release sources are limited to render, backup operations, restore and guarded release operations"
   tooling_revision=$(git -C "$root" rev-parse HEAD)
   [[ -z $(git -C "$root" status --porcelain --untracked-files=all) ]] \
@@ -44,6 +46,9 @@ case "$command" in
   backup-run | backup-enter | maintenance-enter) [[ $# = 2 ]] || production_fail "$command requires an immutable release artifact and new absolute snapshot directory" ;;
   backup-capture) [[ $# = 1 || $# = 2 ]] || production_fail "backup-capture requires the existing maintenance state directory and optional legacy identity receipt" ;;
   maintenance-restore) [[ $# = 1 ]] || production_fail "maintenance-restore requires the existing maintenance state directory" ;;
+  restore-backup-capture | restore-backup-upload-retry | restore-backup-maintenance-resume)
+    [[ $# = 7 ]] || production_fail "$command requires backup values, uploader configuration, restore capture state, pending restore ID, exact holder, Lease UID and command confirmation"
+    ;;
   release-stage) [[ $# = 4 ]] || production_fail "release-stage requires the maintenance state directory, candidate artifact, verified backup status and VERIFIED-<backup-id>-<status> confirmation" ;;
   release-fallback-stage) [[ $# = 3 ]] || production_fail "release-fallback-stage requires the maintenance state directory, failed candidate artifact and FALLBACK-<holder>-MARKERS-1-UNCHANGED-FORMAT confirmation" ;;
   release-migration-plan | release-migration-next | release-migration-status)
@@ -105,6 +110,11 @@ release_migration_claimed=false
 release_migration_claim_holder=
 release_migration_claim_artifact=
 release_recovery_reopen_started=false
+restore_backup_state_directory=
+restore_backup_state_path=
+restore_backup_snapshot=
+restore_backup_started=false
+restore_backup_current_graphql_mode=
 pod_watch_pid=
 release_recovery_reopen_cleanup() {
   local result=$1 failed=false
@@ -137,6 +147,12 @@ cleanup() {
   trap - EXIT
   restore_cleanup "$result"
   recovery_cleanup "$result"
+  if [[ $result -ne 0 && $command == restore-backup-* &&
+    $restore_backup_started == true &&
+    -n ${restore_backup_state_path:-} && -f $restore_backup_state_path ]]; then
+    restore_backup_record_failure \
+      || printf 'production: restore-owned capture failure state could not be recorded; preserve the Lease and inspect capture state\n' >&2
+  fi
   if ! recovery_command_release; then
     printf 'production: recovery command claim could not be released; inspect it after its 45-second heartbeat expires\n' >&2
     result=1
@@ -158,6 +174,7 @@ cleanup() {
     && [[ $command != release-migration-* ]] \
     && [[ $command != release-recovery-reopen ]] \
     && [[ $command != maintenance-restore ]] \
+    && [[ $command != restore-backup-* ]] \
     && ([[ $command != release-* ]] || $release_mutation_started) \
     && [[ -n ${snapshot:-} && -f $snapshot/backup-state.json ]] \
     && [[ $(jq -r .status "$snapshot/backup-state.json") != recovery-required ]]; then
@@ -292,7 +309,7 @@ pull_release() {
   [[ $revision = "$(jq -r '.annotations["org.opencontainers.image.revision"]' "$work/manifest.json")" ]] \
     || production_fail "artifact and inventory revision mismatch"
   case "$command" in
-    backup-run | backup-enter | backup-capture | maintenance-restore | backup-exit | restore | cutover-restore | restore-status | restore-recheck | restore-reopen | recovery-* | release-closeout | release-migration-recover | release-recovery-reopen)
+    backup-run | backup-enter | backup-capture | maintenance-restore | backup-exit | restore | cutover-restore | restore-status | restore-recheck | restore-reopen | restore-backup-* | recovery-* | release-closeout | release-migration-recover | release-recovery-reopen)
       local inputs=(.scripts/lib/project-metadata.sh
         .scripts/templates/kubernetes-template.yml .scripts/templates/kubernetes.lib.yml
         .scripts/templates/storage-version-gate.sh.ytt .scripts/templates/storage-version-sidecar.sh.ytt
@@ -1658,6 +1675,182 @@ maintenance_restore() {
   cluster_operation_lock_update captured || return 1
   backup_state_write captured captured || return 1
   printf 'production: verified maintenance snapshot restored read-only service; holder=%s\n' "$backup_id"
+}
+
+restore_backup_set_lease_phase() {
+  local phase=$1 current
+  current=$(cluster_operation_lock_status) || return 1
+  jq -e --arg holder "$restore_backup_holder" --arg uid "$restore_backup_lease_uid" \
+    --arg artifact "$restore_backup_artifact" '
+    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.uid == $uid and .spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/operation"] == "restore"
+    and .metadata.annotations["recipe-db/release"] == $artifact
+    and (.metadata.resourceVersion | type == "string" and length > 0)
+  ' <<< "$current" > /dev/null \
+    || production_fail "restore-owned capture no longer holds the exact pending restore Lease"
+  jq --arg phase "$phase" \
+    '.metadata.annotations["recipe-db/phase"]=$phase' <<< "$current" \
+    > "$work/restore-backup-lease.json" || return 1
+  cluster_operation_lock_expected_uid=$restore_backup_lease_uid
+  cluster_operation_lock_kubectl replace -f "$work/restore-backup-lease.json" > /dev/null \
+    || production_fail "restore-owned capture could not update the exact restore Lease"
+}
+
+restore_backup_record_failure() {
+  local phase status backup_id current
+  backup_id=$(jq -r '.backupId // empty' "$restore_backup_state_path")
+  if jq -e '.status == "complete" and .phase == "maintenance"' \
+    "$restore_backup_state_path" > /dev/null; then
+    current=$(cluster_operation_lock_status) || return 1
+    if jq -e --arg uid "$restore_backup_lease_uid" --arg holder "$restore_backup_holder" \
+      --arg artifact "$restore_backup_artifact" '
+      .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and .metadata.uid == $uid and .spec.holderIdentity == $holder
+      and .metadata.annotations["recipe-db/operation"] == "restore"
+      and .metadata.annotations["recipe-db/release"] == $artifact
+      and .metadata.annotations["recipe-db/phase"] == "awaiting-signoff"
+    ' <<< "$current" > /dev/null; then
+      return 0
+    fi
+    status=maintenance-failed
+    phase=maintenance-pending
+  else
+    phase=$(jq -r '.phase // "capture"' "$restore_backup_state_path")
+    case "$phase" in
+      upload-pending)
+        status=upload-failed
+        phase=upload-pending
+        ;;
+      maintenance-pending)
+        status=maintenance-failed
+        phase=maintenance-pending
+        ;;
+      *)
+        status=capture-failed
+        phase=capture
+        ;;
+    esac
+  fi
+  restore_backup_progress "$status" "$phase" "$backup_id" operation-failed || return 1
+  restore_backup_set_lease_phase "restore-backup-$status"
+}
+
+restore_backup_verify_pending_reads() {
+  local expected_lease_phase=$1 status_file=$2
+  restore_state=$work/restore-backup-state
+  mkdir -p "$restore_state"
+  jq -er '.data["restore-state.json"]' "$work/restore-backup-configmap.json" \
+    > "$restore_state/restore-state.json"
+  restore_status "$restore_state" > "$status_file"
+  jq -e --arg id "$restore_backup_restore_id" --arg phase "$expected_lease_phase" '
+    .savedProgress.backupId == $id
+    and .savedProgress.status == "awaiting-signoff"
+    and .savedProgress.phase == "pending-signoff"
+    and .savedProgress.import.status == "complete"
+    and .savedProgress.readChecks.status == "passed"
+    and .lease.ownedByRestore
+    and .lease.phase == $phase
+    and .observed.graphql.mode == "maintenance"
+    and .observed.graphql.maintenanceQuery == true
+    and .observed.publicRoutes.normalRoutesObserved
+    and .savedStateMatchesCluster
+    and (.writesMayHaveOpened | not)
+  ' "$status_file" > /dev/null \
+    || production_fail "restore no longer serves verified read-only traffic"
+  local pid
+  for pid in "${restore_forward_pid:-}" "${restore_browse_pid:-}"; do
+    [[ -n $pid ]] || continue
+    kill "$pid" 2> /dev/null || true
+    wait "$pid" 2> /dev/null || true
+  done
+  restore_forward_pid=
+  restore_browse_pid=
+  restore_graphql_port=
+  restore_browse_port=
+  restore_forward deployment/traefik 3000 "$work/restore-backup-graphql-forward.log" > /dev/null \
+    || production_fail "cannot open the read-only GraphQL verification path"
+  restore_forward service/browse 3000 "$work/restore-backup-browse-forward.log" > /dev/null \
+    || production_fail "cannot open the read-only website verification path"
+  restore_verify_reads \
+    || production_fail "restored application reads failed after Pi backup maintenance"
+}
+
+restore_backup_prepare_snapshot() {
+  local started_at
+  application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
+  backup_role_inventory
+  backup_capture_workloads "$artifact" true
+  backup_check_capacity "$restore_backup_state_directory"
+  [[ ! -e $restore_backup_snapshot && ! -L $restore_backup_snapshot ]] \
+    || production_fail "restore-owned capture refuses to recapture an existing or uncertain snapshot"
+  mkdir -m 700 "$restore_backup_snapshot" \
+    || production_fail "could not create private restore-owned snapshot directory"
+  backup_id="backup-$(date -u +%Y%m%d%H%M%S)-$$"
+  [[ $backup_id != "$restore_backup_restore_id" ]] \
+    || backup_id="$backup_id-1"
+  started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  jq -n --arg id "$backup_id" --arg target "$target" --arg cluster "$cluster" \
+    --arg context "$context" --arg namespace "$namespace" --arg artifact "$artifact" \
+    --arg revision "$revision" --arg startedAt "$started_at" \
+    --arg restoreBackupId "$restore_backup_restore_id" \
+    --arg restoreHolder "$restore_backup_holder" --arg restoreLeaseUid "$restore_backup_lease_uid" \
+    --slurpfile workloads "$work/prior-workloads.json" \
+    --slurpfile pvcs "$work/backup-pvcs.jsonl" \
+    --slurpfile maintenance "$work/maintenance-workloads.json" \
+    --arg configSha256 "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" \
+    '{stateVersion:2,backupId:$id,status:"in-progress",phase:"prepared",startedAt:$startedAt,
+      source:{target:$target,cluster:$cluster,context:$context,namespace:$namespace,
+        artifact:$artifact,revision:$revision},
+      restoreOperation:{backupId:$restoreBackupId,holder:$restoreHolder,leaseUid:$restoreLeaseUid},
+      configSha256:$configSha256,priorWorkloads:$workloads[0],
+      maintenanceWorkloads:$maintenance[0],selectedPVCs:$pvcs}' \
+    > "$restore_backup_snapshot/backup-state.json" \
+    || production_fail "could not persist restore-owned capture progress"
+  snapshot=$restore_backup_snapshot
+  restore_backup_started=true
+  restore_backup_progress in-progress capture "$backup_id"
+}
+
+restore_backup_publish_snapshot() {
+  local config_file=$1
+  RECIPE_DB_RESTORE_CAPTURE_ACTIVE=1 python3 "$root/provisioning/files/backup-upload.py" \
+    restore-publish --config "$config_file" --snapshot "$snapshot" \
+    > "$work/restore-backup-publish.log" 2>&1
+}
+
+restore_backup_verify_upload() {
+  local state_directory=$1
+  jq -e --arg id "$backup_id" '.format == "recipe-db-backup-status"
+    and .status == "verified-upload" and .backupId == $id' \
+    "$state_directory/status.json" > /dev/null \
+    || production_fail "restore-owned backup lacks verified remote readback for its exact backup ID"
+  jq -e --arg id "$backup_id" --arg target "$target" --arg cluster "$cluster" \
+    --arg context "$context" --arg namespace "$namespace" \
+    --arg artifact "$restore_backup_artifact" \
+    --arg revision "$restore_backup_revision" '
+    .backupId == $id and .source.target == "pi"
+    and .source.target == $target and .source.cluster == $cluster
+    and .source.context == $context and .source.namespace == $namespace
+    and .source.artifact == $artifact and .source.revision == $revision
+  ' "$snapshot/manifest.json" > /dev/null \
+    || production_fail "verified upload does not identify this Pi backup and restored release"
+}
+
+restore_backup_record_completion() {
+  local state_directory=$1
+  if ! jq --arg artifact "$restore_backup_artifact" --arg revision "$restore_backup_revision" \
+    --arg uploadStatus verified-upload --arg verifiedAt "$(jq -er .lastCheck \
+      "$state_directory/status.json")" \
+    '.artifact=$artifact | .revision=$revision | .uploadStatus=$uploadStatus
+      | .verifiedUploadAt=$verifiedAt' \
+    "$restore_backup_state_path" > "$restore_backup_state_path.next"; then
+    production_fail "could not persist verified Pi backup evidence"
+  fi
+  mv "$restore_backup_state_path.next" "$restore_backup_state_path" \
+    || production_fail "could not persist verified Pi backup evidence"
+  restore_backup_progress complete maintenance "$backup_id" \
+    || production_fail "could not persist restore-owned capture completion evidence"
 }
 
 backup_load_state() {
@@ -5000,6 +5193,15 @@ case "$command" in
     ;;
   maintenance-restore)
     maintenance_restore "$1"
+    ;;
+  restore-backup-capture)
+    restore_backup_capture "$@"
+    ;;
+  restore-backup-upload-retry)
+    restore_backup_upload_retry "$@"
+    ;;
+  restore-backup-maintenance-resume)
+    restore_backup_maintenance_resume "$@"
     ;;
   restore)
     restore_run "$1" "$2" "$3" "$4" "$5" standalone '' '' "${6:-}"

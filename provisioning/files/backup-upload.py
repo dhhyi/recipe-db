@@ -32,6 +32,7 @@ MAX_DIRECTORIES = 100_000
 HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 BACKUP_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+RESTORE_HOLDER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
 REMOTE_FILENAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 MAX_REMOTE_MANIFEST_BYTES = 128 * 1024**2
 SAFE_RECOVERY_STATES = {("failed", "safely-recovered"), ("recovered", "safely-recovered")}
@@ -551,13 +552,19 @@ def archive_recovered_maintenance(config):
 
 def write_status(config, status, code, backup_id=None, last_upload=None):
     path = status_path(config)
-    if status != "verified-upload" and protected_verified_maintenance(config):
-        state = lifecycle_state(maintenance_state_path(config))
-        atomic_json(path.with_name("maintenance-attempt.json"), {
-            "backupId": state["backupId"], "status": status, "code": code,
-            "lastCheck": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        })
-        return read_json(path)
+    if status != "verified-upload":
+        maintenance = protected_verified_maintenance(config)
+        restore_capture = protected_restore_verified_upload(config)
+        if maintenance or restore_capture:
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            attempt = {"status": status, "code": code, "lastCheck": now}
+            if maintenance:
+                attempt["backupId"] = lifecycle_state(maintenance_state_path(config))["backupId"]
+            else:
+                attempt["backupId"] = restore_capture["backupId"]
+                attempt["restoreBackupId"] = restore_capture["restoreBackupId"]
+            atomic_json(path.with_name("maintenance-attempt.json"), attempt)
+            return read_json(path)
     prior = {}
     if path.is_file() and not path.is_symlink():
         try:
@@ -725,6 +732,63 @@ def protected_verified_maintenance(config):
     return isinstance(state, dict) and (state.get("status"), state.get("phase")) == ("captured", "captured") \
         and (state.get("maintenanceRestored") is True or state.get("maintenanceKind") == "backup-only") \
         and verified_upload_status(config, state.get("backupId"))
+
+
+def protected_restore_verified_upload(config):
+    root = Path(config["stateDirectory"]) / "restore-captures"
+    if root.is_symlink() or not root.is_dir():
+        return None
+    try:
+        status = read_json(status_path(config))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(status, dict) or status.get("status") != "verified-upload":
+        return None
+    backup_id = status.get("backupId")
+    if not isinstance(backup_id, str) or not BACKUP_ID_PATTERN.fullmatch(backup_id):
+        return None
+    matches = []
+    for directory in root.iterdir():
+        if directory.is_symlink() or not directory.is_dir():
+            continue
+        state_path = directory / "restore-capture-state.json"
+        snapshot = directory / "snapshot"
+        if state_path.is_symlink() or not state_path.is_file() \
+                or snapshot.is_symlink() or not snapshot.is_dir():
+            continue
+        try:
+            state = read_json(state_path)
+            capture = lifecycle_state(snapshot)
+            manifest = read_json(snapshot / "manifest.json")
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        restore_id = state.get("restoreBackupId") if isinstance(state, dict) else None
+        holder = state.get("restoreHolder") if isinstance(state, dict) else None
+        lease_uid = state.get("restoreLeaseUid") if isinstance(state, dict) else None
+        if directory.name != restore_id or not isinstance(restore_id, str) \
+                or not BACKUP_ID_PATTERN.fullmatch(restore_id) \
+                or not isinstance(holder, str) or not RESTORE_HOLDER_PATTERN.fullmatch(holder) \
+                or not isinstance(lease_uid, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,128}", lease_uid) \
+                or not restore_capture_identity(state, restore_id, holder, lease_uid) \
+                or state.get("backupId") != backup_id \
+                or (state.get("status"), state.get("phase")) not in {
+                    ("in-progress", "upload-pending"),
+                    ("upload-verified", "maintenance-pending"),
+                    ("maintenance-failed", "maintenance-pending"),
+                    ("complete", "maintenance"),
+                }:
+            continue
+        if not isinstance(capture, dict) or capture.get("backupId") != backup_id \
+                or capture.get("stateVersion") != 2 \
+                or capture.get("restoreOperation") != {
+                    "backupId": restore_id, "holder": holder, "leaseUid": lease_uid,
+                } \
+                or not isinstance(manifest, dict) or manifest.get("backupId") != backup_id \
+                or manifest.get("source") != capture.get("source"):
+            continue
+        if verified_upload_status(config, backup_id):
+            matches.append(state)
+    return matches[0] if len(matches) == 1 else None
 
 
 def enter_maintenance(config):
@@ -1056,7 +1120,7 @@ def terminate_capture_process_group(process):
 
 
 def upload_snapshot(snapshot, config, require_storage_versions=False, force_upload=False,
-                    allow_upload_pending=False):
+                    allow_upload_pending=False, preserve_remote_points=False):
     ensure_private_dir(config["stateDirectory"])
     stage_root = ensure_private_dir(config["stagingDirectory"])
     baseline_file = baseline_path(config)
@@ -1115,14 +1179,15 @@ def upload_snapshot(snapshot, config, require_storage_versions=False, force_uplo
                 "lastUpload": last_upload,
             }
             atomic_json(baseline_file, new_baseline)
-        try:
-            prune(config, names | {package["archive"], package["manifest"]},
-                  package["archive"], package["manifest"])
-        except (BackupError, OSError, TypeError, ValueError, KeyError) as error:
-            code = error.code if isinstance(error, BackupError) else "retention-metadata"
-            write_status(config, "retention-failure", code,
-                         manifest["backupId"], last_upload)
-            raise BackupError("retention-failure", code) from error
+        if not preserve_remote_points:
+            try:
+                prune(config, names | {package["archive"], package["manifest"]},
+                      package["archive"], package["manifest"])
+            except (BackupError, OSError, TypeError, ValueError, KeyError) as error:
+                code = error.code if isinstance(error, BackupError) else "retention-metadata"
+                write_status(config, "retention-failure", code,
+                             manifest["backupId"], last_upload)
+                raise BackupError("retention-failure", code) from error
         write_status(config, "verified-upload", "remote-readback",
                      manifest["backupId"], last_upload)
         return "verified-upload"
@@ -1182,6 +1247,183 @@ def run_release_capture(config):
     if state.get("postReleaseBackup") is None:
         run_capture_command(config, "release-capture", maintenance, candidate["artifact"])
     return upload_release_snapshot(config)
+
+
+def restore_capture_path(config, restore_id):
+    root = ensure_private_dir(Path(config["stateDirectory"]) / "restore-captures")
+    path = root / restore_id
+    if path.is_symlink() or path.exists() and not path.is_dir():
+        raise BackupError("restart-failure", "invalid-restore-capture-state")
+    return path
+
+
+def restore_capture_identity(state, restore_id, holder, lease_uid):
+    return isinstance(state, dict) \
+        and state.get("format") == "recipe-db-restore-capture" \
+        and state.get("formatVersion") == 1 \
+        and state.get("restoreBackupId") == restore_id \
+        and state.get("restoreHolder") == holder \
+        and state.get("restoreLeaseUid") == lease_uid
+
+
+def restore_capture_write(path, restore_id, holder, lease_uid, status, phase, **fields):
+    current = {}
+    if path.exists() or path.is_symlink():
+        try:
+            current = read_json(path)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            raise BackupError("restart-failure", "invalid-restore-capture-state") from error
+        if not restore_capture_identity(current, restore_id, holder, lease_uid):
+            raise BackupError("restart-failure", "restore-capture-identity-mismatch")
+    else:
+        current = {
+            "format": "recipe-db-restore-capture",
+            "formatVersion": 1,
+            "restoreBackupId": restore_id,
+            "restoreHolder": holder,
+            "restoreLeaseUid": lease_uid,
+            "startedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+    current.update({
+        "status": status,
+        "phase": phase,
+        "updatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        **fields,
+    })
+    atomic_json(path, current)
+    return current
+
+
+def backup_timer_disabled():
+    expected_disabled = {"is-enabled": (1, "disabled"), "is-active": (3, "inactive")}
+    for action, (expected_status, expected_output) in expected_disabled.items():
+        try:
+            result = subprocess.run(
+                ["systemctl", action, "recipe-db-backup.timer"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, text=True, check=False, timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise BackupError("capture-failure", "backup-timer-status-failed") from error
+        if result.returncode == 0:
+            raise BackupError("capture-failure", "backup-timer-enabled")
+        if result.returncode != expected_status or result.stdout.strip() != expected_output:
+            raise BackupError("capture-failure", "backup-timer-status-failed")
+
+
+def run_restore_capture_action(config, action, restore_id, holder, lease_uid, confirmation):
+    if not BACKUP_ID_PATTERN.fullmatch(restore_id) \
+            or not RESTORE_HOLDER_PATTERN.fullmatch(holder) \
+            or not isinstance(lease_uid, str) or not lease_uid:
+        raise BackupError("capture-failure", "invalid-restore-operation-identity")
+    confirmations = {
+        "restore-capture": f"CAPTURE-RESTORE-{restore_id}-{holder}",
+        "restore-upload-retry": f"RETRY-UPLOAD-RESTORE-{restore_id}-{holder}",
+        "restore-maintenance-resume": f"RESUME-MAINTENANCE-RESTORE-{restore_id}-{holder}",
+    }
+    if confirmation != confirmations[action]:
+        raise BackupError("capture-failure", "restore-capture-confirmation-mismatch")
+    root = restore_capture_path(config, restore_id)
+    if not root.exists():
+        if action != "restore-capture":
+            raise BackupError("restart-failure", "restore-capture-state-unavailable")
+        root.mkdir(mode=0o700)
+    ensure_private_dir(root)
+    state_path = root / "restore-capture-state.json"
+    if state_path.is_symlink():
+        raise BackupError("restart-failure", "invalid-restore-capture-state")
+    if state_path.exists():
+        state = read_json(state_path)
+        if not restore_capture_identity(state, restore_id, holder, lease_uid):
+            raise BackupError("restart-failure", "restore-capture-identity-mismatch")
+    elif action != "restore-capture":
+        raise BackupError("restart-failure", "restore-capture-state-unavailable")
+    else:
+        state = restore_capture_write(
+            state_path, restore_id, holder, lease_uid, "in-progress", "capture",
+        )
+    if action == "restore-maintenance-resume":
+        expected_states = {
+            ("upload-verified", "maintenance-pending"),
+            ("maintenance-failed", "maintenance-pending"),
+            ("in-progress", "maintenance-pending"),
+            ("in-progress", "upload-pending"),
+            ("complete", "maintenance"),
+            ("complete", "maintenance"),
+        }
+    elif action == "restore-upload-retry":
+        expected_states = {
+            ("upload-pending", "upload-pending"),
+            ("upload-failed", "upload-pending"),
+            ("in-progress", "upload-pending"),
+            ("capture-failed", "capture"),
+        }
+    else:
+        expected_states = {
+            ("in-progress", "capture"),
+            ("failed", "capture"),
+            ("capture-failed", "capture"),
+        }
+    if (state.get("status"), state.get("phase")) not in expected_states:
+        raise BackupError("restart-failure", "restore-capture-phase-mismatch")
+    backup_timer_disabled()
+    try:
+        run_capture_command(
+            config, action, str(root), restore_id, holder, lease_uid, confirmation,
+        )
+        state = read_json(state_path)
+        expected_final = {
+            "restore-capture": ("complete", "maintenance"),
+            "restore-upload-retry": ("upload-verified", "maintenance-pending"),
+            "restore-maintenance-resume": ("complete", "maintenance"),
+        }[action]
+        if not restore_capture_identity(state, restore_id, holder, lease_uid) \
+                or (state.get("status"), state.get("phase")) != expected_final \
+                or not isinstance(state.get("backupId"), str) \
+                or not BACKUP_ID_PATTERN.fullmatch(state["backupId"]) \
+                or state["backupId"] == restore_id:
+            raise BackupError("restart-failure", "restore-capture-result-unverified")
+        return state
+    except BackupError as error:
+        try:
+            state = read_json(state_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            state = {}
+        if restore_capture_identity(state, restore_id, holder, lease_uid):
+            phase = state.get("phase", "capture")
+            status = state.get("status", "failed")
+            if status == "in-progress":
+                status = "failed"
+            restore_capture_write(
+                state_path, restore_id, holder, lease_uid, status, phase,
+                failureCode=error.code,
+            )
+        write_status(config, error.status, error.code, state.get("backupId"))
+        raise
+
+
+def run_restore_publish(config, snapshot):
+    if os.environ.get("RECIPE_DB_RESTORE_CAPTURE_ACTIVE") != "1":
+        raise BackupError("capture-failure", "restore-publish-is-internal")
+    root = Path(snapshot)
+    if root.is_symlink() or not root.is_dir() or root.parent.is_symlink() \
+            or root.parent.parent.is_symlink() \
+            or root.parent.parent != Path(config["stateDirectory"]) / "restore-captures":
+        raise BackupError("capture-failure", "invalid-restore-capture-snapshot")
+    state = lifecycle_state(root)
+    if not isinstance(state, dict) or state.get("stateVersion") != 2 \
+            or (state.get("status"), state.get("phase")) != ("backup-mode", "upload-pending"):
+        raise BackupError("upload-failure", "restore-capture-upload-not-pending")
+    try:
+        result = upload_snapshot(
+            root, config, force_upload=True, allow_upload_pending=True,
+            preserve_remote_points=True,
+        )
+    except BackupError:
+        raise
+    if result != "verified-upload" or not verified_upload_status(config, state.get("backupId")):
+        raise BackupError("upload-failure", "restore-capture-remote-verification-mismatch")
+    return result
 
 
 def upload_release_snapshot(config):
@@ -1314,21 +1556,46 @@ def run_nightly(config):
         os.close(lock_fd)
 
 
+def attach_restore_capture_status(config, value):
+    restore_captures = Path(config["stateDirectory"]) / "restore-captures"
+    if restore_captures.is_dir() and not restore_captures.is_symlink():
+        candidates = sorted(
+            (path / "restore-capture-state.json" for path in restore_captures.iterdir()
+             if path.is_dir() and not path.is_symlink()),
+            key=lambda path: path.stat().st_mtime,
+        )
+        if candidates:
+            try:
+                capture = read_json(candidates[-1])
+                if isinstance(capture, dict) and capture.get("format") == "recipe-db-restore-capture":
+                    value["restoreCapture"] = {
+                        key: capture.get(key) for key in
+                        ("restoreBackupId", "status", "phase", "backupId", "updatedAt", "failureCode")
+                    }
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                value["restoreCapture"] = {"status": "capture-failure", "phase": "invalid-state"}
+    return value
+
+
 def report_status(config):
     path = status_path(config)
     try:
         value = read_json(path)
     except (OSError, ValueError, json.JSONDecodeError):
-        return {"format": STATUS_FORMAT, "status": "overdue", "code": "no-check-record",
-                "lastCheck": None, "lastUpload": None, "backupId": None,
-                "maintenanceActive": maintenance_active(config),
-                "migrationRecoveryCloseoutVersion": 1}
+        return attach_restore_capture_status(config, {
+            "format": STATUS_FORMAT, "status": "overdue", "code": "no-check-record",
+            "lastCheck": None, "lastUpload": None, "backupId": None,
+            "maintenanceActive": maintenance_active(config),
+            "migrationRecoveryCloseoutVersion": 1,
+        })
     if not isinstance(value, dict):
-        return {"format": STATUS_FORMAT, "status": "capture-failure",
-                "code": "invalid-status-record", "lastCheck": None,
-                "lastUpload": None, "backupId": None,
-                "maintenanceActive": maintenance_active(config),
-                "migrationRecoveryCloseoutVersion": 1}
+        return attach_restore_capture_status(config, {
+            "format": STATUS_FORMAT, "status": "capture-failure",
+            "code": "invalid-status-record", "lastCheck": None,
+            "lastUpload": None, "backupId": None,
+            "maintenanceActive": maintenance_active(config),
+            "migrationRecoveryCloseoutVersion": 1,
+        })
     if not value.get("lastCheck"):
         value["status"] = "overdue"
         value["code"] = "no-check-record"
@@ -1341,6 +1608,7 @@ def report_status(config):
             value["status"] = "capture-failure"
             value["code"] = "invalid-status-record"
     value["maintenanceActive"] = maintenance_active(config)
+    value = attach_restore_capture_status(config, value)
     if pending_verified_maintenance(config):
         value["status"] = "restart-failure"
         value["code"] = "maintenance-restore-pending"
@@ -1357,8 +1625,17 @@ def report_status(config):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("nightly", "status", "maintenance-enter", "release-upload"))
+    parser.add_argument("action", choices=(
+        "nightly", "status", "maintenance-enter", "release-upload",
+        "restore-capture", "restore-upload-retry", "restore-maintenance-resume",
+        "restore-publish",
+    ))
     parser.add_argument("--config", required=True)
+    parser.add_argument("--restore-id")
+    parser.add_argument("--restore-holder")
+    parser.add_argument("--restore-lease-uid")
+    parser.add_argument("--confirmation")
+    parser.add_argument("--snapshot")
     args = parser.parse_args()
     config = safe_config(args.config)
     def interrupt(signum, frame):
@@ -1376,6 +1653,32 @@ def main():
     if args.action == "release-upload":
         print(run_release_upload(config))
         return 0
+    if args.action == "restore-publish":
+        if not args.snapshot or any((
+            args.restore_id, args.restore_holder, args.restore_lease_uid, args.confirmation,
+        )):
+            parser.error("restore-publish requires only --snapshot")
+        print(run_restore_publish(config, args.snapshot))
+        return 0
+    if args.action in ("restore-capture", "restore-upload-retry", "restore-maintenance-resume"):
+        if not all((args.restore_id, args.restore_holder, args.restore_lease_uid, args.confirmation)) \
+                or args.snapshot:
+            parser.error("restore capture actions require restore identity and confirmation arguments")
+        lock_fd = acquire_run_lock(config)
+        try:
+            marker = Path(config["stateDirectory"]) / "release-command.json"
+            if marker.exists() or marker.is_symlink():
+                raise BackupError("interrupted", "workstation-release-command-active")
+            run_restore_capture_action(
+                config, args.action, args.restore_id, args.restore_holder,
+                args.restore_lease_uid, args.confirmation,
+            )
+        finally:
+            os.close(lock_fd)
+        return 0
+    if any((args.restore_id, args.restore_holder, args.restore_lease_uid,
+            args.confirmation, args.snapshot)):
+        parser.error("unexpected restore arguments")
     run_nightly(config)
     return 0
 

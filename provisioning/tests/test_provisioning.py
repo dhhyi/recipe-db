@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 import re
@@ -627,6 +628,13 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(maintenance_gate["no_log"])
         self.assertIn("maintenanceActive",
                       maintenance_gate["ansible.builtin.assert"]["that"][0])
+        restore_guard = next(task for task in setup_tasks
+                             if task["name"] == "Refuse input alignment while a restore Lease is retained")
+        self.assertTrue(restore_guard["no_log"])
+        self.assertIn("from_json", str(restore_guard["ansible.builtin.assert"]["that"]))
+        self.assertLess(setup_tasks.index(restore_guard),
+                        next(index for index, task in enumerate(setup_tasks)
+                             if task["name"] == "Copy referenced private application inputs"))
         config_check = next(task for task in setup_tasks
                             if task["name"] == "Check whether backup configuration is installed")
         self.assertEqual(config_check["ansible.builtin.stat"]["path"],
@@ -732,8 +740,65 @@ class ContractTests(unittest.TestCase):
         self.assertIn('maintenance-enter /etc/recipe-db/backup-values.yaml "$release" "$path"', command)
         self.assertIn('backup-capture /etc/recipe-db/backup-values.yaml "$path"', command)
         self.assertIn('maintenance-restore /etc/recipe-db/backup-values.yaml "$path"', command)
+        self.assertIn('restore-capture | restore-upload-retry | restore-maintenance-resume)', command)
+        self.assertIn('/var/lib/recipe-db-backup/restore-captures/$restore_id', command)
+        self.assertIn('/etc/recipe-db/backup-values.yaml /etc/recipe-db/backup.json', command)
+        self.assertIn('"$path" "$restore_id" "$restore_holder" \\', command)
+        self.assertIn('"$restore_lease_uid" "$confirmation"', command)
         self.assertIn("release=$(cat /etc/recipe-db/backup-release-ref)", command)
         self.assertNotIn("mise run", command)
+
+    def test_backup_capture_wrapper_dispatches_each_restore_action(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state_root, checkout, config = root / "state", root / "checkout", root / "config"
+            for path in (state_root, checkout, config):
+                path.mkdir()
+            restore_id = "backup-20261101120000-1"
+            holder = "restore-holder"
+            lease_uid = "lease-uid-1"
+            capture_state = state_root / "restore-captures" / restore_id
+            capture_state.mkdir(parents=True)
+            (capture_state / "restore-capture-state.json").write_text("{}")
+            (config / "backup-values.yaml").write_text("fixture")
+            (config / "backup.json").write_text("{}")
+            (config / "backup-release-ref").write_text("fixture-release")
+            dispatch_log = root / "dispatch.json"
+            mise = root / "mise"
+            mise.write_text(
+                f"#!{sys.executable}\nimport json, pathlib, sys\n"
+                f"pathlib.Path({str(dispatch_log)!r}).write_text(json.dumps(sys.argv[1:]))\n"
+            )
+            mise.chmod(0o700)
+            command = self.render("recipe-db-backup-capture.j2") \
+                .replace("/var/lib/recipe-db-backup", str(state_root)) \
+                .replace("/opt/recipe-db", str(checkout)) \
+                .replace("/etc/recipe-db", str(config)) \
+                .replace("/usr/local/bin/mise", str(mise))
+
+            for action, expected_command, confirmation in (
+                ("restore-capture", "restore-backup-capture",
+                 f"CAPTURE-RESTORE-{restore_id}-{holder}"),
+                ("restore-upload-retry", "restore-backup-upload-retry",
+                 f"RETRY-UPLOAD-RESTORE-{restore_id}-{holder}"),
+                ("restore-maintenance-resume", "restore-backup-maintenance-resume",
+                 f"RESUME-MAINTENANCE-RESTORE-{restore_id}-{holder}"),
+            ):
+                subprocess.run(
+                    ["bash", "-s", action, str(capture_state), restore_id, holder,
+                     lease_uid, confirmation],
+                    input=command, text=True, check=True,
+                )
+                dispatched = json.loads(dispatch_log.read_text())
+                self.assertEqual(dispatched[5], expected_command)
+                self.assertEqual(dispatched[6:9], [
+                    str(config / "backup-values.yaml"),
+                    str(config / "backup.json"),
+                    str(config / "backup.json"),
+                ])
+                self.assertEqual(dispatched[9:], [
+                    str(capture_state), restore_id, holder, lease_uid, confirmation,
+                ])
 
     def test_managed_recovery_holds_shared_lock_through_tool_execution(self):
         with tempfile.TemporaryDirectory() as temporary:
