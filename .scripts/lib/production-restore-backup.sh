@@ -104,6 +104,22 @@ restore_backup_record_failure() {
   restore_backup_set_lease_phase "restore-backup-$status"
 }
 
+restore_backup_record_cleanup_failure() {
+  local result=$1
+  if [[ $result -ne 0 && $command == restore-backup-* &&
+    $restore_backup_started == true &&
+    -n ${restore_backup_state_path:-} && -f $restore_backup_state_path ]]; then
+    if [[ $command == restore-backup-maintenance-resume &&
+      $restore_backup_current_graphql_mode == maintenance ]]; then
+      backup_reblock_graphql \
+        || printf 'production: could not reblock GraphQL after restore-owned verification failure\n' >&2
+    fi
+    restore_backup_record_failure \
+      || printf 'production: restore-owned capture failure state could not be recorded; preserve the Lease and inspect capture state\n' >&2
+  fi
+  return 0
+}
+
 restore_backup_finish_maintenance() {
   local config_file=$1 state_directory=$2
   restore_backup_progress upload-verified maintenance-pending "$backup_id"
@@ -253,6 +269,7 @@ restore_backup_phase_is_allowed() {
       restore-backup-upload-retry:upload-pending:restore-backup-upload-pending | \
       restore-backup-maintenance-resume:maintenance-pending:restore-backup-maintenance-failed | \
       restore-backup-maintenance-resume:maintenance-pending:restore-backup-maintenance-pending | \
+      restore-backup-maintenance-resume:maintenance-pending:restore-backup-upload-pending | \
       restore-backup-maintenance-resume:maintenance-pending:projection-refresh | \
       restore-backup-maintenance-resume:maintenance-pending:awaiting-signoff | \
       restore-backup-maintenance-resume:upload-pending:restore-backup-upload-pending | \
@@ -290,13 +307,19 @@ restore_backup_load_operation() {
   restore_backup_state_directory=$directory
   restore_backup_state_path=$directory/restore-capture-state.json
   restore_backup_snapshot=$directory/snapshot
-  [[ -f $restore_backup_state_path && ! -L $restore_backup_state_path ]] \
-    || production_fail "restore-owned capture progress state is missing"
-  jq -e --arg id "$restore_id" --arg holder "$holder" --arg uid "$lease_uid" '
-    .format == "recipe-db-restore-capture" and .formatVersion == 1
-    and .restoreBackupId == $id and .restoreHolder == $holder and .restoreLeaseUid == $uid
-  ' "$restore_backup_state_path" > /dev/null \
-    || production_fail "restore-owned capture progress identity changed"
+  if [[ -f $restore_backup_state_path && ! -L $restore_backup_state_path ]]; then
+    jq -e --arg id "$restore_id" --arg holder "$holder" --arg uid "$lease_uid" '
+      .format == "recipe-db-restore-capture" and .formatVersion == 1
+      and .restoreBackupId == $id and .restoreHolder == $holder and .restoreLeaseUid == $uid
+    ' "$restore_backup_state_path" > /dev/null \
+      || production_fail "restore-owned capture progress identity changed"
+    restore_backup_expected_phase=$(jq -er '.phase' "$restore_backup_state_path")
+  else
+    [[ $command == restore-backup-capture &&
+      ! -e $restore_backup_state_path && ! -L $restore_backup_state_path ]] \
+      || production_fail "restore-owned capture progress state is missing or invalid"
+    restore_backup_expected_phase=capture
+  fi
   restore_backup_restore_id=$restore_id
   restore_backup_holder=$holder
   restore_backup_lease_uid=$lease_uid
@@ -350,10 +373,20 @@ restore_backup_load_operation() {
   lock_holder=$holder
   locked=true
   retain_lock=true
-  restore_backup_expected_phase=$(jq -r '.phase' "$restore_backup_state_path")
   restore_backup_phase_is_allowed "$command" "$restore_backup_expected_phase" \
     "$restore_backup_current_phase" \
     || production_fail "restore-owned capture progress or retained Lease phase does not permit this action"
+  if [[ ! -e $restore_backup_state_path && ! -L $restore_backup_state_path ]]; then
+    if ! jq -n --arg id "$restore_id" --arg holder "$holder" --arg uid "$lease_uid" \
+      --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+      {format:"recipe-db-restore-capture",formatVersion:1,restoreBackupId:$id,
+        restoreHolder:$holder,restoreLeaseUid:$uid,status:"capture",phase:"capture",
+        createdAt:$now,updatedAt:$now}
+    ' > "$restore_backup_state_path.next" \
+      || ! mv "$restore_backup_state_path.next" "$restore_backup_state_path"; then
+      production_fail "restore-owned capture could not create its private progress state"
+    fi
+  fi
   restore_backup_started=true
   backup_reference="$(dirname "$config_file")/backup-release-ref"
   [[ -f $backup_reference && ! -L $backup_reference ]] \

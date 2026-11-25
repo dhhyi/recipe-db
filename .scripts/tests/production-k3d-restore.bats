@@ -1280,9 +1280,17 @@ EOF
   [[ $output != *"different private credential"* ]]
 }
 
-@test "restore-owned maintenance resumes after interrupted projection refresh" {
+@test "restore-owned maintenance resumes across interrupted Lease and projection phases" {
   cp "$BATS_TEST_DIRNAME/../lib/production-restore-backup.sh" .scripts/lib/
   source .scripts/lib/production-restore-backup.sh
+
+  run restore_backup_phase_is_allowed restore-backup-maintenance-resume \
+    maintenance-pending restore-backup-upload-pending
+  [ "$status" -eq 0 ]
+
+  run restore_backup_phase_is_allowed restore-backup-maintenance-resume \
+    upload-pending restore-backup-upload-pending
+  [ "$status" -eq 0 ]
 
   run restore_backup_phase_is_allowed restore-backup-maintenance-resume \
     maintenance-pending projection-refresh
@@ -1591,6 +1599,49 @@ EOF
   [[ $output == *"progress or retained Lease phase does not permit this action"* ]]
   run grep -q '^capture:' "$MOCK_LOG.pipeline"
   [ "$status" -ne 0 ]
+}
+
+@test "failed recovery-command release marks completed restore capture failed" {
+  cp "$BATS_TEST_DIRNAME/../lib/production-restore-backup.sh" .scripts/lib/
+  source .scripts/lib/production-restore-backup.sh
+
+  work="$FIXTURE_ROOT/work"
+  mkdir -p "$work"
+  restore_backup_state_path="$FIXTURE_ROOT/restore-capture-state.json"
+  restore_backup_started=true
+  restore_backup_current_phase=awaiting-signoff
+  restore_backup_holder=restore-holder
+  restore_backup_lease_uid="lease-uid-1"
+  restore_backup_artifact=ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  cluster_operation_lock_current_phase=awaiting-signoff
+  command=restore-backup-capture
+  jq -n '{
+    format:"recipe-db-restore-capture",formatVersion:1,
+    restoreBackupId:"backup-20261101120000-1",restoreHolder:"restore-holder",
+    restoreLeaseUid:"lease-uid-1",status:"complete",phase:"maintenance",
+    backupId:"backup-20261101120100-2"
+  }' > "$restore_backup_state_path"
+  jq -n --arg artifact "$restore_backup_artifact" '{
+    metadata:{uid:"lease-uid-1",resourceVersion:"42",
+      labels:{"app.kubernetes.io/part-of":"recipe-db"},
+      annotations:{"recipe-db/phase":"awaiting-signoff",
+        "recipe-db/operation":"restore","recipe-db/release":$artifact}},
+    spec:{holderIdentity:"restore-holder"}
+  }' > "$FIXTURE_ROOT/lease.json"
+  recovery_command_release() { return 1; }
+  cluster_operation_lock_status() { cat "$FIXTURE_ROOT/lease.json"; }
+  cluster_operation_lock_kubectl() {
+    cp "${@: -1}" "$FIXTURE_ROOT/lease.json"
+  }
+
+  cleanup_result=0
+  if ! recovery_command_release; then cleanup_result=1; fi
+  [ "$cleanup_result" -eq 1 ]
+  restore_backup_record_cleanup_failure "$cleanup_result"
+  jq -e '.status == "maintenance-failed" and .phase == "maintenance-pending"' \
+    "$restore_backup_state_path"
+  jq -e '.metadata.annotations["recipe-db/phase"] == "restore-backup-maintenance-failed"' \
+    "$FIXTURE_ROOT/lease.json"
 }
 
 @test "restore-owned retry and resume retain the exact uploaded snapshot" {

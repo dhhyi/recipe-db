@@ -201,10 +201,6 @@ raise SystemExit(0)
         backup_id = "backup-20261101120100-2"
         capture_state = backup.restore_capture_path(self.config, restore_id)
         capture_state.mkdir(mode=0o700)
-        backup.restore_capture_write(
-            capture_state / "restore-capture-state.json", restore_id, holder, lease_uid,
-            "capture-failed", "capture", failureCode="operator-retry",
-        )
 
         def capture(config, action, path, operation_id, operation_holder, operation_uid, confirmation):
             self.assertEqual(action, "restore-capture")
@@ -225,6 +221,35 @@ raise SystemExit(0)
 
         timer_check.assert_not_called()
         self.assertNotEqual(result["restoreBackupId"], result["backupId"])
+        self.assertEqual((result["status"], result["phase"]), ("complete", "maintenance"))
+
+    def test_wrong_lease_uid_does_not_poison_initial_capture_retry(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        state_path = capture_state / "restore-capture-state.json"
+
+        with patch.object(backup, "run_capture_command",
+                          side_effect=backup.BackupError("capture-failure", "lease-identity-mismatch")):
+            with self.assertRaisesRegex(backup.BackupError, "lease-identity-mismatch"):
+                backup.run_restore_capture_action(
+                    self.config, "restore-capture", restore_id, holder, "wrong-lease-uid",
+                    f"CAPTURE-RESTORE-{restore_id}-{holder}",
+                )
+        self.assertFalse(state_path.exists())
+
+        def capture(config, action, path, operation_id, operation_holder, operation_uid, confirmation):
+            backup.restore_capture_write(
+                Path(path) / "restore-capture-state.json", restore_id, holder, lease_uid,
+                "complete", "maintenance", backupId="backup-20261101120100-2",
+            )
+
+        with patch.object(backup, "run_capture_command", side_effect=capture):
+            result = backup.run_restore_capture_action(
+                self.config, "restore-capture", restore_id, holder, lease_uid,
+                f"CAPTURE-RESTORE-{restore_id}-{holder}",
+            )
         self.assertEqual((result["status"], result["phase"]), ("complete", "maintenance"))
 
     def test_restore_upload_retry_resumes_interrupted_state_without_recapture(self):
@@ -454,6 +479,42 @@ raise SystemExit(0)
         self.assertEqual(attempt["backupId"], backup_id)
         self.assertEqual(attempt["restoreBackupId"], restore_id)
         self.assertEqual(attempt["code"], "maintenance-resume-interrupted")
+
+    def test_restore_maintenance_resume_accepts_upload_pending_after_remote_readback(self):
+        restore_id = "backup-20261101120000-1"
+        holder = "restore-holder"
+        lease_uid = "lease-uid-1"
+        capture_state = backup.restore_capture_path(self.config, restore_id)
+        capture_state.mkdir(mode=0o700)
+        state_path = capture_state / "restore-capture-state.json"
+        backup.restore_capture_write(
+            state_path, restore_id, holder, lease_uid,
+            "upload-pending", "upload-pending", backupId="backup-20261101120100-2",
+        )
+        snapshot_path = snapshot(
+            capture_state / "snapshot", backup_id="backup-20261101120100-2",
+        )
+        backup.write_status(self.config, "verified-upload", "remote-readback", "backup-20261101120100-2")
+
+        def resume(config, action, path, operation_id, operation_holder, operation_uid, confirmation):
+            backup.restore_capture_write(
+                state_path, restore_id, holder, lease_uid,
+                "complete", "maintenance", backupId="backup-20261101120100-2",
+            )
+
+        with patch.object(backup, "subprocess") as subprocess_mock, \
+                patch.object(backup, "run_capture_command", side_effect=resume):
+            subprocess_mock.run.side_effect = [
+                SimpleNamespace(returncode=1, stdout="disabled\n"),
+                SimpleNamespace(returncode=3, stdout="inactive\n"),
+            ]
+            result = backup.run_restore_capture_action(
+                self.config, "restore-maintenance-resume", restore_id, holder, lease_uid,
+                f"RESUME-MAINTENANCE-RESTORE-{restore_id}-{holder}",
+            )
+
+        self.assertEqual((result["status"], result["phase"]), ("complete", "maintenance"))
+        self.assertTrue(snapshot_path.is_dir())
 
     def test_restore_upload_does_not_prune_previous_release_backup(self):
         snapshot_path = self.make_snapshot()

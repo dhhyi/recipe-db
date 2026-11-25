@@ -759,7 +759,6 @@ class ContractTests(unittest.TestCase):
             lease_uid = "lease-uid-1"
             capture_state = state_root / "restore-captures" / restore_id
             capture_state.mkdir(parents=True)
-            (capture_state / "restore-capture-state.json").write_text("{}")
             (config / "backup-values.yaml").write_text("fixture")
             (config / "backup.json").write_text("{}")
             (config / "backup-release-ref").write_text("fixture-release")
@@ -784,6 +783,11 @@ class ContractTests(unittest.TestCase):
                 ("restore-maintenance-resume", "restore-backup-maintenance-resume",
                  f"RESUME-MAINTENANCE-RESTORE-{restore_id}-{holder}"),
             ):
+                state_file = capture_state / "restore-capture-state.json"
+                if action == "restore-capture":
+                    state_file.unlink(missing_ok=True)
+                else:
+                    state_file.write_text("{}")
                 subprocess.run(
                     ["bash", "-s", action, str(capture_state), restore_id, holder,
                      lease_uid, confirmation],

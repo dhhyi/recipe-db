@@ -1339,16 +1339,14 @@ def run_restore_capture_action(config, action, restore_id, holder, lease_uid, co
     elif action != "restore-capture":
         raise BackupError("restart-failure", "restore-capture-state-unavailable")
     else:
-        state = restore_capture_write(
-            state_path, restore_id, holder, lease_uid, "in-progress", "capture",
-        )
+        state = None
     if action == "restore-maintenance-resume":
         expected_states = {
             ("upload-verified", "maintenance-pending"),
             ("maintenance-failed", "maintenance-pending"),
             ("in-progress", "maintenance-pending"),
             ("in-progress", "upload-pending"),
-            ("complete", "maintenance"),
+            ("upload-pending", "upload-pending"),
             ("complete", "maintenance"),
         }
     elif action == "restore-upload-retry":
@@ -1364,7 +1362,7 @@ def run_restore_capture_action(config, action, restore_id, holder, lease_uid, co
             ("failed", "capture"),
             ("capture-failed", "capture"),
         }
-    if (state.get("status"), state.get("phase")) not in expected_states:
+    if state is not None and (state.get("status"), state.get("phase")) not in expected_states:
         raise BackupError("restart-failure", "restore-capture-phase-mismatch")
     try:
         if action != "restore-capture":

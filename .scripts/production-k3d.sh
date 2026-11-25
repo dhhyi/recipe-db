@@ -147,21 +147,11 @@ cleanup() {
   trap - EXIT
   restore_cleanup "$result"
   recovery_cleanup "$result"
-  if [[ $result -ne 0 && $command == restore-backup-* &&
-    $restore_backup_started == true &&
-    -n ${restore_backup_state_path:-} && -f $restore_backup_state_path ]]; then
-    if [[ $command == restore-backup-maintenance-resume &&
-      $restore_backup_current_graphql_mode == maintenance ]]; then
-      backup_reblock_graphql \
-        || printf 'production: could not reblock GraphQL after restore-owned verification failure\n' >&2
-    fi
-    restore_backup_record_failure \
-      || printf 'production: restore-owned capture failure state could not be recorded; preserve the Lease and inspect capture state\n' >&2
-  fi
   if ! recovery_command_release; then
     printf 'production: recovery command claim could not be released; inspect it after its 45-second heartbeat expires\n' >&2
     result=1
   fi
+  restore_backup_record_cleanup_failure "$result"
   if ! release_recovery_reopen_cleanup "$result"; then
     result=1
   fi

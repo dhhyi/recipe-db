@@ -104,11 +104,22 @@ case "$action" in
     ;;
   restore-capture | restore-upload-retry | restore-maintenance-resume)
     [[ $path == "/var/lib/recipe-db-backup/restore-captures/$restore_id" &&
-      -d $path && ! -L $path &&
-      -f $path/restore-capture-state.json && ! -L $path/restore-capture-state.json ]] || {
+      -d $path && ! -L $path ]] || {
       printf 'restore-owned capture requires its exact retained private state directory\n' >&2
       exit 1
     }
+    if [[ $action == restore-capture ]]; then
+      [[ ! -e $path/restore-capture-state.json && ! -L $path/restore-capture-state.json ||
+        -f $path/restore-capture-state.json && ! -L $path/restore-capture-state.json ]] || {
+        printf 'restore-owned capture progress state is invalid\n' >&2
+        exit 1
+      }
+    else
+      [[ -f $path/restore-capture-state.json && ! -L $path/restore-capture-state.json ]] || {
+        printf 'restore-owned capture progress state is missing or invalid\n' >&2
+        exit 1
+      }
+    fi
     case "$action" in
       restore-capture) lifecycle_action=restore-backup-capture ;;
       restore-upload-retry) lifecycle_action=restore-backup-upload-retry ;;
