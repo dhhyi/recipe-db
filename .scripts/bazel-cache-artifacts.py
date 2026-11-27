@@ -1063,8 +1063,6 @@ def resolve_pr_association(base, token, repository, head_sha, requested_pr, repo
         )
     if not eligible:
         raise Invalid(f"commit-to-PR association is missing for PR #{requested_pr}")
-    if len(eligible) != 1:
-        raise Invalid(f"commit-to-PR association is ambiguous for PR #{requested_pr}")
     if requested_pr not in eligible:
         raise Invalid(f"commit-to-PR association identifies another PR, not PR #{requested_pr}")
     return eligible[requested_pr]

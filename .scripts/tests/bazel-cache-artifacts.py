@@ -1930,8 +1930,8 @@ class CacheArtifactTests(unittest.TestCase):
         ]}]
         rejected_cases = (
             ("wrong final head", "final PR head", "f" * 40, [pull], accepted_upload, None),
-            ("ambiguous PR association", "ambiguous", head,
-             [pull, {**pull, "number": 18}], accepted_upload, None),
+            ("wrong PR association", "identifies another PR", head,
+             [{**pull, "number": 18}, {**pull, "number": 19}], accepted_upload, None),
             ("missing upload job", "did not complete", head, [pull], [], None),
             ("failed upload step", "did not complete", head, [pull], [{
                 "name": CACHE.JOB, "steps": [
@@ -2003,7 +2003,7 @@ class CacheArtifactTests(unittest.TestCase):
 
         def fake_json(url, token):
             api_calls.append(url)
-            return [pull] if url == association else None
+            return [{**pull, "number": 18}, pull] if url == association else None
 
         with patch.object(CACHE, "request_file", side_effect=copy_artifact), \
                 patch.object(CACHE, "producer_attempt", return_value=detail), \
@@ -2113,12 +2113,12 @@ class CacheArtifactTests(unittest.TestCase):
             "https://api.github.com/repos/owner/repo/actions/runs/4/artifacts"
         ])
 
-    def test_commit_to_pr_association_authenticates_historical_head_uniquely(self):
+    def test_commit_to_pr_association_matches_requested_pr_for_shared_historical_head(self):
         head = "a" * 40
         advanced_pull = {
             "number": 17,
             "head": {"sha": "b" * 40},
-            "base": {"sha": "c" * 40, "repo": {"full_name": "owner/repo"}},
+            "base": {"sha": "c" * 40, "repo": {"full_name": "owner/repo", "id": 9}},
         }
         with patch.object(CACHE, "request_json", return_value=[advanced_pull]):
             self.assertEqual(
@@ -2128,15 +2128,31 @@ class CacheArtifactTests(unittest.TestCase):
                 ),
                 advanced_pull,
             )
-        with patch.object(CACHE, "request_json", return_value=[
-            advanced_pull,
-            {**advanced_pull, "number": 18},
-        ]):
-            with self.assertRaisesRegex(CACHE.Invalid, "ambiguous"):
-                CACHE.resolve_pr_association(
-                    "https://api.github.com/repos/owner/repo", "token", "owner/repo",
-                    head, 17,
+        other_pull = {**advanced_pull, "number": 18}
+        for pulls in ([advanced_pull, other_pull], [other_pull, advanced_pull]):
+            with self.subTest(pulls=pulls), \
+                    patch.object(CACHE, "request_json", return_value=pulls):
+                self.assertEqual(
+                    CACHE.resolve_pr_association(
+                        "https://api.github.com/repos/owner/repo", "token", "owner/repo",
+                        head, 17, 9,
+                    ),
+                    advanced_pull,
                 )
+        for pulls, error in (
+            ([other_pull, {**other_pull, "number": 19}], "identifies another PR"),
+            ([{**advanced_pull, "base": {"repo": {"full_name": "other/repo", "id": 9}}}],
+             "missing"),
+            ([{**advanced_pull, "base": {"repo": {"full_name": "owner/repo", "id": 10}}}],
+             "missing"),
+        ):
+            with self.subTest(pulls=pulls), \
+                    patch.object(CACHE, "request_json", return_value=pulls):
+                with self.assertRaisesRegex(CACHE.Invalid, error):
+                    CACHE.resolve_pr_association(
+                        "https://api.github.com/repos/owner/repo", "token", "owner/repo",
+                        head, 17, 9,
+                    )
         with patch.object(CACHE, "request_json", return_value=[]):
             with self.assertRaisesRegex(CACHE.Invalid, "missing"):
                 CACHE.resolve_pr_association(
