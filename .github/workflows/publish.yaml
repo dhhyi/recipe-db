@@ -165,6 +165,8 @@ jobs:
             suite_id=${suite_id//[^a-zA-Z0-9_-]/_}
             manifest_targets="${manifest_targets}//:test_scripts_suite_${suite_id}"$'\n'
           done < <(yq -r '[.[] .tests[]] | .[]' .scripts/tests/groups.yaml)
+          selected=$(printf '%s\n' "$selected" | sed '/^$/d')
+          manifest_targets=$(printf '%s\n' "$manifest_targets" | sed '/^$/d')
           test_count=$(printf '%s\n' "$selected" | sed '/^$/d' | wc -l)
           manifest_count=$(printf '%s\n' "$manifest_targets" | sed '/^$/d' | wc -l)
           if [[ "$test_count" -eq 0 || "$test_count" -ne "$manifest_count" ]]; then
