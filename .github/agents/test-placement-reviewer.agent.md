@@ -17,6 +17,7 @@ disable-model-invocation: false
 
 - Review added, modified, or relocated tests and relevant existing coverage. Identify the behavioral contract each test protects; exclude unrelated work.
 - Follow `AGENTS.md`, applicable project instructions, and the [testing guide](../../docs/testing.md). Distinguish accepted rules from draft guidance; do not treat unresolved choices as requirements.
+- For Bats test changes, review each affected suite as a whole against the [script testing guidance](../../docs/testing.md#script-testing), including the supplied timing evidence. Flag over-limit suites and missing or insufficient evidence; recommend focused improvements or splits that preserve coverage.
 - Read supplied requirements and approved exceptions. Use GitHub MCP or GitHub CLI (`gh`) when issue context is needed; do not mutate GitHub state. Report missing context and qualify affected recommendations rather than inventing requirements.
 - Evaluate placement from the lowest reliable boundary upward, using the guide's applicable categories rather than assuming a fixed number of buckets. Ask whether a lower boundary could faithfully protect the contract with simpler fixtures and lower evaluation cost.
 - Push back with recommendations, not demands. Do not prescribe unit tests that require extensive mocking, weaken regression protection, or merely move complexity elsewhere. Consider reliability, maintenance cost, and distinct integration risks; do not claim performance gains without evidence.

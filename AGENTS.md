@@ -95,6 +95,8 @@ For a single topic group, use `mise run test-scripts <group>` or `mise run --raw
 
 Project generator, format, and check commands invoked by Bazel must still run in their respective devcontainers.
 
+When adding, modifying, or relocating Bats tests, follow the [script testing guidance](docs/testing.md#script-testing) and request an independent review from [test-placement-reviewer](.github/agents/test-placement-reviewer.agent.md). Report the review as incomplete if the agent is unavailable.
+
 ## Standalone migrator tests
 
 Keep `mise run test-migrator-packaging` focused on the general migrator manifest, image, and release-packaging contract using its synthetic fixture. Each migrator must provide `migrators/<name>/test-migrator.sh` for its behavior and image tests. CI discovers and runs these scripts sequentially via `.scripts/run-migrator-tests.sh`, failing on the first failure or when a migrator lacks its test script; no migrators is a successful no-op. Do not add a per-migrator mise task.

@@ -42,6 +42,17 @@ release:
     - .scripts/tests/production-release.bats
     - .scripts/tests/production-upgrade-rehearsal.bats
     - .scripts/tests/prepare-cutover-backup.bats
+    - .scripts/tests/production-k3d-release-stage.bats
+    - .scripts/tests/production-k3d-release-jobs.bats
+    - .scripts/tests/production-k3d-release-start.bats
+    - .scripts/tests/production-k3d-migration-plan.bats
+    - .scripts/tests/production-k3d-migration-claims.bats
+    - .scripts/tests/production-k3d-migration-execution.bats
+    - .scripts/tests/production-k3d-migration-recovery.bats
+    - .scripts/tests/production-k3d-release-fallback.bats
+    - .scripts/tests/production-k3d-release-disposition.bats
+    - .scripts/tests/production-k3d-release-finalize.bats
+    - .scripts/tests/production-k3d-release-controller.bats
   suite_inputs:
     .scripts/tests/production-release-files.bats:
       - .scripts/production-release.py
@@ -97,6 +108,43 @@ release:
       - .scripts/tests/test_helper.bash
       - provisioning/files/backup-upload.py
       - deploy/local.yaml
+    .scripts/tests/production-k3d-release-stage.bats:
+      &production-k3d-backup-inputs
+      - .scripts/production-k3d.sh
+      - .scripts/lib/release-data-cache.sh
+      - .scripts/tests/production-k3d-setup.bash
+      - .scripts/tests/production-k3d-backup-helpers.bash
+      - .scripts/lib/production-config.sh
+      - .scripts/lib/cluster-operation-lock.sh
+      - .scripts/lib/production-storage.sh
+      - .scripts/lib/production-restore.sh
+      - .scripts/lib/production-restore-backup.sh
+      - .scripts/lib/production-recovery.sh
+      - .scripts/validate-production-image-index.sh
+      - .scripts/validate-production-release.sh
+      - .scripts/validate-backup-snapshot.py
+      - .scripts/validate-backup-package.py
+      - provisioning/files/backup-upload.py
+      - provisioning/files/release-files.py
+      - .scripts/production-release.py
+      - .scripts/retrieve-verified-backup.py
+      - .scripts/templates/**
+      - .scripts/lib/project-metadata.sh
+      - ":(glob)*/.project.yaml"
+      - deploy/**
+      - browse-maintenance/unavailable.html
+      - design/nginx.conf
+      - package.json
+    .scripts/tests/production-k3d-release-jobs.bats: *production-k3d-backup-inputs
+    .scripts/tests/production-k3d-release-start.bats: *production-k3d-backup-inputs
+    .scripts/tests/production-k3d-migration-plan.bats: *production-k3d-backup-inputs
+    .scripts/tests/production-k3d-migration-claims.bats: *production-k3d-backup-inputs
+    .scripts/tests/production-k3d-migration-execution.bats: *production-k3d-backup-inputs
+    .scripts/tests/production-k3d-migration-recovery.bats: *production-k3d-backup-inputs
+    .scripts/tests/production-k3d-release-fallback.bats: *production-k3d-backup-inputs
+    .scripts/tests/production-k3d-release-disposition.bats: *production-k3d-backup-inputs
+    .scripts/tests/production-k3d-release-finalize.bats: *production-k3d-backup-inputs
+    .scripts/tests/production-k3d-release-controller.bats: *production-k3d-backup-inputs
 deploy:
   tests:
     - .scripts/tests/kubernetes-templates.bats
@@ -114,7 +162,7 @@ deploy:
       - deploy/**
       - browse-maintenance/unavailable.html
       - design/nginx.conf
-    .scripts/tests/production-k3d-deploy.bats: &production-k3d-inputs
+    .scripts/tests/production-k3d-deploy.bats:
       - .scripts/production-k3d.sh
       - .scripts/lib/release-data-cache.sh
       - .scripts/tests/production-k3d-setup.bash
@@ -170,6 +218,10 @@ backup:
     - .scripts/tests/backup-recovery-k3d.bats
     - .scripts/tests/backup-snapshot.bats
     - .scripts/tests/production-k3d-backup.bats
+    - .scripts/tests/production-k3d-backup-maintenance.bats
+    - .scripts/tests/production-k3d-backup-capture.bats
+    - .scripts/tests/production-k3d-backup-recovery.bats
+    - .scripts/tests/production-k3d-backup-sources.bats
   suite_inputs:
     .scripts/tests/retrieve-verified-backup.bats:
       - .scripts/retrieve-verified-backup.py
@@ -187,13 +239,20 @@ backup:
       - deploy/local.yaml
     .scripts/tests/backup-snapshot.bats:
       - .scripts/validate-backup-snapshot.py
-    .scripts/tests/production-k3d-backup.bats: *production-k3d-inputs
+    .scripts/tests/production-k3d-backup.bats: *production-k3d-backup-inputs
+    .scripts/tests/production-k3d-backup-maintenance.bats: *production-k3d-backup-inputs
+    .scripts/tests/production-k3d-backup-capture.bats: *production-k3d-backup-inputs
+    .scripts/tests/production-k3d-backup-recovery.bats: *production-k3d-backup-inputs
+    .scripts/tests/production-k3d-backup-sources.bats: *production-k3d-backup-inputs
 restore:
   tests:
     - .scripts/tests/production-k3d-restore.bats
     - .scripts/tests/production-k3d-restore-capture.bats
     - .scripts/tests/production-k3d-restore-safety.bats
     - .scripts/tests/production-k3d-restore-status.bats
+    - .scripts/tests/production-k3d-restore-reopen.bats
+    - .scripts/tests/production-k3d-restore-abandon.bats
+    - .scripts/tests/production-k3d-restore-recovery.bats
     - .scripts/tests/production-restore.bats
     - .scripts/tests/production-recovery.bats
   suite_inputs:
@@ -228,6 +287,9 @@ restore:
     .scripts/tests/production-k3d-restore-capture.bats: *production-k3d-restore-inputs
     .scripts/tests/production-k3d-restore-safety.bats: *production-k3d-restore-inputs
     .scripts/tests/production-k3d-restore-status.bats: *production-k3d-restore-inputs
+    .scripts/tests/production-k3d-restore-reopen.bats: *production-k3d-restore-inputs
+    .scripts/tests/production-k3d-restore-abandon.bats: *production-k3d-restore-inputs
+    .scripts/tests/production-k3d-restore-recovery.bats: *production-k3d-restore-inputs
     .scripts/tests/production-restore.bats:
       - .scripts/lib/production-restore.sh
       - .scripts/lib/production-config.sh
@@ -381,8 +443,16 @@ devcontainer:
 formatting:
   tests:
     - .scripts/tests/format-check.bats
+    - .scripts/tests/format-cache-inputs.bats
+    - .scripts/tests/format-cache-tasks.bats
+    - .scripts/tests/format-cache-results.bats
   suite_inputs:
     .scripts/tests/format-check.bats:
+      - .scripts/format-bazel.sh
+      - .scripts/format-check.sh
+      - .scripts/tests/format-cache-setup.bash
+    .scripts/tests/format-cache-inputs.bats: &format-cache-inputs
+      - .scripts/tests/format-cache-setup.bash
       - .scripts/format-bazel.sh
       - .scripts/format-check.sh
       - .scripts/format-files.sh
@@ -397,8 +467,11 @@ formatting:
       - .mise/config.toml
       - mise.toml
       - ":(glob)*/.project.yaml"
+    .scripts/tests/format-cache-tasks.bats: *format-cache-inputs
+    .scripts/tests/format-cache-results.bats: *format-cache-inputs
 tooling:
   tests:
+    - .scripts/tests/bazel-script-cache.bats
     - .scripts/tests/check-forbidden-files.bats
     - .scripts/tests/generate-bazel-build.bats
     - .scripts/tests/merge-graphql-schemas.bats
@@ -407,6 +480,7 @@ tooling:
     - .scripts/tests/sync-ignore-files.bats
     - .scripts/tests/sync-tailwind.bats
   suite_inputs:
+    .scripts/tests/bazel-script-cache.bats: *format-cache-inputs
     .scripts/tests/check-forbidden-files.bats:
       - .scripts/check-forbidden-files.sh
     .scripts/tests/generate-bazel-build.bats:

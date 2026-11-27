@@ -1,6 +1,6 @@
 # Testing guide
 
-This guide helps contributors and AI agents choose where behavior should be tested. Use it when adding tests or reviewing existing coverage. The current guidance covers frontend testing.
+This guide helps contributors and AI agents choose where behavior should be tested and keep script tests targeted. Use it when adding tests or reviewing existing coverage.
 
 Related reading: [Project checks, tests, and formatting](../CONTRIBUTING.md#project-checks-tests-and-formatting).
 
@@ -14,6 +14,7 @@ Related reading: [Project checks, tests, and formatting](../CONTRIBUTING.md#proj
   - [Avoiding duplicate coverage](#avoiding-duplicate-coverage)
   - [Checking and updating mocks](#checking-and-updating-mocks)
   - [Revisiting existing tests](#revisiting-existing-tests)
+- [Script testing](#script-testing)
 
 ## Frontend testing
 
@@ -160,3 +161,15 @@ Revisit a test's placement when the behavior or its owner changes. For example:
 Apply the same placement questions as for a new test. Its current location is not a reason to keep it there.
 
 Before moving or removing coverage, identify the behavior and boundaries it protects. A test may be removed without replacement if its value does not justify its maintenance cost and the remaining risk is acceptable. Otherwise, confirm that existing coverage or a tested replacement still protects those behaviors and boundaries. Keep higher-level coverage when it verifies a distinct integration contract, even if the underlying logic now has unit tests.
+
+## Script testing
+
+Each Bats suite must complete in at most three minutes so it remains useful for targeted testing. When adding, changing, or relocating script tests, review each affected suite as a whole; split or improve a suite that exceeds the limit without losing its behavioral coverage.
+
+Measure each affected suite's wall-clock time with a complete, uncached run using the normal configuration, for example:
+
+```sh
+/usr/bin/time -p mise run --raw test-scripts .scripts/tests/production-k3d-backup.bats
+```
+
+Use the reported `real` time, not a cached Bazel result or a subset of tests. Record the command, elapsed time, result, and skipped or opt-in tests in the validation evidence. A failed run or missing timing does not establish compliance. Report over-limit or unverified suites as unresolved; do not claim the limit is met.

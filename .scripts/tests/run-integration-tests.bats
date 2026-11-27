@@ -500,8 +500,9 @@ EOF
 }
 
 @test "unavailable HEAD probes fail before starting their test job" {
+  # shellcheck disable=SC2016
   run env HEAD_RESPONSE=503 bash -c \
-    'sleep() { SECONDS=40; }; source .scripts/run-integration-tests.sh --development images-test'
+    'sleep() { SECONDS=$((SECONDS + 40)); }; source .scripts/run-integration-tests.sh --development images-test'
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"Timed out waiting for images API at http://127.0.0.1:3000/images (expected HTTP 204, last got 503)."* ]]
