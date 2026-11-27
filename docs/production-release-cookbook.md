@@ -8,7 +8,7 @@ Before starting step 1, finish testing the intended candidate website on demo da
 
 The cookbook includes an isolated production-backup upgrade rehearsal, but it does not authorize a release or replace the independent production guards below. A passing result applies only to its exact backup and candidate; do not deploy the candidate until the rehearsal and all later step conditions are satisfied.
 
-For the first cutover only, [#447: Prepare a cutover backup locally](https://github.com/dhhyi/recipe-db/issues/447) is a separate workstation-only preparation after Pi writes have been blocked and the final previous-release backup has been verified. It does not enter maintenance, retrieve data from, or otherwise operate the Pi; Pi-side preparation and erasure remain separately authorized work.
+For an infrastructure cutover, use the [production infrastructure cutover cookbook](production-infrastructure-cutover-cookbook.md) instead of this ordinary release sequence. It links to the workstation-only first-cutover preparation below and keeps Pi erasure and restore behind separate operator approvals.
 
 For current capabilities and limits, see the [release capability overview](production-kubernetes.md#release-capability-inventory). The agreed sequence and remaining work are tracked in [#143: Define a release process with better gates](https://github.com/dhhyi/recipe-db/issues/143).
 
@@ -30,7 +30,7 @@ For current capabilities and limits, see the [release capability overview](produ
 
 ## First-cutover local preparation
 
-Use this once, after the separately approved Pi operation has blocked writes and verified the final backup of the previous release. Retrieve the final backup and receipt using the existing verified-backup procedure in step 4; the receipt must still report `verified-upload` or `verified-unchanged`. For `verified-unchanged`, retrieval verifies and packages the exact retained snapshot locally; it does not substitute the older remote baseline package. Provenance records the retained operation and the verified baseline identities. Keep the original backup and receipt private and unchanged.
+Use this once as directed by the [production infrastructure cutover cookbook](production-infrastructure-cutover-cookbook.md), after the separately approved Pi operation has blocked writes and verified the final backup of the previous release. Retrieve the final backup and receipt using the existing verified-backup procedure in step 4; the receipt must still report `verified-upload` or `verified-unchanged`. For `verified-unchanged`, retrieval verifies and packages the exact retained snapshot locally; it does not substitute the older remote baseline package. Provenance records the retained operation and the verified baseline identities. Keep the original backup and receipt private and unchanged.
 
 The receipt carries the Pi's configured `maxStagingBytes`. Preparation applies that limit to package validation and packaging, uses half of it as the local snapshot-capture limit, and still checks measured free space. The resulting `provenance.json` preserves the value; pass it as the optional final `MAX_STAGING_BYTES` argument when restoring the prepared package later.
 
