@@ -457,6 +457,88 @@ EOF
   [ "$(cat "$FIXTURE_ROOT/read-phase")" = restore-backup-capture-failed ]
 }
 
+@test "pending restore backup reads use web for public images and still reject an empty thumbnail" {
+  export MOCK_RESTORE_IMAGE=true
+  restore_fixture
+  sed -n '/^restore_backup_verify_pending_reads() {/,/^}/p' \
+    .scripts/production-k3d.sh > pending-read-function.sh
+  cat > .scripts/production-k3d.sh << 'EOF'
+#!/usr/bin/env bash
+cat "$FIXTURE_ROOT/pending-status.json"
+EOF
+  jq -n --arg id "$RESTORE_ID" '{
+    savedProgress:{backupId:$id,status:"awaiting-signoff",phase:"pending-signoff",
+      import:{status:"complete"},readChecks:{status:"passed"}},
+    lease:{ownedByRestore:true,phase:"restore-backup-capture-failed"},
+    observed:{graphql:{mode:"maintenance",maintenanceQuery:true},
+      publicRoutes:{normalRoutesObserved:true}},
+    savedStateMatchesCluster:true,writesMayHaveOpened:false
+  }' > pending-status.json
+  mv bin/kubectl bin/kubectl-base
+  cat > bin/kubectl << 'EOF'
+#!/usr/bin/env bash
+if [[ $* == *"port-forward "*"deployment/traefik "* ]]; then
+  printf '%s\n' "${*: -1}" > "$MOCK_LOG.traefik-target"
+fi
+exec "$FIXTURE_ROOT/bin/kubectl-base" "$@"
+EOF
+  mv bin/curl bin/curl-base
+  cat > bin/curl << 'EOF'
+#!/usr/bin/env bash
+if [[ $* == *"/public/"* && $(cat "$MOCK_LOG.traefik-target") != :8000 ]]; then
+  printf 'curl: (22) The requested URL returned error: 404\n' >&2
+  exit 22
+fi
+exec "$FIXTURE_ROOT/bin/curl-base" "$@"
+EOF
+  chmod +x bin/kubectl bin/curl
+  cat > pending-reads.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source .scripts/lib/production-restore.sh
+source pending-read-function.sh
+root=$FIXTURE_ROOT
+work="$FIXTURE_ROOT/pending-read-work"
+mkdir -p "$work"
+touch "$work/kubeconfig"
+yq -o=json "$VALUES" > "$work/config.json"
+jq -n '{data:{"restore-state.json":"{}"}}' > "$work/restore-backup-configmap.json"
+context=$(jq -r .context "$work/config.json")
+namespace=$(jq -r .namespace "$work/config.json")
+timeout=8
+restore_backup_restore_id=$RESTORE_ID
+trap 'for pid in "${restore_forward_pid:-}" "${restore_browse_pid:-}"; do
+  if [[ -n $pid ]]; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  fi
+done' EXIT
+restore_backup_verify_pending_reads "$VALUES" restore-backup-capture-failed "$work/status.json"
+EOF
+
+  run bash pending-reads.sh
+  [ "$status" -eq 0 ] || {
+    printf '%s\n' "$output"
+    return 1
+  }
+  grep -Fq '/public/full.bin' "$MOCK_LOG"
+  grep -Fq '/public/thumb.bin' "$MOCK_LOG"
+  [ ! -e "$MOCK_LOG.restore-mutation-attempt" ]
+
+  : > "$FIXTURE_ROOT/tar-data/images/public/thumb.bin"
+  run bash pending-reads.sh
+  [ "$status" -ne 0 ]
+  [ ! -s "$FIXTURE_ROOT/pending-read-work/restore-image.bin" ]
+  [ ! -e "$MOCK_LOG.traefik-forward-overlap" ]
+  local pid name
+  for name in traefik browse; do
+    while IFS= read -r pid; do
+      run kill -0 "$pid" 2> /dev/null
+      [ "$status" -ne 0 ]
+    done < "$MOCK_LOG.forward-pids-$name"
+  done
+}
+
 @test "restore-owned completion records read evidence before the final Lease transition" {
   cp "$BATS_TEST_DIRNAME/../lib/production-restore-backup.sh" .scripts/lib/
   cat > completion-order.sh << 'EOF'
