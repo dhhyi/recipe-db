@@ -134,6 +134,51 @@ EOF
   grep -Fx '    tools = ["mise.toml", ".mise/config.toml"],' lint-rule
 }
 
+@test "script tests include explicitly declared ignored generated files and reject missing ones" {
+  mkdir -p example/.devcontainer
+  printf '%s\n' '.devcontainer/' > example/.gitignore
+  printf '%s\n' '{}' > example/.devcontainer/devcontainer.json
+  yq -i '.compose.suite_inputs[".scripts/tests/example.bats"] += ["example/.devcontainer/devcontainer.json"]' .scripts/tests/groups.yaml
+  run git check-ignore example/.devcontainer/devcontainer.json
+  [ "$status" -eq 0 ]
+
+  run bash .scripts/generate-bazel-build.sh
+  [ "$status" -eq 0 ]
+  sed -n '/name = "test_scripts_suite_example"/,/^)/p' BUILD.bazel > test-rule
+  grep -Fx '        "example/.devcontainer/devcontainer.json",' test-rule
+
+  cp BUILD.bazel generated-build
+  rm example/.devcontainer/devcontainer.json
+  run --separate-stderr bash .scripts/generate-bazel-build.sh
+  [ "$status" -eq 1 ]
+  [ "$stderr" = "Script test suite .scripts/tests/example.bats input pattern matches no files: example/.devcontainer/devcontainer.json" ]
+  cmp generated-build BUILD.bazel
+}
+
+@test "script runner dereferences runfiles, preserves Bats status and cleans its workspace" {
+  mkdir -p runfiles/_main/.scripts/tests bin temporary
+  ln -s "$FIXTURE_ROOT/.scripts/tests/example.bats" runfiles/_main/.scripts/tests/example.bats
+  cat > bin/bats << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == --print-output-on-failure && "$2" == .scripts/tests/example.bats ]]
+[[ -f "$2" && ! -L "$2" ]]
+pwd -P > "$WORKSPACE_REPORT"
+exit "$BATS_STATUS"
+EOF
+  chmod +x bin/bats
+
+  for bats_status in 0 23; do
+    run env PATH="$FIXTURE_ROOT/bin:$PATH" TMPDIR="$FIXTURE_ROOT/temporary" \
+      TEST_SRCDIR="$FIXTURE_ROOT/runfiles" TEST_WORKSPACE=_main \
+      WORKSPACE_REPORT="$FIXTURE_ROOT/workspace-report" BATS_STATUS="$bats_status" \
+      bash .scripts/run-script-test.sh .scripts/tests/example.bats
+    [ "$status" -eq "$bats_status" ]
+    [[ "$(cat workspace-report)" == "$FIXTURE_ROOT/temporary/"* ]]
+    [ ! -e "$(cat workspace-report)" ]
+  done
+}
+
 @test "all rules allow disk caching while disabling sandboxing and remote execution" {
   printf '\ngenerate:\n  - echo generated\n' >> example/.project.yaml
 

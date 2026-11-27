@@ -451,18 +451,14 @@ devcontainer:
       - .scripts/tests/provisioning-config-paths.bats
       - .scripts/tests/test_helper.bash
       - .scripts/run-in-devcontainer.sh
+      - provisioning/.devcontainer/devcontainer.json
+      - provisioning/.devcontainer/Dockerfile
       - provisioning/.project.yaml
       - provisioning/ansible.cfg
       - provisioning/inventory.example.yml
       - provisioning/resolve-backup-inputs.yml
       - provisioning/filter_plugins/**
       - provisioning/tests/**
-      - provisioning/.project.yaml
-      - provisioning/ansible.cfg
-      - provisioning/filter_plugins/operator_paths.py
-      - provisioning/inventory.example.yml
-      - provisioning/resolve-backup-inputs.yml
-      - provisioning/tests/operator-path-smoke.yml
     .scripts/tests/run-in-devcontainer.bats:
       - .scripts/run-in-devcontainer.sh
       - .scripts/format-files.sh

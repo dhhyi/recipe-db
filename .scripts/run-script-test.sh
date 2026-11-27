@@ -13,7 +13,8 @@ if [[ -n ${TEST_SRCDIR:-} && -n ${TEST_WORKSPACE:-} ]]; then
     trap 'rm -rf -- "$temporary"' EXIT
     cp -RL "$workspace"/. "$temporary"/
     cd -- "$temporary"
-    exec bats --print-output-on-failure "$1"
+    bats --print-output-on-failure "$1"
+    exit 0
   fi
 fi
 

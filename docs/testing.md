@@ -164,6 +164,8 @@ Before moving or removing coverage, identify the behavior and boundaries it prot
 
 ## Script testing
 
+Declare ignored generated files needed by a suite as exact paths in [the script input manifest](../.scripts/tests/groups.yaml). They must exist before BUILD generation; glob patterns only discover non-ignored files.
+
 Each Bats suite must complete in at most three minutes so it remains useful for targeted testing. When adding, changing, or relocating script tests, review each affected suite as a whole; split or improve a suite that exceeds the limit without losing its behavioral coverage.
 
 Measure each affected suite's wall-clock time with a complete, uncached run using the normal configuration, for example:

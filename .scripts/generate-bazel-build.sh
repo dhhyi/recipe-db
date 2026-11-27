@@ -261,6 +261,10 @@ for group in $(jq -r 'keys[]' <<< "$group_specs"); do
     suite_files["$test_file"]=1
     while IFS= read -r pattern; do
       matched=false
+      if [[ -f "$pattern" ]]; then
+        suite_files["$pattern"]=1
+        matched=true
+      fi
       while IFS= read -r -d '' file; do
         [[ -f "$file" ]] || continue
         suite_files["$file"]=1
