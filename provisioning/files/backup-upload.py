@@ -625,18 +625,66 @@ def capture_command(config):
     return capture
 
 
+def write_capture_diagnostic(config, diagnostic):
+    try:
+        atomic_json(Path(config["stateDirectory"]) / "capture-diagnostics" / "latest.json",
+                    diagnostic)
+    except OSError as error:
+        raise BackupError("capture-failure", "capture-diagnostic-write-failed") from error
+
+
+def execute_capture_command(config, *arguments):
+    capture = capture_command(config)
+    try:
+        directory = ensure_private_dir(absolute_path(
+            Path(config["stateDirectory"]) / "capture-diagnostics"))
+        output = tempfile.NamedTemporaryFile(
+            prefix="capture-", suffix=".log", dir=directory, delete=False)
+    except (OSError, ValueError) as error:
+        raise BackupError("capture-failure", "capture-diagnostic-unavailable") from error
+    diagnostic = {
+        "action": str(arguments[0]) if len(arguments) > 1 else "nightly",
+        "log": output.name,
+        "startedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "completedAt": None,
+        "exitCode": None,
+        "timedOut": False,
+        "failureCode": None,
+    }
+    with output:
+        write_capture_diagnostic(config, diagnostic)
+        process = None
+        try:
+            process = subprocess.Popen(
+                [str(capture), *map(str, arguments)],
+                stdin=subprocess.DEVNULL, stdout=output, stderr=output,
+                env=capture_environment(config), start_new_session=True,
+            )
+            try:
+                result = process.wait(timeout=config["captureTimeoutSeconds"])
+            except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
+                diagnostic["timedOut"] = isinstance(error, subprocess.TimeoutExpired)
+                diagnostic["failureCode"] = "capture-interrupted"
+                terminate_capture_process_group(process)
+                raise
+            if result:
+                diagnostic["failureCode"] = "capture-command-failed"
+            return result
+        except OSError:
+            diagnostic["failureCode"] = "capture-command-unavailable"
+            raise
+        finally:
+            if process is not None:
+                diagnostic["exitCode"] = process.returncode
+            diagnostic["completedAt"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            write_capture_diagnostic(config, diagnostic)
+
+
 def run_capture_command(config, *arguments):
     try:
-        process = subprocess.Popen(
-            [str(capture_command(config)), *map(str, arguments)],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            env=capture_environment(config), start_new_session=True,
-        )
-        try:
-            result = process.wait(timeout=config["captureTimeoutSeconds"])
-        except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
-            terminate_capture_process_group(process)
-            raise BackupError("restart-failure", "capture-interrupted") from error
+        result = execute_capture_command(config, *arguments)
+    except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
+        raise BackupError("restart-failure", "capture-interrupted") from error
     except OSError as error:
         raise BackupError("capture-failure", "capture-command-unavailable") from error
     if result:
@@ -1599,7 +1647,7 @@ def run_nightly(config):
             raise BackupError("restart-failure", "recovery-required")
         clear_stale_staging(config["stagingDirectory"])
         try:
-            capture = capture_command(config)
+            capture_command(config)
         except BackupError as error:
             write_status(config, error.status, error.code)
             raise
@@ -1624,16 +1672,16 @@ def run_nightly(config):
         snapshots = ensure_private_dir(state / "staging")
         snapshot = snapshots / f"capture-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{os.getpid()}"
         try:
-            process = subprocess.Popen(
-                [str(capture), str(snapshot)], stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                env=capture_environment(config),
-                start_new_session=True,
-            )
             try:
-                result = process.wait(timeout=config["captureTimeoutSeconds"])
-            except (subprocess.TimeoutExpired, KeyboardInterrupt):
-                terminate_capture_process_group(process)
+                result = execute_capture_command(config, snapshot)
+            except BackupError as error:
+                recovery_state = snapshot / "backup-state.json"
+                if (recovery_state.exists() or recovery_state.is_symlink()) \
+                        and not safely_recovered(lifecycle_state(snapshot)):
+                    preserve_unresolved_capture(snapshot, state)
+                    write_status(config, "restart-failure", error.code)
+                    raise BackupError("restart-failure", error.code) from error
+                write_status(config, error.status, error.code)
                 raise
             if result:
                 recovery_state = snapshot / "backup-state.json"
@@ -1737,25 +1785,32 @@ def attach_restore_capture_attempt(config, value, verified_upload):
     return value
 
 
+def attach_capture_diagnostic(config, value):
+    path = Path(config["stateDirectory"]) / "capture-diagnostics" / "latest.json"
+    if path.exists() or path.is_symlink():
+        value["captureDiagnostic"] = read_json(path)
+    return value
+
+
 def report_status(config):
     path = status_path(config)
     try:
         value = read_json(path)
     except (OSError, ValueError, json.JSONDecodeError):
-        return attach_restore_capture_status(config, {
+        return attach_capture_diagnostic(config, attach_restore_capture_status(config, {
             "format": STATUS_FORMAT, "status": "overdue", "code": "no-check-record",
             "lastCheck": None, "lastUpload": None, "backupId": None,
             "maintenanceActive": maintenance_active(config),
             "migrationRecoveryCloseoutVersion": 1,
-        })
+        }))
     if not isinstance(value, dict):
-        return attach_restore_capture_status(config, {
+        return attach_capture_diagnostic(config, attach_restore_capture_status(config, {
             "format": STATUS_FORMAT, "status": "capture-failure",
             "code": "invalid-status-record", "lastCheck": None,
             "lastUpload": None, "backupId": None,
             "maintenanceActive": maintenance_active(config),
             "migrationRecoveryCloseoutVersion": 1,
-        })
+        }))
     verified_upload = None
     if value.get("status") == "verified-upload":
         verified_upload = {
@@ -1788,7 +1843,7 @@ def report_status(config):
     elif verified_upload is not None:
         value = attach_restore_capture_attempt(config, value, verified_upload)
     value["migrationRecoveryCloseoutVersion"] = 1
-    return value
+    return attach_capture_diagnostic(config, value)
 
 
 def main():

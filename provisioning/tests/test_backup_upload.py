@@ -1774,6 +1774,104 @@ state_path.write_text(json.dumps(state))
         self.assertTrue((self.state / "recovery-capture-unresolved" /
                          "capture-unresolved" / "backup-state.json").exists())
 
+    def test_capture_diagnostics_keep_output_private_and_preserve_each_attempt(self):
+        command = Path(self.config["captureCommand"])
+        command.write_text(
+            "#!/bin/sh\nprintf 'SENSITIVE-STDOUT\\n'\nprintf 'SENSITIVE-STDERR\\n' >&2\nexit 7\n")
+        command.chmod(0o755)
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "files" / "backup-upload.py"),
+             "nightly", "--config", str(self.config_path)],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("capture-command-failed", result.stderr)
+        self.assertNotIn("SENSITIVE", result.stdout + result.stderr)
+        status = backup.report_status(self.config)
+        self.assertEqual(status["status"], "capture-failure")
+        diagnostic = status["captureDiagnostic"]
+        self.assertEqual(diagnostic["action"], "nightly")
+        self.assertEqual(diagnostic["exitCode"], 7)
+        self.assertEqual(diagnostic["failureCode"], "capture-command-failed")
+        self.assertFalse(diagnostic["timedOut"])
+        self.assertIsNotNone(diagnostic["completedAt"])
+        log = Path(diagnostic["log"])
+        self.assertEqual(log.read_text(), "SENSITIVE-STDOUT\nSENSITIVE-STDERR\n")
+        self.assertEqual(log.parent, self.state / "capture-diagnostics")
+        self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(log.stat().st_uid, os.geteuid())
+        self.assertEqual(log.parent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual((log.parent / "latest.json").stat().st_mode & 0o777, 0o600)
+        self.assertNotIn("SENSITIVE", json.dumps(status))
+        self.assertFalse(any(self.staging.rglob("*.log")))
+
+        with self.assertRaisesRegex(backup.BackupError, "capture-command-failed"):
+            backup.run_capture_command(self.config, "restore-capture", "private-argument")
+        latest = backup.report_status(self.config)["captureDiagnostic"]
+        self.assertEqual(latest["action"], "restore-capture")
+        self.assertNotEqual(latest["log"], str(log))
+        self.assertEqual(Path(latest["log"]).read_bytes(), log.read_bytes())
+        self.assertNotIn("private-argument", json.dumps(latest))
+
+    def test_successful_capture_records_diagnostics_without_a_check_record(self):
+        command = Path(self.config["captureCommand"])
+        command.write_text("#!/bin/sh\nprintf 'captured\\n'\n")
+        command.chmod(0o755)
+
+        backup.run_capture_command(self.config, "maintenance-capture", "private-argument")
+
+        status = backup.report_status(self.config)
+        self.assertEqual(status["code"], "no-check-record")
+        diagnostic = status["captureDiagnostic"]
+        self.assertEqual(diagnostic["exitCode"], 0)
+        self.assertIsNone(diagnostic["failureCode"])
+        self.assertFalse(diagnostic["timedOut"])
+        self.assertEqual(Path(diagnostic["log"]).read_text(), "captured\n")
+
+    def test_capture_refuses_unavailable_private_diagnostics_before_starting(self):
+        command = Path(self.config["captureCommand"])
+        command.write_text("#!/bin/sh\nexit 0\n")
+        command.chmod(0o755)
+        self.state.mkdir()
+        (self.state / "capture-diagnostics").symlink_to(self.remote, target_is_directory=True)
+        with patch.object(backup.subprocess, "Popen") as start:
+            with self.assertRaisesRegex(backup.BackupError, "capture-diagnostic-unavailable"):
+                backup.run_capture_command(self.config, "maintenance-capture", "private-argument")
+            start.assert_not_called()
+        self.assertEqual(list(self.remote.iterdir()), [])
+
+        (self.state / "capture-diagnostics").unlink()
+        with patch.object(backup, "atomic_json", side_effect=OSError("disk full")), \
+                patch.object(backup.subprocess, "Popen") as start:
+            with self.assertRaisesRegex(backup.BackupError, "capture-diagnostic-write-failed"):
+                backup.run_capture_command(self.config, "maintenance-capture", "private-argument")
+            start.assert_not_called()
+
+    def test_diagnostic_write_failure_preserves_unresolved_nightly_capture(self):
+        command = Path(self.config["captureCommand"])
+        command.write_text(
+            "#!/bin/sh\nmkdir -p \"$1\"\n"
+            "printf '{\"status\":\"recovery-required\"}' > \"$1/backup-state.json\"\n"
+            "printf 'capture failed\\n' >&2\nexit 1\n")
+        command.chmod(0o755)
+        write_diagnostic = backup.write_capture_diagnostic
+
+        def fail_completed_record(config, diagnostic):
+            if diagnostic["completedAt"] is not None:
+                raise backup.BackupError("capture-failure", "capture-diagnostic-write-failed")
+            write_diagnostic(config, diagnostic)
+
+        with patch.object(backup, "write_capture_diagnostic", side_effect=fail_completed_record):
+            with self.assertRaisesRegex(backup.BackupError, "capture-diagnostic-write-failed"):
+                backup.run_nightly(self.config)
+
+        status = backup.report_status(self.config)
+        self.assertEqual(status["status"], "restart-failure")
+        self.assertEqual(status["code"], "capture-diagnostic-write-failed")
+        recovery_state = next(self.state.glob("recovery-*/capture-*/backup-state.json"))
+        self.assertEqual(backup.read_json(recovery_state)["status"], "recovery-required")
+        self.assertEqual(Path(status["captureDiagnostic"]["log"]).read_text(), "capture failed\n")
+
     def test_capture_restart_interrupt_and_overdue_statuses(self):
         command = Path(self.config["captureCommand"])
         command.write_text("#!/bin/sh\n[ \"$KUBECONFIG\" = /expected/private/kubeconfig ] || exit 2\nexit 1\n")
@@ -1804,6 +1902,7 @@ state_path.write_text(json.dumps(state))
             "#!/bin/sh\n"
             "mkdir -p \"$1\"\n"
             "printf '{\"status\":\"in-progress\",\"phase\":\"prepared\"}' > \"$1/backup-state.json\"\n"
+            "printf 'capture started\\n' >&2\n"
             f"(sleep 2; touch {sentinel}) &\n"
             "wait\n"
         )
@@ -1811,7 +1910,13 @@ state_path.write_text(json.dumps(state))
         self.config["captureTimeoutSeconds"] = 1
         with self.assertRaises(backup.BackupError):
             backup.run_nightly(self.config)
-        self.assertEqual(backup.report_status(self.config)["status"], "restart-failure")
+        status = backup.report_status(self.config)
+        self.assertEqual(status["status"], "restart-failure")
+        diagnostic = status["captureDiagnostic"]
+        self.assertTrue(diagnostic["timedOut"])
+        self.assertEqual(diagnostic["failureCode"], "capture-interrupted")
+        self.assertEqual(diagnostic["exitCode"], -signal.SIGTERM)
+        self.assertEqual(Path(diagnostic["log"]).read_text(), "capture started\n")
         recovery_state = next(self.state.glob("recovery-*/capture-*/backup-state.json"))
         self.assertEqual(backup.read_json(recovery_state)["status"], "in-progress")
         time.sleep(2.2)
