@@ -45,7 +45,14 @@ setup_bazel_fixture() {
   mkdir -p .scripts/tests .mise/tasks example other deploy message-bus graphql/.devcontainer \
     graphql/src graphql/testdata .scripts/lib .scripts/templates \
     .scripts/tests/fixtures/migrator-packaging
-  touch .scripts/tests/example.bats .scripts/tests/test_helper.bash .scripts/test-scripts.sh
+  touch .scripts/tests/test_helper.bash .scripts/test-scripts.sh .scripts/run-script-test.sh
+  cat > .scripts/tests/example.bats << 'EOF'
+#!/usr/bin/env bats
+@test "script cache fixture" {
+  printf '%s\n' example >> "$SCRIPT_TEST_LOG"
+}
+EOF
+  chmod +x .scripts/run-script-test.sh
   touch package.json .mise/tasks/bazel.toml .mise/tasks/repository-sync.toml \
     .scripts/run-integration-tests.sh .scripts/run-integration-suite.sh \
     .scripts/build-integration-images.sh .scripts/prepare-integration-identities.sh \
@@ -125,8 +132,9 @@ format_build() {
 
 script_test_build() {
   bash .scripts/generate-bazel-build.sh
-  bash .scripts/bazel.sh --batch --output_base="$BATS_TEST_TMPDIR/bazel" build \
-    --action_env=PATH --jobs=1 //:test_scripts_suite_example
+  bash .scripts/bazel.sh --batch --output_base="$BATS_TEST_TMPDIR/bazel" test \
+    --test_env=PATH "--test_env=SCRIPT_TEST_LOG=$FIXTURE_ROOT/test-calls.log" \
+    --jobs=1 //:test_scripts_suite_example
 }
 
 setup_cached_formats() {

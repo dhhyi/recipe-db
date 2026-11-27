@@ -6,10 +6,18 @@ setup() {
   ROOT=$(cd "$(dirname "$(realpath "$BATS_TEST_DIRNAME/provisioning-config-paths.bats")")/../.." && pwd -P)
 }
 
+require_prerequisite() {
+  if [ "${CI:-false}" = true ]; then
+    printf '%s\n' "$1" >&2
+    exit 1
+  fi
+  skip "$1"
+}
+
 @test "provisioning launcher mounts a disposable config and Ansible resolves inputs without SSH" {
-  command -v docker > /dev/null || skip "Docker is unavailable"
-  command -v devcontainer > /dev/null || skip "devcontainer CLI is unavailable"
-  docker info > /dev/null 2>&1 || skip "Docker daemon is unavailable"
+  command -v docker > /dev/null || require_prerequisite "Docker is unavailable"
+  command -v devcontainer > /dev/null || require_prerequisite "devcontainer CLI is unavailable"
+  docker info > /dev/null 2>&1 || require_prerequisite "Docker daemon is unavailable"
 
   local home="$BATS_TEST_TMPDIR/operator home"
   local config="$home/.config/recipe-db"

@@ -208,7 +208,8 @@ if ! jq -e '
     (.value.tests | type == "array" and length > 0 and all(.[]; type == "string")) and
     (.value.suite_inputs | type == "object") and
     ((.value.tests | sort) == (.value.suite_inputs | keys | sort)) and
-    (.value.suite_inputs | all(.[]; type == "array" and all(.[]; type == "string" and length > 0))))
+    (.value.suite_inputs | all(.[]; type == "array" and all(.[]; type == "string" and length > 0))) and
+    ((.value.exclusive_tests // []) | type == "array" and all(.[]; type == "string")))
 ' <<< "$group_specs" > /dev/null; then
   printf 'Invalid script test group manifest: %s\n' "$manifest" >&2
   exit 1
@@ -244,13 +245,26 @@ for group in $(jq -r 'keys[]' <<< "$group_specs"); do
     suite_id=${suite_id%.bats}
     suite_id=${suite_id//[^a-zA-Z0-9_-]/_}
     suite_target="test_scripts_suite_$suite_id"
+    exclusive=false
+    if jq -e --arg group "$group" --arg test "$test_file" '.[$group].exclusive_tests // [] | index($test) != null' <<< "$group_specs" > /dev/null; then
+      exclusive=true
+    fi
     declare -A suite_files=()
     suite_files["$manifest"]=1
     suite_files[".scripts/tests/test_helper.bash"]=1
     suite_files[".scripts/test-scripts.sh"]=1
+    suite_files[".scripts/run-script-test.sh"]=1
+    suite_files["mise.toml"]=1
+    suite_files[".mise/config.toml"]=1
+    suite_files[".mise/tasks/script-tests.toml"]=1
+    suite_files[".bazelversion"]=1
     suite_files["$test_file"]=1
     while IFS= read -r pattern; do
       matched=false
+      if [[ -f "$pattern" ]]; then
+        suite_files["$pattern"]=1
+        matched=true
+      fi
       while IFS= read -r -d '' file; do
         [[ -f "$file" ]] || continue
         suite_files["$file"]=1
@@ -264,25 +278,33 @@ for group in $(jq -r 'keys[]' <<< "$group_specs"); do
       '.[$group].suite_inputs[$test][]' <<< "$group_specs")
 
     {
-      printf '\ngenrule(\n'
+      printf '\nsh_test(\n'
       printf '    name = "%s",\n' "$suite_target"
       printf '    srcs = [\n'
+      printf '        ".scripts/run-script-test.sh",\n'
+      printf '    ],\n'
+      printf '    args = [%s],\n' "$(quote "$test_file")"
+      printf '    data = [\n'
       while IFS= read -r file; do
-        printf '        %s,\n' "$(quote "$file")"
+        if [[ "$file" != ".scripts/run-script-test.sh" ]]; then
+          printf '        %s,\n' "$(quote "$file")"
+        fi
       done < <(printf '%s\n' "${!suite_files[@]}" | sort)
       printf '    ],\n'
-      printf '    tools = ["mise.toml", ".mise/config.toml", ".mise/tasks/script-tests.toml", ".bazelversion"],\n'
-      printf '    outs = ["%s"],\n' "test-scripts-$suite_target.ok"
-      printf '    cmd = "mise run --raw test-scripts %s && touch %s",\n' "$test_file" "\$@"
-      printf '    tags = ["no-sandbox", "no-remote"],\n'
+      printf '    timeout = "moderate",\n'
+      if [[ "$exclusive" == true ]]; then
+        printf '    tags = ["exclusive", "no-sandbox", "no-remote"],\n'
+      else
+        printf '    tags = ["no-sandbox", "no-remote"],\n'
+      fi
       printf ')\n'
     } >> "$output"
     suite_targets+=("$suite_target")
   done < <(jq -r --arg group "$group" '.[$group].tests[]' <<< "$group_specs")
   {
-    printf '\nfilegroup(\n'
+    printf '\ntest_suite(\n'
     printf '    name = "test_scripts_%s",\n' "$group"
-    printf '    srcs = [\n'
+    printf '    tests = [\n'
     for suite_target in "${suite_targets[@]}"; do
       printf '        %s,\n' "$(quote ":$suite_target")"
     done
@@ -292,9 +314,9 @@ for group in $(jq -r 'keys[]' <<< "$group_specs"); do
 done
 
 {
-  printf '\nfilegroup(\n'
+  printf '\ntest_suite(\n'
   printf '    name = "test_scripts",\n'
-  printf '    srcs = [\n'
+  printf '    tests = [\n'
   while IFS= read -r group; do
     printf '        ":test_scripts_%s",\n' "$group"
   done < <(jq -r 'keys[]' <<< "$group_specs")

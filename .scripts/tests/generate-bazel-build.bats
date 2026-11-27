@@ -18,6 +18,8 @@ format:
 check: echo checked
 EOF
   cp "$BATS_TEST_DIRNAME/../test-scripts.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../run-script-test.sh" .scripts/
+  chmod +x .scripts/run-script-test.sh
   cp "$BATS_TEST_DIRNAME/../format-files.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../bazel-project-action.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../integration-dependencies.py" .scripts/
@@ -85,24 +87,26 @@ EOF
   for file in .scripts/tests/example.bats .scripts/tests/groups.yaml \
     .scripts/tests/test_helper.bash .scripts/templates/example.yml \
     .scripts/templates/kubernetes-migration-job-test.yml .scripts/templates/kubernetes.lib.yml \
-    .scripts/test-scripts.sh; do
+    .scripts/test-scripts.sh .scripts/run-script-test.sh mise.toml \
+    .mise/config.toml .mise/tasks/script-tests.toml .bazelversion; do
     grep -Fx "        \"$file\"," test-rule
   done
-  [ "$(grep -c '^        "' test-rule)" -eq 7 ]
-  grep -Fx '    tools = ["mise.toml", ".mise/config.toml", ".mise/tasks/script-tests.toml", ".bazelversion"],' test-rule
-  grep -Fx '    outs = ["test-scripts-test_scripts_suite_example.ok"],' test-rule
-  grep -Fx '    cmd = "mise run --raw test-scripts .scripts/tests/example.bats && touch $@",' test-rule
+  grep -Fx '    srcs = [' test-rule
+  grep -Fx '        ".scripts/run-script-test.sh",' test-rule
+  grep -Fx '    args = [".scripts/tests/example.bats"],' test-rule
+  grep -Fx '    timeout = "moderate",' test-rule
   grep -Fx '    tags = ["no-sandbox", "no-remote"],' test-rule
 
   sed -n '/name = "test_scripts_suite_other"/,/^)/p' BUILD.bazel > test-rule
   for file in .scripts/generate-bazel-build.sh .scripts/tests/other.bats \
     example/.project.yaml deploy/local.yaml deploy/pi.yaml .scripts/tests/groups.yaml \
-    .scripts/tests/test_helper.bash .scripts/test-scripts.sh graphql/.project.yaml; do
+    .scripts/tests/test_helper.bash .scripts/test-scripts.sh .scripts/run-script-test.sh \
+    graphql/.project.yaml mise.toml .mise/config.toml .mise/tasks/script-tests.toml \
+    .bazelversion; do
     grep -Fx "        \"$file\"," test-rule
   done
-  [ "$(grep -c '^        "' test-rule)" -eq 9 ]
-  grep -Fx '    outs = ["test-scripts-test_scripts_suite_other.ok"],' test-rule
-  grep -Fx '    cmd = "mise run --raw test-scripts .scripts/tests/other.bats && touch $@",' test-rule
+  grep -Fx '    args = [".scripts/tests/other.bats"],' test-rule
+  grep -Fx '    timeout = "moderate",' test-rule
 
   sed -n '/name = "test_scripts_compose"/,/^)/p' BUILD.bazel > aggregate-rule
   grep -Fx '        ":test_scripts_suite_example",' aggregate-rule
@@ -110,24 +114,69 @@ EOF
   grep -Fx '        ":test_scripts_suite_other",' aggregate-rule
 
   sed -n '/name = "test_scripts"/,/^)/p' BUILD.bazel > aggregate-rule
-  {
-    printf '%s\n' 'filegroup('
-    cat aggregate-rule
-  } > generated-rule
   cat > expected-rule << 'EOF'
-filegroup(
+test_suite(
     name = "test_scripts",
-    srcs = [
+    tests = [
         ":test_scripts_compose",
         ":test_scripts_tooling",
     ],
 )
 EOF
+  {
+    printf '%s\n' 'test_suite('
+    cat aggregate-rule
+  } > generated-rule
   cmp expected-rule generated-rule
 
   sed -n '/name = "shellcheck"/,/^)/p' BUILD.bazel > lint-rule
   grep -Fx '        ".scripts/tests/example.bats",' lint-rule
   grep -Fx '    tools = ["mise.toml", ".mise/config.toml"],' lint-rule
+}
+
+@test "script tests include explicitly declared ignored generated files and reject missing ones" {
+  mkdir -p example/.devcontainer
+  printf '%s\n' '.devcontainer/' > example/.gitignore
+  printf '%s\n' '{}' > example/.devcontainer/devcontainer.json
+  yq -i '.compose.suite_inputs[".scripts/tests/example.bats"] += ["example/.devcontainer/devcontainer.json"]' .scripts/tests/groups.yaml
+  run git check-ignore example/.devcontainer/devcontainer.json
+  [ "$status" -eq 0 ]
+
+  run bash .scripts/generate-bazel-build.sh
+  [ "$status" -eq 0 ]
+  sed -n '/name = "test_scripts_suite_example"/,/^)/p' BUILD.bazel > test-rule
+  grep -Fx '        "example/.devcontainer/devcontainer.json",' test-rule
+
+  cp BUILD.bazel generated-build
+  rm example/.devcontainer/devcontainer.json
+  run --separate-stderr bash .scripts/generate-bazel-build.sh
+  [ "$status" -eq 1 ]
+  [ "$stderr" = "Script test suite .scripts/tests/example.bats input pattern matches no files: example/.devcontainer/devcontainer.json" ]
+  cmp generated-build BUILD.bazel
+}
+
+@test "script runner dereferences runfiles, preserves Bats status and cleans its workspace" {
+  mkdir -p runfiles/_main/.scripts/tests bin temporary
+  ln -s "$FIXTURE_ROOT/.scripts/tests/example.bats" runfiles/_main/.scripts/tests/example.bats
+  cat > bin/bats << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == --print-output-on-failure && "$2" == .scripts/tests/example.bats ]]
+[[ -f "$2" && ! -L "$2" ]]
+pwd -P > "$WORKSPACE_REPORT"
+exit "$BATS_STATUS"
+EOF
+  chmod +x bin/bats
+
+  for bats_status in 0 23; do
+    run env PATH="$FIXTURE_ROOT/bin:$PATH" TMPDIR="$FIXTURE_ROOT/temporary" \
+      TEST_SRCDIR="$FIXTURE_ROOT/runfiles" TEST_WORKSPACE=_main \
+      WORKSPACE_REPORT="$FIXTURE_ROOT/workspace-report" BATS_STATUS="$bats_status" \
+      bash .scripts/run-script-test.sh .scripts/tests/example.bats
+    [ "$status" -eq "$bats_status" ]
+    [[ "$(cat workspace-report)" == "$FIXTURE_ROOT/temporary/"* ]]
+    [ ! -e "$(cat workspace-report)" ]
+  done
 }
 
 @test "all rules allow disk caching while disabling sandboxing and remote execution" {
@@ -602,29 +651,40 @@ EOF
   export MISE_STATE_DIR="$BATS_TEST_TMPDIR/mise-state"
   export MISE_TASK_RUN_AUTO_INSTALL=false
   setup_mock_bin
-  cat > bin/bats << 'EOF'
+  cat > bin/mise << 'EOF'
 #!/bin/sh
-printf '<%s>\n' "$@" > "$MOCK_LOG"
-exit "${BATS_STATUS:-0}"
+  if [ "$1" = run ] && [ "$2" = --raw ] && [ "$3" = generate-bazel-build ]; then
+    exit 0
+  fi
+if [ "$1" = run ] && [ "$2" = --raw ] && [ "$3" = test-scripts ]; then
+  shift 3
+  exec bash .scripts/test-scripts.sh "$@"
+fi
+if [ "$1" = run ] && [ "$2" = --raw ] && [ "$3" = bazel ]; then
+  shift 3
+  printf '<%s>\n' "$@" > "$MOCK_LOG"
+  exit "${MISE_STATUS:-0}"
+fi
+exit 99
 EOF
-  chmod +x bin/bats
+  chmod +x bin/mise
 
   run mise run --raw test-scripts
   [ "$status" -eq 0 ]
-  [ "$(cat "$MOCK_LOG")" = $'<--print-output-on-failure>\n<.scripts/tests>' ]
+  [ "$(cat "$MOCK_LOG")" = $'<test>\n<--test_output=errors>\n<//:test_scripts>' ]
 
   run mise run --raw test-scripts compose
   [ "$status" -eq 0 ]
-  [ "$(cat "$MOCK_LOG")" = $'<--print-output-on-failure>\n<.scripts/tests/example.bats>' ]
+  [ "$(cat "$MOCK_LOG")" = $'<test>\n<--test_output=errors>\n<//:test_scripts_compose>' ]
 
   run mise run --raw test-scripts .scripts/tests/other.bats
   [ "$status" -eq 0 ]
-  [ "$(cat "$MOCK_LOG")" = $'<--print-output-on-failure>\n<.scripts/tests/other.bats>' ]
+  [ "$(cat "$MOCK_LOG")" = $'<test>\n<--test_output=errors>\n<//:test_scripts_suite_other>' ]
 
   yq -i '.tooling.tests += [".scripts/tests/two words.bats"]' .scripts/tests/groups.yaml
-  run env BATS_STATUS=23 mise run --raw test-scripts tooling
+  run env MISE_STATUS=23 mise run --raw test-scripts tooling
   [ "$status" -eq 23 ]
-  [ "$(cat "$MOCK_LOG")" = $'<--print-output-on-failure>\n<.scripts/tests/other.bats>\n<.scripts/tests/two words.bats>' ]
+  [ "$(cat "$MOCK_LOG")" = $'<test>\n<--test_output=errors>\n<//:test_scripts_tooling>' ]
 
   : > "$MOCK_LOG"
   run mise run --raw test-scripts missing

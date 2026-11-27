@@ -164,12 +164,14 @@ Before moving or removing coverage, identify the behavior and boundaries it prot
 
 ## Script testing
 
+Declare ignored generated files needed by a suite as exact paths in [the script input manifest](../.scripts/tests/groups.yaml). They must exist before BUILD generation; glob patterns only discover non-ignored files.
+
 Each Bats suite must complete in at most three minutes so it remains useful for targeted testing. When adding, changing, or relocating script tests, review each affected suite as a whole; split or improve a suite that exceeds the limit without losing its behavioral coverage.
 
 Measure each affected suite's wall-clock time with a complete, uncached run using the normal configuration, for example:
 
 ```sh
-/usr/bin/time -p mise run --raw test-scripts .scripts/tests/production-k3d-backup.bats
+/usr/bin/time -p mise run --raw bazel test --nocache_test_results --test_output=errors //:test_scripts_suite_production-k3d-backup
 ```
 
 Use the reported `real` time, not a cached Bazel result or a subset of tests. Record the command, elapsed time, result, and skipped or opt-in tests in the validation evidence. A failed run or missing timing does not establish compliance. Report over-limit or unverified suites as unresolved; do not claim the limit is met.
