@@ -237,7 +237,10 @@ local_identity() {
       == [{"HostIp":"127.0.0.1","HostPort":$api}])
     and all(.[]; all(.Mounts[]?; .Type != "bind"))
   ' "$work/containers.json" > /dev/null || production_fail "cluster is not the expected managed loopback-only rehearsal"
-  k3d kubeconfig get "$cluster" > "$work/kubeconfig"
+  k3d kubeconfig get "$cluster" > "$work/kubeconfig.next" \
+    || production_fail "could not export the managed local kubeconfig"
+  mv "$work/kubeconfig.next" "$work/kubeconfig" \
+    || production_fail "could not replace the managed local kubeconfig"
   [[ $(kube config view --minify -o jsonpath='{.clusters[0].cluster.server}') = "https://127.0.0.1:$api_port" ]] \
     || production_fail "managed kubeconfig server mismatch"
   kube get nodes -o json > "$work/nodes.json"
@@ -252,7 +255,10 @@ connect() {
     local_identity
   else
     # Explicit context, never the caller default; keep embedded credentials private.
-    kubectl --context "$context" config view --minify --flatten --raw > "$work/kubeconfig"
+    kubectl --context "$context" config view --minify --flatten --raw > "$work/kubeconfig.next" \
+      || production_fail "could not export the Pi kubeconfig"
+    mv "$work/kubeconfig.next" "$work/kubeconfig" \
+      || production_fail "could not replace the Pi kubeconfig"
     [[ $(kube config current-context) = "$context" ]] || production_fail "Pi context mismatch"
     kube get namespace kube-system -o name > /dev/null
   fi
