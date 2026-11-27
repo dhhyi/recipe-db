@@ -69,19 +69,42 @@ If any check fails or the candidate requires a data change, stop. Do not weaken 
 
 **Where:** previous Raspberry Pi, `piadmin` POSIX shell.
 
-For the first cutover the deployed release is `v4`. Its `maintenance-enter` operation enters backup mode and causes a full site outage; it does not provide the newer read-only GraphQL maintenance behavior. Do not assume a later previous release has the same behavior; verify its installed procedure before starting. Keep the timer disabled and use the uploader already installed on the Pi:
+For the first cutover the deployed release is `v4`. Its `maintenance-enter` operation enters backup mode and causes a full site outage; it does not provide the newer read-only GraphQL maintenance behavior. Do not assume a later previous release has the same behavior; verify its installed procedure before starting.
+
+On the Pi, record the timer's initial state, then disable it. `disable --now` does not stop a backup service already running:
 
 ```sh
 sudo systemctl show recipe-db-backup.timer \
-  --property=UnitFileState --property=ActiveState \
-  && sudo /usr/local/sbin/recipe-db-backup-upload maintenance-enter \
-    --config /etc/recipe-db/backup.json \
+  --property=LoadState --property=UnitFileState --property=ActiveState \
+  && sudo systemctl disable --now recipe-db-backup.timer
+```
+
+Stop if the command fails.
+
+Verify the timer, backup service and retained maintenance state before entering maintenance:
+
+```sh
+sudo systemctl show recipe-db-backup.timer \
+  --property=LoadState --property=UnitFileState --property=ActiveState
+sudo systemctl show recipe-db-backup.service \
+  --property=LoadState --property=ActiveState
+sudo /usr/local/sbin/recipe-db-backup-upload status \
+  --config /etc/recipe-db/backup.json
+```
+
+Require the timer to be loaded, disabled and inactive, the service to be loaded and inactive, and `maintenanceActive: false`. If a backup is running, let it finish and check again; do not stop it. Investigate a failed service or retained maintenance before continuing.
+
+Use the installed uploader to enter maintenance and capture the final backup:
+
+```sh
+sudo /usr/local/sbin/recipe-db-backup-upload maintenance-enter \
+  --config /etc/recipe-db/backup.json \
   && sudo systemctl start recipe-db-backup.service \
   && sudo /usr/local/sbin/recipe-db-backup-upload status \
     --config /etc/recipe-db/backup.json
 ```
 
-Record the timer's initial enabled and active states for closeout. The `&&` chain prevents capture or status commands from running if `maintenance-enter` fails. Continue only when status confirms the final backup is complete and remotely verified and the maintenance barrier is retained. On the workstation, use the [retained-backup retrieval procedure](production-release-cookbook.md#4-rehearse-using-the-retained-backup) to retrieve that exact backup and its maintenance receipt to a new private directory. Verify the retrieved manifest and archive identify the previous immutable release and match the Pi's backup ID. Keep the Pi blocked and retain the operation state, Lease, backup and receipt.
+The `&&` chain prevents capture or status commands from running if `maintenance-enter` fails. Continue only when status confirms the final backup is complete and remotely verified and the maintenance barrier is retained. On the workstation, use the [retained-backup retrieval procedure](production-release-cookbook.md#4-rehearse-using-the-retained-backup) to retrieve that exact backup and its maintenance receipt to a new private directory. Verify the retrieved manifest and archive identify the previous immutable release and match the Pi's backup ID. Keep the Pi blocked and retain the operation state, Lease, backup and receipt.
 
 If entry or capture fails, inspect the existing status and follow [snapshot capture recovery](production-kubernetes.md#snapshot-capture). Do not retry an uncertain entry, start a new backup operation, release the retained barrier, or erase the host. A failure or interruption requires operator direction.
 
@@ -89,9 +112,33 @@ If entry or capture fails, inspect the existing status and follow [snapshot capt
 
 **Where:** workstation, fish shell.
 
-Use [First-cutover local preparation](production-release-cookbook.md#first-cutover-local-preparation) once with the verified previous-release package, its retrieval receipt, and the immutable cutover-release artifact. This imports unchanged data into empty local volumes, captures a genuine cutover-release package, and rehearses that package into a second empty local cluster.
+From the reviewed checkout in workstation fish, use the verified package and maintenance retrieval receipt from step 2 with the immutable cutover artifact from step 1. Keep the package, receipt and result private. If using a new fish session, restore `RELEASE` from step 1 and set the receipt, manifest and archive paths from the private retrieval directory. Create a new result directory outside the checkout, operator configuration and runtime storage:
 
-Continue only when the data-free result reports success, both temporary clusters were removed, and the provenance record identifies the exact previous backup and cutover artifact. Retain the new package, provenance and result privately for the Pi restore. On failure or interruption, preserve all private inputs and any remaining clusters/data. Inspect the result's deletion state and actual cluster state before operator-directed cleanup; do not erase the Pi.
+```fish
+set -g CUTOVER_PARENT "$HOME/.local/share/recipe-db/cutover"
+mkdir -p "$CUTOVER_PARENT"
+chmod 700 "$CUTOVER_PARENT"
+set -g SOURCE_BACKUP_ID (mise exec -- jq -er .backupId "$RETRIEVAL_RECEIPT")
+set -g CUTOVER_RESULT "$CUTOVER_PARENT/$SOURCE_BACKUP_ID"
+and mise run --raw prepare-cutover-backup-k3d \
+  "$SOURCE_MANIFEST" "$SOURCE_ARCHIVE" "$RETRIEVAL_RECEIPT" "$RELEASE" "$CUTOVER_RESULT"
+```
+
+The path must be new; do not overwrite or reuse an earlier result. The command imports the verified data into empty local volumes, checks the cutover release without writes, captures its genuine backup, and rehearses that package in a second empty local cluster. It does not use or change the Pi.
+
+Continue only when the data-free result confirms the exact cutover artifact, successful rehearsal and removal of both temporary clusters and private input copies:
+
+```fish
+mise exec -- jq -e --arg release "$RELEASE" --arg sourceBackupId "$SOURCE_BACKUP_ID" '
+  .status == "passed" and .phase == "complete"
+  and .cutoverBackup.release == $release
+  and .previousBackup.backupId == $sourceBackupId
+  and .clusters.source.deleted and .clusters.target.deleted
+  and .cleanup.privateDataRemoved and .cleanup.inputCopiesRemoved
+' "$CUTOVER_RESULT/result.json"
+```
+
+Retain `cutover-backup/`, `provenance.json` and the data-free `result.json` privately for the Pi restore. On failure or interruption, preserve the result and all remaining clusters/data. Inspect each cluster's `deletionAttempted` and `deleted` status and verify its actual state before operator-directed cleanup; do not erase the Pi or automatically repeat cleanup.
 
 ## 4. Approve erasure separately
 
@@ -140,11 +187,13 @@ Continue only after a successful play recap. The play installs the inputs and le
 
 **Where:** workstation, fish shell; target is the newly provisioned Pi.
 
-Use the workstation-held package from step 3 and the Pi values for the exact cutover release. Keep all paths private, set a new restore-state directory, and use the staging limit recorded in the package provenance:
+Use the workstation-held package from step 3 and the Pi values for the exact cutover release. Keep the same `RETRIEVAL_RECEIPT` path from step 2. If using a new fish session, set it to the saved maintenance receipt's absolute path. Keep all paths private, set a new restore-state directory, and use the staging limit recorded in the package provenance:
 
 ```fish
 umask 077
-set -g CUTOVER_RESULT "$HOME/.local/share/recipe-db/cutover/result"
+set -g CUTOVER_PARENT "$HOME/.local/share/recipe-db/cutover"
+set -g SOURCE_BACKUP_ID (mise exec -- jq -er .backupId "$RETRIEVAL_RECEIPT")
+set -g CUTOVER_RESULT "$CUTOVER_PARENT/$SOURCE_BACKUP_ID"
 set -g VALUES "$HOME/.config/recipe-db/deployment/pi-values.yaml"
 set -gx KUBECONFIG "$HOME/.config/recipe-db/kubeconfig/pi.yaml"
 set -g PROVENANCE "$CUTOVER_RESULT/provenance.json"
