@@ -1710,7 +1710,8 @@ restore_backup_verify_pending_reads() {
     and .savedStateMatchesCluster
     and (.writesMayHaveOpened | not)
   ' "$status_file" > /dev/null || return 1
-  restore_forward deployment/traefik 3000 "$work/restore-backup-graphql-forward.log" > /dev/null \
+  # Normal routes serve public images on web, not rest-internal.
+  restore_forward deployment/traefik 8000 "$work/restore-backup-graphql-forward.log" > /dev/null \
     || return 1
   restore_forward service/browse 3000 "$work/restore-backup-browse-forward.log" > /dev/null \
     || return 1
