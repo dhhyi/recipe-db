@@ -19,6 +19,7 @@ compose:
       - .mise/tasks/repository-sync.toml
     .scripts/tests/traefik-ingress.bats:
       - .scripts/traefik-ingress-entrypoint.sh
+      - .scripts/tests/fixtures/ingress-server.py
       - .scripts/templates/traefik-template.yml
       - .scripts/templates/service-template.lib.yml
       - .scripts/templates/browse-maintenance-template.lib.yml
@@ -53,6 +54,9 @@ release:
     - .scripts/tests/production-k3d-release-disposition.bats
     - .scripts/tests/production-k3d-release-finalize.bats
     - .scripts/tests/production-k3d-release-controller.bats
+  exclusive_tests:
+    - .scripts/tests/production-upgrade-rehearsal.bats
+    - .scripts/tests/prepare-cutover-backup.bats
   suite_inputs:
     .scripts/tests/production-release-files.bats:
       - .scripts/production-release.py
@@ -151,6 +155,8 @@ deploy:
     - .scripts/tests/production-k3d-deploy.bats
     - .scripts/tests/production-smoke.bats
     - .scripts/tests/production-storage.bats
+  exclusive_tests:
+    - .scripts/tests/production-k3d-deploy.bats
   suite_inputs:
     .scripts/tests/kubernetes-templates.bats:
       - .scripts/templates/kubernetes*.yml
@@ -222,6 +228,8 @@ backup:
     - .scripts/tests/production-k3d-backup-capture.bats
     - .scripts/tests/production-k3d-backup-recovery.bats
     - .scripts/tests/production-k3d-backup-sources.bats
+  exclusive_tests:
+    - .scripts/tests/backup-recovery-k3d.bats
   suite_inputs:
     .scripts/tests/retrieve-verified-backup.bats:
       - .scripts/retrieve-verified-backup.py
@@ -255,6 +263,8 @@ restore:
     - .scripts/tests/production-k3d-restore-recovery.bats
     - .scripts/tests/production-restore.bats
     - .scripts/tests/production-recovery.bats
+  exclusive_tests:
+    - .scripts/tests/production-k3d-restore-reopen.bats
   suite_inputs:
     .scripts/tests/production-recovery.bats:
       - .scripts/production-k3d.sh
@@ -370,6 +380,11 @@ workflows:
       - .github/workflows/pr-metadata.yaml
       - .github/workflows/publish.yaml
       - .mise/tasks/validation.toml
+      - .mise/tasks/**
+      - .scripts/*.sh
+      - .scripts/lib/**
+      - .scripts/templates/**
+      - deploy/**
       - mise.toml
       - .mise/config.toml
       - .mise/tasks/setup.toml
@@ -427,6 +442,12 @@ devcontainer:
       - .scripts/tests/provisioning-config-paths.bats
       - .scripts/tests/test_helper.bash
       - .scripts/run-in-devcontainer.sh
+      - provisioning/.project.yaml
+      - provisioning/ansible.cfg
+      - provisioning/inventory.example.yml
+      - provisioning/resolve-backup-inputs.yml
+      - provisioning/filter_plugins/**
+      - provisioning/tests/**
       - provisioning/.project.yaml
       - provisioning/ansible.cfg
       - provisioning/filter_plugins/operator_paths.py

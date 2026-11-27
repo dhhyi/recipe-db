@@ -20,4 +20,18 @@ if [[ ${1:-} == build && -n ${BAZEL_DIAGNOSTICS_DIR:-} ]]; then
     --verbose_explanations --explain="$explain_log" "$@"
 fi
 
+if [[ ${1:-} == test ]]; then
+  test_args=()
+  for variable in TEST_AUTH_INGRESS TEST_AUTH_LIFECYCLE; do
+    if [[ -n ${!variable+x} ]]; then
+      test_args+=(--test_env="$variable=${!variable}")
+    fi
+  done
+  shift
+  exec "$mise_bin" exec -- bazelisk test \
+    --test_env=PATH \
+    --action_env=PATH \
+    "${test_args[@]}" "$@"
+fi
+
 exec "$mise_bin" exec -- bazelisk "$@"

@@ -36,7 +36,7 @@ raw_args = true
 [test-auth-ingress]
 description = "Verify production ingress token routing and configuration isolation with real Traefik"
 env = { TEST_AUTH_INGRESS = "true" }
-run = "bats --print-output-on-failure .scripts/tests/traefik-ingress.bats"
+run = "bash .scripts/test-scripts.sh .scripts/tests/traefik-ingress.bats"
 
 [test-message-bus]
 description = "Validate GraphQL events, fan-out, outages and broker restart against an isolated JetStream broker"

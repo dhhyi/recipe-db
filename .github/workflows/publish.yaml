@@ -148,6 +148,42 @@ jobs:
             --execution_log_json_file="$RUNNER_TEMP/bazel-check-execution.json" \
             --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" //:all
 
+      - name: Bazel script test suites
+        id: script-tests
+        env:
+          BAZEL_DIAGNOSTICS_DIR: ${{ runner.temp }}/bazel-diagnostics
+        run: |
+          command -v docker
+          command -v devcontainer
+          docker info
+          mise run --raw generate-bazel-build
+          selected=$(mise run --raw bazel query 'tests(//:test_scripts)')
+          manifest_targets=
+          while IFS= read -r test_file; do
+            suite_id=${test_file#".scripts/tests/"}
+            suite_id=${suite_id%.bats}
+            suite_id=${suite_id//[^a-zA-Z0-9_-]/_}
+            manifest_targets="${manifest_targets}//:test_scripts_suite_${suite_id}"$'\n'
+          done < <(yq -r '[.[] .tests[]] | .[]' .scripts/tests/groups.yaml)
+          test_count=$(printf '%s\n' "$selected" | sed '/^$/d' | wc -l)
+          manifest_count=$(printf '%s\n' "$manifest_targets" | sed '/^$/d' | wc -l)
+          if [[ "$test_count" -eq 0 || "$test_count" -ne "$manifest_count" ]]; then
+            echo "Script test selection incomplete: selected=$test_count manifest=$manifest_count" >&2
+            exit 1
+          fi
+          diff -u \
+            <(printf '%s\n' "$manifest_targets" | sort) \
+            <(printf '%s\n' "$selected" | sort)
+          mise run --raw bazel test \
+            --test_env=PATH \
+            --test_env=TEST_AUTH_INGRESS=false \
+            --test_env=TEST_AUTH_LIFECYCLE=false \
+            --test_env=CI=true \
+            --test_env=GITHUB_ACTIONS=true \
+            --test_output=errors \
+            --execution_log_json_file="$RUNNER_TEMP/bazel-script-test-execution.json" \
+            --jobs=4 --disk_cache="$HOME/.cache/bazel-disk" //:test_scripts
+
       - name: upload Bazel rebuild explanations
         if: always()
         uses: actions/upload-artifact@v7
@@ -167,6 +203,7 @@ jobs:
           path: |
             ${{ runner.temp }}/bazel-format-execution.json
             ${{ runner.temp }}/bazel-check-execution.json
+            ${{ runner.temp }}/bazel-script-test-execution.json
           if-no-files-found: ignore
           retention-days: 7
 
