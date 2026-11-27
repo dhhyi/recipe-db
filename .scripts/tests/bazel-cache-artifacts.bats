@@ -224,7 +224,10 @@ load test_helper
   [ "${lines[0]}" = '${{ runner.temp }}/bazel-format-execution.json' ]
   # shellcheck disable=SC2016
   [ "${lines[1]}" = '${{ runner.temp }}/bazel-check-execution.json' ]
-  [ "${#lines[@]}" -eq 2 ]
+  # shellcheck disable=SC2016
+  [ "${lines[2]}" = '${{ runner.temp }}/bazel-script-test-execution.json' ]
+  [ "${lines[3]}" = '${{ runner.temp }}/bazel-testlogs' ]
+  [ "${#lines[@]}" -eq 4 ]
   run yq -r "$step | .with.if-no-files-found" "$workflow"
   [ "$status" -eq 0 ]
   [ "$output" = ignore ]

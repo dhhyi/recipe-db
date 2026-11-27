@@ -65,6 +65,7 @@ release:
       - provisioning/files/release-files.py
       - .scripts/tests/test_helper.bash
     .scripts/tests/production-release.bats:
+      - .scripts/create-production-release-inventory.sh
       - .scripts/lib/project-metadata.sh
       - .scripts/migrator-manifest.schema.json
       - .scripts/lib/release-validation.sh
@@ -139,6 +140,8 @@ release:
       - browse-maintenance/unavailable.html
       - design/nginx.conf
       - package.json
+      - package.json
+      - package.json
     .scripts/tests/production-k3d-release-jobs.bats: *production-k3d-backup-inputs
     .scripts/tests/production-k3d-release-start.bats: *production-k3d-backup-inputs
     .scripts/tests/production-k3d-migration-plan.bats: *production-k3d-backup-inputs
@@ -159,6 +162,7 @@ deploy:
     - .scripts/tests/production-k3d-deploy.bats
   suite_inputs:
     .scripts/tests/kubernetes-templates.bats:
+      - .scripts/generate-production-build-metadata.sh
       - .scripts/templates/kubernetes*.yml
       - .scripts/templates/storage-version-*.sh.ytt
       - .scripts/templates/traefik-service-template.lib.yml
@@ -168,6 +172,7 @@ deploy:
       - deploy/**
       - browse-maintenance/unavailable.html
       - design/nginx.conf
+      - package.json
     .scripts/tests/production-k3d-deploy.bats:
       - .scripts/production-k3d.sh
       - .scripts/lib/release-data-cache.sh
@@ -212,10 +217,13 @@ deploy:
       - .scripts/lib/project-metadata.sh
       - deploy/**
       - ":(glob)*/.project.yaml"
+      - browse-maintenance/unavailable.html
+      - browse-maintenance/unavailable.html
       - package.json
     .scripts/tests/production-storage.bats:
       - .scripts/lib/production-config.sh
       - .scripts/lib/production-storage.sh
+      - deploy/local.yaml
       - deploy/pi.yaml
 backup:
   tests:
@@ -271,6 +279,7 @@ restore:
       - .scripts/lib/production-recovery.sh
       - .scripts/lib/production-restore.sh
       - .scripts/lib/production-config.sh
+      - .scripts/lib/production-storage.sh
     .scripts/tests/production-k3d-restore.bats: &production-k3d-restore-inputs
       - .scripts/tests/production-k3d-restore-setup.bash
       - .scripts/production-k3d.sh
@@ -456,6 +465,8 @@ devcontainer:
       - provisioning/tests/operator-path-smoke.yml
     .scripts/tests/run-in-devcontainer.bats:
       - .scripts/run-in-devcontainer.sh
+      - .scripts/format-files.sh
+      - .scripts/format-check.sh
       - .scripts/tests/mocks/devcontainer-*
     .scripts/tests/run-integration-tests.bats:
       - .scripts/run-integration-tests.sh

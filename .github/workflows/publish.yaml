@@ -176,6 +176,7 @@ jobs:
           diff -u \
             <(printf '%s\n' "$manifest_targets" | sort) \
             <(printf '%s\n' "$selected" | sort)
+          test_status=0
           mise run --raw bazel test \
             --test_env=PATH \
             --test_env=TEST_AUTH_INGRESS=false \
@@ -184,7 +185,11 @@ jobs:
             --test_env=GITHUB_ACTIONS=true \
             --test_output=errors \
             --execution_log_json_file="$RUNNER_TEMP/bazel-script-test-execution.json" \
-            --jobs=4 --disk_cache="$HOME/.cache/bazel-disk" //:test_scripts
+            --jobs=4 --disk_cache="$HOME/.cache/bazel-disk" //:test_scripts || test_status=$?
+          testlogs=$(mise run --raw bazel info bazel-testlogs)
+          rm -rf "$RUNNER_TEMP/bazel-testlogs"
+          cp -R "$testlogs" "$RUNNER_TEMP/bazel-testlogs"
+          exit "$test_status"
 
       - name: upload Bazel rebuild explanations
         if: always()
@@ -206,6 +211,7 @@ jobs:
             ${{ runner.temp }}/bazel-format-execution.json
             ${{ runner.temp }}/bazel-check-execution.json
             ${{ runner.temp }}/bazel-script-test-execution.json
+            ${{ runner.temp }}/bazel-testlogs
           if-no-files-found: ignore
           retention-days: 7
 

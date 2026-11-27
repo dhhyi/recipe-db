@@ -6,10 +6,16 @@ if (($# != 1)); then
   exit 2
 fi
 
-workspace="${TEST_SRCDIR:+${TEST_SRCDIR}/${TEST_WORKSPACE:-}}"
-if [[ -n "$workspace" && -d "$workspace" ]]; then
-  cd -- "$workspace"
-else
-  cd -- "$(dirname -- "$0")/.."
+if [[ -n ${TEST_SRCDIR:-} && -n ${TEST_WORKSPACE:-} ]]; then
+  workspace="${TEST_SRCDIR}/${TEST_WORKSPACE}"
+  if [[ -d "$workspace" ]]; then
+    temporary=$(mktemp -d)
+    trap 'rm -rf -- "$temporary"' EXIT
+    cp -RL "$workspace"/. "$temporary"/
+    cd -- "$temporary"
+    exec bats --print-output-on-failure "$1"
+  fi
 fi
+
+cd -- "$(dirname -- "$0")/.."
 exec bats --print-output-on-failure "$1"
