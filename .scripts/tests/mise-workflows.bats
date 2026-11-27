@@ -308,10 +308,11 @@ EOF
   # shellcheck disable=SC2329
   gh() {
     if [[ "$*" == "api graphql "* ]]; then
-      jq -nc --arg title "$TITLE" --arg state "$STATE" --argjson draft "$DRAFT" --argjson nodes "$ISSUES" '
+      jq -nc --arg title "$TITLE" --arg state "$STATE" --argjson draft "$DRAFT" --argjson nodes "$ISSUES" \
+        --arg body "${BODY:-}" --arg base "${BASE:-main}" '
         ($nodes | [.[0:2], .[2:]]) | map({
-          data: {repository: {pullRequest: {
-            $title, $state, isDraft: $draft, closingIssuesReferences: {nodes: .}
+          data: {repository: {defaultBranchRef: {name: "main"}, pullRequest: {
+            $title, $state, $body, baseRefName: $base, isDraft: $draft, closingIssuesReferences: {nodes: .}
           }}}
         })'
     else
@@ -351,6 +352,43 @@ EOF
   [ "$status" -eq 0 ]
   [ ! -s "$CALLS" ]
   [ ! -s "$GITHUB_OUTPUT" ]
+}
+
+@test "PR metadata reads closing keywords for non-default base branches" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/pr-metadata.yaml"
+  script=$(yq '.jobs.reconcile.steps[] | select(.id == "metadata") | .run' "$workflow")
+  # The extracted workflow script invokes this exported mock in a child shell.
+  # shellcheck disable=SC2329
+  gh() {
+    if [[ "$*" == "api graphql "* ]]; then
+      jq -nc --arg title "$TITLE" --arg body "$BODY" --arg base "$BASE" '
+        [{data: {repository: {defaultBranchRef: {name: "main"}, pullRequest: {
+          $title, $body, baseRefName: $base, state: "OPEN", isDraft: false,
+          closingIssuesReferences: {nodes: [{number: 7, repository: {nameWithOwner: "owner/repo"}}]}
+        }}}}]'
+    else
+      printf '%s\n' "$*" >> "$CALLS"
+    fi
+  }
+  export -f gh
+  export GITHUB_REPOSITORY=owner/repo PR_NUMBER=42 GITHUB_OUTPUT="$FIXTURE_ROOT/outputs" CALLS="$FIXTURE_ROOT/calls"
+  # shellcheck disable=SC2016 # Literal backticks exercise Markdown code.
+  export TITLE='Feature (#99)' BASE=feature BODY='Closes #12, FIXES: OWNER/REPO#2
+Resolves other/repo#34
+<!-- Closes #40 -->
+`Fixes #41`
+```text
+Closes #42
+```'
+
+  run bash -eo pipefail -c "$script"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CALLS")" = 'api repos/owner/repo/pulls/42 --method PATCH --silent -f title=Feature (#2, #7, #12)' ]
+
+  : > "$CALLS"
+  run env BASE=main bash -eo pipefail -c "$script"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CALLS")" = 'api repos/owner/repo/pulls/42 --method PATCH --silent -f title=Feature (#7)' ]
 }
 
 @test "PR metadata rechecks draft status after minting the App token" {

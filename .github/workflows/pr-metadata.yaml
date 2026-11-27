@@ -38,10 +38,13 @@ jobs:
             -F number="$PR_NUMBER" -f query='
               query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) {
                 repository(owner: $owner, name: $repo) {
+                  defaultBranchRef { name }
                   pullRequest(number: $number) {
                     title
                     state
                     isDraft
+                    body
+                    baseRefName
                     closingIssuesReferences(first: 100, after: $endCursor) {
                       nodes { number repository { nameWithOwner } }
                       pageInfo { hasNextPage endCursor }
@@ -51,11 +54,22 @@ jobs:
               }')
           metadata=$(jq -ce --arg repo "$GITHUB_REPOSITORY" '
             map(.data.repository.pullRequest) as $prs
+            | .[0].data.repository.defaultBranchRef.name as $default_branch
             | $prs[0] as $pr
             | if $pr == null then error("Pull request not found") else $pr end
             | ([ $prs[].closingIssuesReferences.nodes[]
                  | select((.repository.nameWithOwner | ascii_downcase) == ($repo | ascii_downcase))
-                 | .number ] | unique | map("#\(.)") | join(", ")) as $issues
+                 | .number ]
+               + (if $pr.baseRefName != $default_branch then
+                    [ $pr.body
+                      | gsub("(?s)<!--.*?-->"; "")
+                      | gsub("(?ms)^ {0,3}(`{3,}|~{3,})[^\\n]*\\n.*?^ {0,3}(`{3,}|~{3,})[^\\n]*(\\n|$)"; "")
+                      | gsub("`[^`\\n]*`"; "")
+                      | scan("(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)[ \\t]*:?[ \\t]+(?:(?<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(?<number>[1-9][0-9]*)\\b")
+                      | select(.[0] == null or (.[0] | ascii_downcase) == ($repo | ascii_downcase))
+                      | .[1] | tonumber ]
+                  else [] end)
+               | unique | map("#\(.)") | join(", ")) as $issues
             | {
                 title,
                 open: (.state == "OPEN"),
