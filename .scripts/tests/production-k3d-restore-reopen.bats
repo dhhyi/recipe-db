@@ -5,6 +5,47 @@
 load production-k3d-setup
 load production-k3d-restore-setup
 
+@test "local reconnect preserves the active kubeconfig while exporting its replacement" {
+  mkdir -m 700 work
+  printf 'previous-kubeconfig\n' > work/kubeconfig
+  cp work/kubeconfig work/previous-kubeconfig
+  mv bin/k3d bin/k3d-base
+  cat > bin/k3d << 'EOF'
+#!/usr/bin/env bash
+if [[ $* == "kubeconfig get "* ]]; then
+  printf 'private-'
+  cmp -s "$FIXTURE_ROOT/work/kubeconfig" "$FIXTURE_ROOT/work/previous-kubeconfig" || {
+    printf 'local reader observed a truncated kubeconfig\n' >&2
+    exit 42
+  }
+  printf 'managed-kubeconfig\n'
+else
+  exec "$FIXTURE_ROOT/bin/k3d-base" "$@"
+fi
+EOF
+  chmod +x bin/k3d
+  cat > reconnect.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+work=$FIXTURE_ROOT/work
+target=local
+cluster=recipe-db-rehearsal
+context=k3d-recipe-db-rehearsal
+namespace=recipe-db
+http_port=8080
+api_port=6445
+timeout=1
+production_fail() { printf '%s\n' "$*" >&2; exit 1; }
+EOF
+  for function in kube local_identity connect; do
+    sed -n "/^$function() {/,/^}/p" .scripts/production-k3d.sh >> reconnect.sh
+  done
+  printf 'connect\n' >> reconnect.sh
+  run bash reconnect.sh
+  [ "$status" -eq 0 ]
+  [ "$(cat work/kubeconfig)" = private-managed-kubeconfig ]
+}
+
 @test "restore reopening refuses local state that differs from durable cluster state" {
   restore_fixture
   run_restore

@@ -57,6 +57,63 @@ cluster_operation_lock_kubectl() {
 EOF
 }
 
+kubeconfig_refresh_fixture() {
+  sed -n '/^connect() {/,/^}/p' "$BATS_TEST_DIRNAME/../production-k3d.sh" >> harness.sh
+  printf '{"current-context":"recipe-db-pi","generation":"old"}\n' > work/kubeconfig
+  cp work/kubeconfig work/previous-kubeconfig
+  cat >> harness.sh << 'EOF'
+target=pi
+context=recipe-db-pi
+kubectl() {
+  printf '{"current-context":'
+  cmp -s "$work/kubeconfig" "$work/previous-kubeconfig" || {
+    printf 'reader observed a truncated kubeconfig during export\n' >&2
+    return 42
+  }
+  if [[ ${FAIL_EXPORT:-false} == true ]]; then
+    printf 'kubeconfig export interrupted\n' >&2
+    return 43
+  fi
+  printf '"recipe-db-pi","generation":"new"}\n'
+}
+kube() {
+  case "$*" in
+    "config current-context") jq -er '."current-context"' "$work/kubeconfig" ;;
+    "get namespace kube-system -o name") : ;;
+    *) return 1 ;;
+  esac
+}
+mv() {
+  [[ ${FAIL_REPLACE:-false} != true ]] || return 44
+  command mv "$@"
+}
+connect
+EOF
+}
+
+@test "Pi kubeconfig refresh keeps the previous configuration readable during export" {
+  kubeconfig_refresh_fixture
+  run bash harness.sh
+  [ "$status" -eq 0 ]
+  jq -e '."current-context" == "recipe-db-pi" and .generation == "new"' work/kubeconfig
+}
+
+@test "failed Pi kubeconfig export preserves the previous complete configuration" {
+  kubeconfig_refresh_fixture
+  run env FAIL_EXPORT=true bash harness.sh
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"kubeconfig export interrupted"* ]]
+  cmp work/kubeconfig work/previous-kubeconfig
+}
+
+@test "failed Pi kubeconfig replacement reports failure and retains the old configuration" {
+  kubeconfig_refresh_fixture
+  run env FAIL_REPLACE=true bash harness.sh
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"could not replace the Pi kubeconfig"* ]]
+  cmp work/kubeconfig work/previous-kubeconfig
+}
+
 @test "recovery command claim creates and renews a Kubernetes MicroTime timestamp" {
   command_claim_fixture
   cat >> harness.sh << 'EOF'
