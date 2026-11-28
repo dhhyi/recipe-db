@@ -62,8 +62,14 @@ class RecipesTest {
   }
 
   @Test
-  void testingResetAcceptsTrailingSlash() {
-    createRecipe("{\"name\":\"Rice Pudding\"}");
+  void collectionCreateAndTestingResetAcceptTrailingSlash() {
+    given().header("Connection", "close")
+        .contentType(ContentType.JSON)
+        .body("{\"name\":\"Rice Pudding\"}")
+        .post("/recipes/")
+        .then()
+        .statusCode(201)
+        .body("name", equalTo("Rice Pudding"));
 
     given().header("Connection", "close")
         .delete("/recipes/")
