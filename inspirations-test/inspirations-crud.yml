@@ -18,6 +18,14 @@ testcases:
           method: GET
         response:
           statusCode: 404
+          headers:
+            Content-Type: application/problem+json
+          json:
+            type: about:blank
+            title: Not Found
+            status: 404
+            detail: Inspiration not found
+            code: inspiration-not-found
 
   - name: Create inspiration
     steps:
@@ -56,6 +64,40 @@ testcases:
             Content-Type: application/json
           json: ["https://www.test.com", "https://example.com"]
 
+  - name: Create another recipe's inspiration
+    steps:
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/5678"
+          method: PUT
+          json: ["https://other.example.com"]
+        response:
+          statusCode: 201
+
+  - name: Replace an existing inspiration
+    steps:
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/1234"
+          method: PUT
+          json: ["https://replacement.example.com"]
+        response:
+          statusCode: 201
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/1234"
+          method: GET
+        response:
+          statusCode: 200
+          json: ["https://replacement.example.com"]
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/5678"
+          method: GET
+        response:
+          statusCode: 200
+          json: ["https://other.example.com"]
+
   - name: Clear seeded inspirations
     steps:
       - type: tavern
@@ -83,7 +125,7 @@ testcases:
         response:
           statusCode: 204
 
-  - name: Update inspiration
+  - name: Create inspiration after reset
     steps:
       - type: tavern
         request:
@@ -132,3 +174,20 @@ testcases:
           method: GET
         response:
           statusCode: 404
+
+  - name: Delete a missing inspiration
+    steps:
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/1234"
+          method: DELETE
+        response:
+          statusCode: 404
+          headers:
+            Content-Type: application/problem+json
+          json:
+            type: about:blank
+            title: Not Found
+            status: 404
+            detail: Inspiration not found
+            code: inspiration-not-found
