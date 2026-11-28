@@ -102,7 +102,7 @@ Checks must not modify checkout files. Prefer a formatter's native non-mutating 
 
 For new supported ecosystems or manifest layouts, extend the [coverage regression suite](.scripts/tests/dependabot.bats) and its [Bazel inputs](.scripts/tests/groups.yaml). Document unsupported sources below.
 
-Enable the dependency graph, Dependabot alerts, and Dependabot security updates in GitHub repository settings. Security fixes open ordinary PRs and run the existing Publish workflow, including AMD64 quality checks and ARM64 integration tests. Review the changes and require successful checks before merging; no automatic approval or merge is configured.
+Enable the dependency graph, Dependabot alerts, and Dependabot security updates in GitHub repository settings. Review security-update PRs and require successful checks before merging.
 
 Dependabot security updates do not cover Docker/Compose images, Hex/Mix, Elm, or devcontainer dependencies, even though Dependabot supports version updates for those ecosystems. Nimble, opam, Mise pins, embedded tool downloads, and OS packages also need separate handling. Do not edit generated devcontainer or Compose files to update their dependencies; change their source configuration instead.
 
