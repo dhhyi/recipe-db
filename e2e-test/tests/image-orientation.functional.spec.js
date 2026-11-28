@@ -1,4 +1,10 @@
-import { test as base, expect, uploadImage } from "./fixtures.js";
+import {
+  test as base,
+  expect,
+  uploadImage,
+  waitForRecipeIndexed,
+  waitForRecipePageText,
+} from "./fixtures.js";
 
 const test = base.extend({
   context: async ({ ownerIdentity }, use) => {
@@ -11,7 +17,7 @@ const test = base.extend({
   },
 });
 
-test("a rotated phone photo saves the crop shown in the browser", async ({
+test("a rotated phone photo saves the browser crop and updates Browse", async ({
   page,
   request,
   demoRecipe,
@@ -40,6 +46,21 @@ test("a rotated phone photo saves the crop shown in the browser", async ({
   );
   const file = Buffer.concat([bytes.subarray(0, 2), exif, bytes.subarray(2)]);
 
+  await waitForRecipeIndexed(request, demoRecipe.id);
+  await page.goto("/");
+  const tileImage = page
+    .getByRole("link", { name: `Bild von Rezept ${demoRecipe.name}` })
+    .getByRole("img", { name: demoRecipe.name, exact: true });
+  await expect(tileImage).toBeVisible();
+  const oldThumbUrl = await tileImage.getAttribute("src");
+  await page.goto(`/recipe/${demoRecipe.id}`);
+  const recipeImage = page
+    .locator("recipe-image-carousel")
+    .getByRole("img", { name: demoRecipe.name, exact: true })
+    .first();
+  await expect(recipeImage).toBeVisible();
+  const oldImageUrl = await recipeImage.getAttribute("src");
+
   await page.addInitScript(() => {
     const send = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.send = function (body) {
@@ -59,6 +80,7 @@ test("a rotated phone photo saves the crop shown in the browser", async ({
       return send.call(this, body);
     };
   });
+  let savedImage;
   await page.route("**/graphql", async (route) => {
     const browserRequest = route.request();
     if (
@@ -72,7 +94,7 @@ test("a rotated phone photo saves the crop shown in the browser", async ({
       .not.toBeNull();
     const upload = await page.evaluate(() => window.imageUpload);
     expect(Buffer.from(upload.bytes)).toEqual(file);
-    const metadata = await uploadImage(request, demoRecipe, "phone.jpg", {
+    savedImage = await uploadImage(request, demoRecipe, "phone.jpg", {
       buffer: Buffer.from(upload.bytes),
       mimeType: "image/jpeg",
       crop: upload.crop,
@@ -80,7 +102,7 @@ test("a rotated phone photo saves the crop shown in the browser", async ({
     await route.fulfill({
       status: 200,
       contentType: "application/graphql-response+json",
-      body: JSON.stringify({ data: { addImage: metadata } }),
+      body: JSON.stringify({ data: { addImage: savedImage } }),
     });
   });
 
@@ -151,6 +173,7 @@ test("a rotated phone photo saves the crop shown in the browser", async ({
   expect(await page.evaluate(() => window.imageUpload.crop)).toEqual(crop);
   const thumbnail = page.getByRole("img", { name: /^Rezeptbild \d+$/ }).first();
   await expect(thumbnail).toBeVisible();
+  await expect(thumbnail).toHaveAttribute("src", savedImage.thumbUrl);
   await expect
     .poll(() =>
       thumbnail.evaluate(async (image, expected) => {
@@ -188,4 +211,28 @@ test("a rotated phone photo saves the crop shown in the browser", async ({
       }, expectedImage),
     )
     .toEqual({ width: 300, height: 225, matches: true });
+
+  expect(savedImage.url).not.toBe(oldImageUrl);
+  expect(savedImage.thumbUrl).not.toBe(oldThumbUrl);
+  await waitForRecipePageText(request, demoRecipe.id, savedImage.url);
+  await page
+    .getByRole("link", { name: "Zurück zum Rezept", exact: true })
+    .click();
+  await expect(recipeImage).toHaveAttribute("src", savedImage.url);
+  await expect
+    .poll(
+      async () => {
+        const response = await request.get("/");
+        return (
+          response.ok() && (await response.text()).includes(savedImage.thumbUrl)
+        );
+      },
+      {
+        message: "Browse overview reflects the new default image",
+        timeout: 15_000,
+      },
+    )
+    .toBe(true);
+  await page.getByRole("link", { name: "Zur Startseite", exact: true }).click();
+  await expect(tileImage).toHaveAttribute("src", savedImage.thumbUrl);
 });
