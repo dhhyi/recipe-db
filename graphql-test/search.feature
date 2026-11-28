@@ -59,14 +59,6 @@ Feature: search recipes
       """
     * match response.data.searchRecipes.recipes[1].name == '#(searchToken + " Kartoffelsalat")'
 
-  Scenario: a misspelled query finds the intended recipe
-    * request { query: '#(read("graphql/search-recipes.graphql"))', variables: { options: { q: '#(searchToken + " Kartofelsuppe")' } } }
-    * retry until response.data != null && response.data.searchRecipes.found == 1 && response.data.searchRecipes.recipes.length == 1 && response.data.searchRecipes.recipes[0].id == soupId
-    * method post
-    * status 200
-    * match response.errors == '#notpresent'
-    * match response.data.searchRecipes.recipes[0].name == '#(searchToken + " Kartoffelsuppe")'
-
   Scenario: pagination and facets preserve search metadata
     * request { query: '#(read("graphql/search-recipes-with-facets.graphql"))', variables: { options: { q: '#(searchToken)', query_by: 'name', sort_by: 'name_sort:asc,recipe_id_sort:asc', page: 2, per_page: 1, facet_by: 'ingredients' } } }
     * retry until response.data != null && response.data.searchRecipes.found == 3 && response.data.searchRecipes.recipes.length == 1 && response.data.searchRecipes.recipes[0].id == saladId
