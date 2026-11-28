@@ -59,8 +59,6 @@ Keep each instruction page to roughly one screen:
 - Keep verbose diagnostics in private logs as appropriate. Do not ask the operator to paste whole production logs or backups; inspect local files yourself when available.
 - Do not wait indefinitely for unrelated work. If a gate is pending, report what is pending and whether any safe preparation can proceed; do not poll silently for long periods or relax the gate.
 
-For example, after a download succeeds, locate and verify its exact output paths before preparing the next batch. Do not ask the operator to replace example paths or make them repeat information already available locally.
-
 ## Handle failures and aborts
 
 - Stop the release sequence on failure. Say which phase failed, what actually ran, whether production was touched and what remains uncertain. Do not infer safety from a generic error message.
@@ -70,7 +68,3 @@ For example, after a download succeeds, locate and verify its exact output paths
 - If a fix requires a PR, stop the release attempt, follow the operator's requested PR workflow, and identify what must be revalidated after merge. Do not quietly continue using unmerged fixes or an older artifact.
 - If the operator aborts, stop advancing the release. Report the observed production and maintenance state, retained evidence and any recovery still required. Aborting does not authorize automatic cleanup, rollback, reopening access or a later resumed release attempt.
 - Respect a change of scope immediately, including "no more releases this session" or "leave this draft uncommitted."
-
-Reusable starting prompt:
-
-> Use the release-recipe-db skill for a fresh production release. Read the current release cookbook and production configuration guide as the sources of truth. First agree with me which read-only checks, if any, you may run; announce those checks before execution and report their results. Use calm, direct and simple language. Give me a short overview, then one small command batch at a time: why, where, impact and expected result. Find configuration values and exact paths, double-check that no placeholders remain, use fish-compatible workstation commands, and wait for my result on operator-run batches before continuing. Do not make production changes without my explicit confirmation. We finish this attempt in this session or abort it.

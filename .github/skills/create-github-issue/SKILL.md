@@ -11,14 +11,12 @@ This skill covers new issues; to revise or refine an existing issue, use the `re
 
 Before drafting:
 
-1. Read and follow the repository's [issue planning and refinement process](../../../CONTRIBUTING.md#issue-planning-and-refinement).
+1. Read and follow the repository's [issue planning and refinement process](../../../CONTRIBUTING.md#issue-planning-and-refinement) and [relationship rules](../../../CONTRIBUTING.md#hierarchy-dependencies-and-completion).
 2. Use repository context and the user's description to write a clear, scoped issue. Do not invent reproduction details or settled requirements.
 
 ## Confirm before filing
 
 Present the proposed title, complete body, and applicable metadata in chat. Then use the `ask_user` tool to ask whether the user approves creating the issue with that proposal. Use a yes/no question. Do not create the issue unless the user answers yes. A request to draft an issue is never authorization to file it.
-
-Do not add, remove, or change native issue relationships (parent/sub-issue, blocked-by, or relates-to) without explicit authorization covering those specific changes.
 
 ## Create and verify
 

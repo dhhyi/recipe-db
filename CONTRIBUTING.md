@@ -47,31 +47,23 @@ Documentation consists of two types: **cookbooks**, which help readers complete 
 
 The Playwright screenshot baselines use Git LFS. Install Git LFS in the environment where you run Git, then run `git lfs install` before cloning or updating the repository. If you already have a checkout with pointer files, run `git lfs pull` to download the images before running E2E tests or updating baselines. `git lfs ls-files` marks downloaded files with `*` and pointers with `-`.
 
-The ARM64 CI validation job downloads the baselines; jobs that do not run visual tests leave them as pointers.
-
-The recipe tag dialog uses viewport screenshots so the capture does not extend below the modal backdrop.
-
-E2E fixtures disable View Transitions by default, and the Playwright configuration requests reduced motion. Tests specifically covering View Transitions opt in with `test.extend({ viewTransitions: true })`; tests covering CSS motion also select `reducedMotion: "no-preference"`.
-
 ## Devcontainer synchronization
 
 Run `mise run sync-devcontainers` to synchronize all projects, or `mise run sync-devcontainer:graphql` for one project. Tasks skip generation when their inputs and declared outputs are unchanged. Use `mise run --force sync-devcontainer:graphql` to regenerate explicitly, including when adopting upstream generator or base-image changes that local file dependencies cannot detect.
 
-When adding, renaming, or removing a project, update its task in [.mise/tasks/devcontainers-sync.toml](.mise/tasks/devcontainers-sync.toml). Each task invokes the generator directly, reads its project's `.project.yaml`, and declares the generated devcontainer JSON, Dockerfile, and update script as outputs. Also declare `.vscode/tasks.json` for projects with editor tasks; editor settings are embedded in the devcontainer JSON. Do not declare entire output directories, which can contain runtime lock files or unrelated editor settings.
+When adding, renaming, or removing a project, update its task in [.mise/tasks/devcontainers-sync.toml](.mise/tasks/devcontainers-sync.toml). Declare the generated devcontainer JSON, Dockerfile, and update script as outputs. Also declare `.vscode/tasks.json` for projects with editor tasks. Do not declare entire output directories, which can contain runtime lock files or unrelated editor settings.
 
 Run `mise run test-scripts .scripts/tests/mise-tasks.bats` to verify project coverage, freshness, and failure handling.
 
 ## Ignore-file synchronization
 
-`mise run sync-ignore-files` skips unchanged inputs. It tracks root ignore rules, project metadata, project ignore rules, and Dockerfiles; missing generated ignore files trigger regeneration. Creating an obsolete project `.prettierignore` triggers its removal.
-
-Project-local Docker ignores exclude the Dockerfile by default; Design applies the same default to its repository-root context. Declare additional patterns in the second document of a project's `.project.yaml` under `docker.ignore`. The generator adds them to that project's `.dockerignore` for project-local build contexts. Design's repository-root context also applies its project rules; other repository-root contexts use the root `.dockerignore` instead. Use Docker ignore syntax and preserve files required by the build.
+Run `mise run sync-ignore-files` to synchronize generated ignore files. Declare additional Docker ignore patterns under `docker.ignore` in the second document of a project's `.project.yaml`. Use Docker ignore syntax and preserve files required by the build. Project-local contexts use the generated project `.dockerignore`; Design's root context also applies its project rules, while other root contexts use the root `.dockerignore`.
 
 ## Generated source synchronization
 
-`mise run merge-graphql-schemas` tracks the canonical cached SDL and project metadata, deriving consumer output paths from `graphqlSchema`. Distribution skips unchanged copies and repairs edited or missing copies. The schema-export prerequisite still checks whether the canonical SDL needs rebuilding before distribution can skip.
+Run `mise run merge-graphql-schemas` to distribute the GraphQL schema to projects declaring `graphqlSchema`.
 
-`mise run sync-tailwind` tracks project metadata, ignore rules and the design Dockerfile, generating the shared stylesheet, Docker COPY block and Dockerfile-specific ignore file only when needed. Declare project-relative files or directories under `tailwind.sources`; optionally exclude project-relative paths or globs using `*`, `**` and `?` under `tailwind.ignore`. Exclusions apply both to Tailwind scanning and the Design Docker context. The ignore file includes Design and the declared Tailwind sources, subject to root rules, common project rules and Design's `docker.ignore` rules. Design's `.gitignore` is not used because it excludes the generated Tailwind stylesheet required by the image build. Its `check-tailwind-sources` prerequisite always validates declared paths with one metadata read. Editing source contents does not regenerate the path lists; removing a declared file or directory still fails validation, even on a generation cache hit.
+Run `mise run sync-tailwind` to synchronize shared Tailwind sources. See the [Tailwind guidance](design/README.md#tailwind-css) for declaring sources and exclusions.
 
 ## Bazel rule freshness
 
@@ -87,7 +79,7 @@ Declare project commands in the second document of `.project.yaml`. Keep their r
 - `integration` is optional and available only for `category: test` projects; a `-test` directory suffix is not required. The runner executes it in the project's existing test-profile Compose service; the declaration does not create another service. Missing keys are ignored; blank scripts do nothing and produce a warning annotation in GitHub Actions.
 - `format` remains separate from both checks and tests.
 
-The integration runner passes the declared script to a one-off Compose job; it does not change the service's normal startup command. Start the development stack before running it.
+Start the development stack before running integration tests.
 
 Declare formatting in the second document of `.project.yaml`:
 
@@ -102,19 +94,17 @@ format:
 
 Declare `format` as an ordered list of formatter entries. Each entry has its own `check`, `apply`, and `files`, so mixed-language projects can run the appropriate tool only on its selected files. Format checks and applies run sequentially in list order, both directly and through the single project-level Bazel format target.
 
-Checks must not modify checkout files. Prefer a formatter's native non-mutating verification mode for each entry's `check`. When a formatter has no verification mode, declare `check: format-check-copy $format_apply $argv`: it runs that entry's `apply` command on temporary source/configuration copies inside the devcontainer and compares the selected files. It returns 3 for formatting differences and 2 for formatter errors. Bazel-backed precommit treats any nonzero check status as a signal to apply all formatter entries in order, then rechecks; formatter and recheck failures remain fatal. CI only checks. Precommit uses cacheable Bazel checks, applies only when formatting is needed, then rechecks to cache the formatted state. Keep formatter configuration and tool/version declarations in the project so their changes invalidate its check; root documentation does not. For formatters that only accept a whole project, use `format-apply-copy 'formatter command' $argv` to copy back only selected files, paired with `format-check-copy 'formatter command' $argv`.
+Checks must not modify checkout files. Prefer a formatter's native non-mutating verification mode for each entry's `check`. When a formatter has no verification mode, declare `check: format-check-copy $format_apply $argv`: it runs that entry's `apply` command on temporary source/configuration copies inside the devcontainer and compares the selected files. CI only checks. Keep formatter configuration and tool/version declarations in the project so their changes invalidate its check; root documentation does not. For formatters that only accept a whole project, use `format-apply-copy 'formatter command' $argv` to copy back only selected files, paired with `format-check-copy 'formatter command' $argv`.
 
 ## Dependency security updates
 
-[Dependabot configuration](.github/dependabot.yml) covers all tracked npm/pnpm, Cargo, Go, pip, Maven, Gradle, and GitHub Actions dependency sources. Every entry sets `open-pull-requests-limit: 0`, disabling routine version-update PRs without disabling security-update PRs. The required `schedule` does not delay security fixes until a nightly window.
+[Dependabot configuration](.github/dependabot.yml) covers npm/pnpm, Cargo, Go, pip, Maven, Gradle, and GitHub Actions dependency sources. The security-only policy disables routine version-update PRs with `open-pull-requests-limit: 0`.
 
-When adding a project or manifest, add its supported dependency sources to that configuration in the same change. The [coverage regression suite](.scripts/tests/dependabot.bats) discovers root-level projects' supported manifests and fails when a directory is missing or duplicated. New supported ecosystems or manifest layouts must also extend the suite's discovery and [Bazel inputs](.scripts/tests/groups.yaml); document unsupported sources below instead of silently omitting them.
+For new supported ecosystems or manifest layouts, extend the [coverage regression suite](.scripts/tests/dependabot.bats) and its [Bazel inputs](.scripts/tests/groups.yaml). Document unsupported sources below.
 
-Enable the dependency graph, Dependabot alerts, and Dependabot security updates in GitHub repository settings. Security fixes open ordinary PRs and run the existing Publish workflow, including AMD64 quality checks and ARM64 integration tests. Review the changes and require successful checks before merging; no automatic approval or merge is configured.
+Enable the dependency graph, Dependabot alerts, and Dependabot security updates in GitHub repository settings. Review security-update PRs and require successful checks before merging.
 
 Dependabot security updates do not cover Docker/Compose images, Hex/Mix, Elm, or devcontainer dependencies, even though Dependabot supports version updates for those ecosystems. Nimble, opam, Mise pins, embedded tool downloads, and OS packages also need separate handling. Do not edit generated devcontainer or Compose files to update their dependencies; change their source configuration instead.
-
-For pnpm 12 two-document lockfiles, GitHub fixed application dependency detection, but an existing graph may need rebuilding. Use **Security → Dependabot alerts → ⋯ → Refresh Dependabot alerts**, then verify application package names and versions in the dependency graph or its SBOM export. Do not treat disappearing alerts as proof of remediation. The package-manager environment document and dependency scope classification may still have coverage limitations. See [GitHub's dependency graph troubleshooting](https://docs.github.com/en/code-security/reference/supply-chain-security/troubleshoot-dependabot/dependency-graph-errors) and [supported ecosystems](https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories).
 
 ## Issue planning and refinement
 

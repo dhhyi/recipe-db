@@ -12,6 +12,8 @@ Do not add new content to README.md files unless the user explicitly asks for it
 
 Follow the [documentation guidelines in CONTRIBUTING.md](CONTRIBUTING.md#documentation) when writing or revising documentation.
 
+Before changing `CONTRIBUTING.md`, `AGENTS.md`, repository skills, or agent definitions, propose the specific edits and wait for approval.
+
 Do not add or change documentation about specific migrators in the `docs/` folder.
 
 ## Local demo Compose cluster
@@ -19,12 +21,6 @@ Do not add or change documentation about specific migrators in the `docs/` folde
 - The local development/demo Docker Compose project is disposable: agents may independently reset, destroy, and [reseed its demo data](demo-data/README.md), which can be reconstructed.
 - Agents may independently change its credential-free default role to `anonymous`, `member`, or `owner`; see [local identity configuration](docs/browser-authentication.md#local-credential-free-and-token-identities).
 - Verify the target is the intended local demo Compose project before acting; avoid affecting other users or unrelated data. This permission excludes production, shared, and other environments. Preserve secrets and do not weaken production defaults.
-
-## Dependency coverage for new projects
-
-When adding a project or dependency manifest, update [.github/dependabot.yml](.github/dependabot.yml) in the same change for every source supported by Dependabot security updates. Preserve the security-only policy (`open-pull-requests-limit: 0`). If introducing another supported ecosystem or manifest layout, extend discovery and Bazel inputs for [.scripts/tests/dependabot.bats](.scripts/tests/dependabot.bats) so future omissions fail CI. For unsupported sources, document the coverage gap in [CONTRIBUTING.md](CONTRIBUTING.md#dependency-security-updates); do not claim they are scanned or enable routine version updates without approval.
-
-Verify coverage with `mise run test-scripts .scripts/tests/dependabot.bats`. The suite also runs in pre-commit and CI.
 
 ## GraphQL access boundary
 
@@ -38,8 +34,6 @@ When developing or changing a service, follow the [backup-participant checklist]
 
 Follow [issue planning and refinement](CONTRIBUTING.md#issue-planning-and-refinement) and [completion rules](CONTRIBUTING.md#hierarchy-dependencies-and-completion).
 
-- Propose refinement changes and wait for confirmation before modifying issues. Plan approval does not authorize implementation; documentation edits count as implementation.
-- Keep PR-backed issues open until merge; use a closing keyword in the PR. Report pending review accurately in umbrellas and dependencies.
 - Create future-work issues only when asked; reuse existing issues and preserve their agreed scope and discussion.
 
 ## Operator shell contexts
@@ -91,7 +85,7 @@ At the start of work in any new or otherwise uninitialized worktree, always run 
 
 When running checks, linting, or regression tests for Bazel scripts, run them directly on the host from the repository root, not inside any project's devcontainer. This is an exception to the project-tooling and precommit-check rules.
 
-For a single topic group, use `mise run test-scripts <group>` or `mise run --raw bazel test --test_output=errors //:test_scripts_<group>`. For one suite, use `mise run test-scripts .scripts/tests/<suite>.bats` or test `//:test_scripts_suite_<suite>`. Use the `bazel` Mise task for direct Bazel commands, as the hook and CI do: it constructs PATH from Mise-managed tool directories, the Mise executable's directory and fixed system directories (`/usr/local/bin:/usr/bin:/bin`), excluding caller-specific Git/VS Code paths. Pass `--test_env=PATH` for test invocations explicitly. Groups and each suite's explicit inputs are defined in `.scripts/tests/groups.yaml`: `compose`, `release`, `deploy`, `backup`, `restore`, `tasks`, `workflows`, `precommit`, `freshness`, `devcontainer`, `formatting`, and `tooling`. Each suite is an independent native Bazel `sh_test`; group and all-suite targets aggregate them with `test_suite`. Assign every new Bats suite to exactly one group and list its inputs; generation rejects unassigned suites and patterns matching no files.
+For a single topic group, use `mise run test-scripts <group>` or `mise run --raw bazel test --test_output=errors //:test_scripts_<group>`. For one suite, use `mise run test-scripts .scripts/tests/<suite>.bats` or test `//:test_scripts_suite_<suite>`. Use the `bazel` Mise task for direct Bazel commands and pass `--test_env=PATH` for test invocations. Assign every new Bats suite to exactly one group and list its inputs in `.scripts/tests/groups.yaml`; generation rejects unassigned suites and patterns matching no files.
 
 Project generator, format, and check commands invoked by Bazel must still run in their respective devcontainers.
 

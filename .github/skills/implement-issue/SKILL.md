@@ -9,7 +9,7 @@ description: Implement a GitHub issue or story, validate it, and obtain independ
 - Read the issue, discussion, applicable decisions, parent contract, and blockers. Implement only an authorized, settled `spec` with resolved blockers.
 - Track every requirement and acceptance criterion; inspect relevant code and preserve unrelated changes. Ask the user about serious conflicts, unresolved decisions, or blockers.
 - Implement the agreed scope and run targeted checks using repository/project instructions. Delegate other work when useful. Update documentation only as needed and follow the [documentation guidelines](../../../CONTRIBUTING.md#documentation).
-- When backend behavior changes, check affected mocks and update their error codes, returned fields and data available after errors. Follow the [mock checking and updating guidance](../../../docs/testing.md#checking-and-updating-mocks); passing the schema check does not prove that a mock matches backend behavior. Run applicable targeted validation and supply reviewers with the mock updates or the reasoning that existing fixtures remain valid.
+- When backend behavior changes, check and update affected mocks using the [mock guidance](../../../docs/testing.md#checking-and-updating-mocks). Supply reviewers with the updates or explain why existing fixtures remain valid.
 - Follow the repository's checkpoint policy and the user's branch, commit, and publication constraints.
 
 ## Independent reviews
@@ -22,5 +22,3 @@ description: Implement a GitHub issue or story, validate it, and obtain independ
 - Let reviewers inspect the actual files and derive their own findings. They may review in parallel; keep the snapshot stable. If any required review is unavailable or blocked, report the incomplete review rather than substituting self-review.
 - Address valid findings, rerun affected checks, and request follow-up from affected reviewers. Explain rejected findings and report any unresolved or unverified work.
 - Report the linked issue with its title, changes, validation, review outcomes, and blockers. Keep PR-backed issues open until merge; do not change issue metadata or create follow-up issues without authorization.
-
-Example: "Implement this issue and leave changes uncommitted."

@@ -105,6 +105,8 @@ Within those boundaries:
 - **Mocked browser tests** assert rendered behavior, accessibility, focus, interaction and frontend requests to mocked backends.
 - **Real-stack E2E tests** remain black-box: assert what a user or external consumer can observe, including cross-application navigation and real persistence. Avoid exhaustive lower-level cases.
 
+E2E fixtures disable View Transitions by default, and the Playwright configuration requests reduced motion. Tests specifically covering View Transitions opt in with `test.extend({ viewTransitions: true })`; tests covering CSS motion also select `reducedMotion: "no-preference"`.
+
 ### Screenshots and explicit assertions
 
 Screenshots are an assertion method, not another testing bucket. Both mocked browser tests and real-stack E2E tests may use them.
