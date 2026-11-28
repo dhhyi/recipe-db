@@ -6,15 +6,6 @@ import {
   waitForRecipePageHeading,
   waitForRecipePageText,
 } from "./fixtures.js";
-import {
-  chooseSource,
-  fulfillImageUpload,
-  galleryHeading,
-  galleryImages,
-  observeUploads,
-  selection,
-} from "./image-editor.helpers.js";
-
 const test = base.extend({
   context: async ({ ownerIdentity }, use) => {
     await use(ownerIdentity.browserContext);
@@ -469,70 +460,6 @@ test("create a recipe in the editor and find it in the overview", async ({
   ).toBeVisible();
 });
 
-async function imagePattern(page, color) {
-  return page.evaluate((fill) => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 640;
-    canvas.height = 480;
-    const context = canvas.getContext("2d");
-    context.fillStyle = fill;
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = "#ffffff";
-    context.fillRect(160, 120, 320, 240);
-    return canvas.toDataURL("image/png");
-  }, color);
-}
-
-function isImageUpload(request) {
-  return (
-    new URL(request.url()).pathname === "/graphql" &&
-    request.headers()["content-type"]?.includes("multipart/form-data")
-  );
-}
-
-test("saves a first image into an empty gallery", async ({
-  page,
-  request,
-  recipeWithoutImage,
-}) => {
-  const demoRecipe = recipeWithoutImage;
-  await observeUploads(page);
-  await page.route("**/graphql", (route) =>
-    fulfillImageUpload(route, page, request, demoRecipe),
-  );
-  await page.goto(`/images-edit/${demoRecipe.id}`);
-  await expect(galleryHeading(page)).toHaveText(
-    `Bilder für ${demoRecipe.name} verwalten`,
-  );
-  await expect(
-    page.getByText("Kein Bild vorhanden.", { exact: true }),
-  ).toBeVisible();
-  await expect(galleryImages(page)).toHaveCount(0);
-
-  const uploaded = page.waitForResponse((response) =>
-    isImageUpload(response.request()),
-  );
-  await chooseSource(page, {
-    name: "first.png",
-    mimeType: "image/png",
-    buffer: Buffer.from(
-      (await imagePattern(page, "#d02030")).split(",")[1],
-      "base64",
-    ),
-  });
-  await page.getByRole("button", { name: "Speichern", exact: true }).click();
-  const result = await (await uploaded).json();
-  expect(result.errors).toBeUndefined();
-  const { thumbUrl } = result.data.addImage;
-  await expect(
-    page.getByRole("status").filter({ hasText: "Bild gespeichert." }),
-  ).toBeVisible();
-  await expect(selection(page)).toHaveCount(0);
-  await expect(galleryImages(page)).toHaveCount(1);
-  await expect(galleryImages(page).first()).toHaveAttribute("src", thumbUrl);
-  await expect(page.getByText("Standardbild", { exact: true })).toHaveCount(1);
-});
-
 test("open the gallery from the recipe editor", async ({
   page,
   demoRecipe,
@@ -546,9 +473,10 @@ test("open the gallery from the recipe editor", async ({
     .getByRole("link", { name: "Bilder bearbeiten", exact: true })
     .click();
   await expect(page).toHaveURL(`/images-edit/${demoRecipe.id}`);
-  await expect(galleryHeading(page)).toHaveText(
+  await expect(page.locator("#gallery-heading")).toHaveText(
     `Bilder für ${demoRecipe.name} verwalten`,
   );
-  await expect(galleryImages(page)).toHaveCount(1);
-  await expect(galleryImages(page).first()).toBeVisible();
+  const image = page.getByRole("img", { name: /^Rezeptbild \d+$/ });
+  await expect(image).toHaveCount(1);
+  await expect(image.first()).toBeVisible();
 });

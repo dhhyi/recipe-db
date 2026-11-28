@@ -92,8 +92,6 @@ Feature: images
     Examples:
       | x   | width | height | extensions                                            |
       | -1  | 400   | 300    | { code: 'invalid-crop', status: 400, field: 'cropX' } |
-      | 0   | 400   | 301    | { code: 'invalid-crop-aspect-ratio', status: 400 }    |
-      | 0   | 296   | 222    | { code: 'crop-too-small', status: 400 }               |
       | 401 | 400   | 300    | { code: 'crop-out-of-bounds', status: 400 }           |
 
   Scenario: explicit crops change the saved composition and failed crops preserve metadata

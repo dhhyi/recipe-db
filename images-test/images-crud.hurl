@@ -71,6 +71,8 @@ header "Cache-Control" == "public, max-age=31536000, immutable"
 header "Content-Length" toInt == {{size_a}}
 sha256 toHex == "{{normal_hash_a}}"
 bytes startsWith hex,89504e470d0a1a0a;
+# PNG IHDR width and height: 648x486.
+bytes contains hex,4948445200000288000001e6;
 
 GET {{WEB_API}}{{thumb_a}}
 HTTP 200
@@ -78,6 +80,8 @@ HTTP 200
 header "Cache-Control" == "public, max-age=31536000, immutable"
 sha256 toHex == "{{thumb_hash_a}}"
 bytes startsWith hex,89504e470d0a1a0a;
+# PNG IHDR width and height: 300x225.
+bytes contains hex,494844520000012c000000e1;
 
 GET {{WEB_API}}{{normal_a}}
 If-None-Match: {{etag_a}}
