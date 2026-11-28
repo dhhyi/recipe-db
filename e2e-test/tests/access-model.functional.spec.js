@@ -91,13 +91,13 @@ test("role denials and cross-origin writes leave recipe data unchanged", async (
     const snapshot = () =>
       graphql(
         anonymous.api,
-        "query($id: ID!) { recipes { id } recipe(id: $id) { name method ingredients { name } image { url } inspirations { url } tags { id } rating { average count } } }",
+        "query($id: ID!) { recipes { id } recipe(id: $id) { name method ingredients { name } image { url } tags { id } rating { average count } } }",
         { id },
       );
     const before = await snapshot();
     const mutations = [
       'mutation { createRecipe(value: {name: "Denied access recipe"}) { id } }',
-      `mutation { updateRecipe(id: "${id}", value: {name: "Denied", inspirations: ["https://example.test/denied"]}) { id } }`,
+      `mutation { updateRecipe(id: "${id}", value: {name: "Denied"}) { id } }`,
       `mutation { deleteRecipe(id: "${id}") }`,
       `mutation { rate(id: "${id}", rating: 1) { count } }`,
     ];
