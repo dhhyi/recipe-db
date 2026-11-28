@@ -3,8 +3,6 @@ name: commit
 description: Commit staged or unstaged changes. Use when asked to commit, save work, or check in code.
 ---
 
-<!-- Customize this skill and select save to override its behavior. Delete that copy to restore the built-in behavior. -->
-
 # Commit Changes
 
 ## Guidelines
