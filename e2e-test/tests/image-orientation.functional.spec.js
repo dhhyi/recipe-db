@@ -17,11 +17,24 @@ const test = base.extend({
   },
 });
 
-test("a rotated phone photo saves the browser crop and updates Browse", async ({
+test("a new recipe's first rotated photo saves the browser crop and appears in Browse", async ({
   page,
   request,
-  demoRecipe,
 }) => {
+  const name = "E2E rotated photo";
+  await page.goto("/");
+  await page.locator("[data-add-recipe]").click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    "Neues Rezept",
+  );
+  await page.getByRole("textbox", { name: "Name", exact: true }).fill(name);
+  await page.locator("#ingredient-amount-unit-0").fill("250 ml");
+  await page.locator("#ingredient-name-0").fill("Milch");
+  await page.locator("#method").fill("Milch erwärmen.");
+  await page.getByRole("button", { name: "Speichern", exact: true }).click();
+  await expect(page).toHaveURL(/\/edit\/[0-9a-f-]{36}$/);
+  const recipe = { id: new URL(page.url()).pathname.split("/").at(-1), name };
+
   const jpeg = await page.evaluate(() => {
     const canvas = document.createElement("canvas");
     canvas.width = 1200;
@@ -46,20 +59,18 @@ test("a rotated phone photo saves the browser crop and updates Browse", async ({
   );
   const file = Buffer.concat([bytes.subarray(0, 2), exif, bytes.subarray(2)]);
 
-  await waitForRecipeIndexed(request, demoRecipe.id);
-  await page.goto("/");
+  await waitForRecipeIndexed(request, recipe.id);
   const tileImage = page
-    .getByRole("link", { name: `Bild von Rezept ${demoRecipe.name}` })
-    .getByRole("img", { name: demoRecipe.name, exact: true });
-  await expect(tileImage).toBeVisible();
-  const oldThumbUrl = await tileImage.getAttribute("src");
-  await page.goto(`/recipe/${demoRecipe.id}`);
+    .getByRole("link", { name: `Bild von Rezept ${recipe.name}` })
+    .getByRole("img", { name: recipe.name, exact: true });
+  await page
+    .getByRole("link", { name: "Zurück zum Rezept", exact: true })
+    .click();
   const recipeImage = page
     .locator("recipe-image-carousel")
-    .getByRole("img", { name: demoRecipe.name, exact: true })
+    .getByRole("img", { name: recipe.name, exact: true })
     .first();
-  await expect(recipeImage).toBeVisible();
-  const oldImageUrl = await recipeImage.getAttribute("src");
+  await expect(recipeImage).toHaveCount(0);
 
   await page.addInitScript(() => {
     const send = XMLHttpRequest.prototype.send;
@@ -94,7 +105,7 @@ test("a rotated phone photo saves the browser crop and updates Browse", async ({
       .not.toBeNull();
     const upload = await page.evaluate(() => window.imageUpload);
     expect(Buffer.from(upload.bytes)).toEqual(file);
-    savedImage = await uploadImage(request, demoRecipe, "phone.jpg", {
+    savedImage = await uploadImage(request, recipe, "phone.jpg", {
       buffer: Buffer.from(upload.bytes),
       mimeType: "image/jpeg",
       crop: upload.crop,
@@ -106,7 +117,19 @@ test("a rotated phone photo saves the browser crop and updates Browse", async ({
     });
   });
 
-  await page.goto(`/images-edit/${demoRecipe.id}`);
+  await page.getByRole("button", { name: "Bearbeiten", exact: true }).click();
+  await page
+    .getByRole("link", { name: "Bilder bearbeiten", exact: true })
+    .click();
+  await expect(page).toHaveURL(`/images-edit/${recipe.id}`);
+  await expect(page.locator("#gallery-heading")).toHaveText(
+    `Bilder für ${recipe.name} verwalten`,
+  );
+  const galleryImages = page.getByRole("img", { name: /^Rezeptbild \d+$/ });
+  await expect(
+    page.getByText("Kein Bild vorhanden.", { exact: true }),
+  ).toBeVisible();
+  await expect(galleryImages).toHaveCount(0);
   const input = page.getByLabel("Bild hinzufügen");
   await expect(input).toBeEnabled();
   await input.setInputFiles({
@@ -170,8 +193,14 @@ test("a rotated phone photo saves the browser crop and updates Browse", async ({
   await expect(
     page.getByRole("status").filter({ hasText: "Bild gespeichert." }),
   ).toBeVisible();
+  await expect(selection).toHaveCount(0);
+  await expect(
+    page.getByText("Kein Bild vorhanden.", { exact: true }),
+  ).toHaveCount(0);
+  await expect(galleryImages).toHaveCount(1);
+  await expect(page.getByText("Standardbild", { exact: true })).toHaveCount(1);
   expect(await page.evaluate(() => window.imageUpload.crop)).toEqual(crop);
-  const thumbnail = page.getByRole("img", { name: /^Rezeptbild \d+$/ }).first();
+  const thumbnail = galleryImages.first();
   await expect(thumbnail).toBeVisible();
   await expect(thumbnail).toHaveAttribute("src", savedImage.thumbUrl);
   await expect
@@ -212,9 +241,7 @@ test("a rotated phone photo saves the browser crop and updates Browse", async ({
     )
     .toEqual({ width: 300, height: 225, matches: true });
 
-  expect(savedImage.url).not.toBe(oldImageUrl);
-  expect(savedImage.thumbUrl).not.toBe(oldThumbUrl);
-  await waitForRecipePageText(request, demoRecipe.id, savedImage.url);
+  await waitForRecipePageText(request, recipe.id, savedImage.url);
   await page
     .getByRole("link", { name: "Zurück zum Rezept", exact: true })
     .click();
