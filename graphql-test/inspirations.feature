@@ -55,6 +55,31 @@ Feature: inspirations
       }
       """
 
+  Scenario: replacing inspirations and updating another field preserve the intended URLs
+    * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'test', inspirations: ['https://original.example.com'] } } }
+    * method post
+    * status 200
+    * def recipeId = response.data.createRecipe.id
+    * match recipeId == '#string'
+
+    * request { query: '#(read("graphql/update-recipe.graphql"))', variables: { id: '#(recipeId)', value: { inspirations: ['https://replacement.example.com', 'https://second.example.com'] } } }
+    * method post
+    * status 200
+    * match response.data.updateRecipe.id == recipeId
+    * request { query: '#(read("graphql/recipe-inspirations-by-id.graphql"))', variables: { id: '#(recipeId)' } }
+    * method post
+    * status 200
+    * match response.data.recipe.inspirations == [{ url: 'https://replacement.example.com' }, { url: 'https://second.example.com' }]
+
+    * request { query: '#(read("graphql/update-recipe.graphql"))', variables: { id: '#(recipeId)', value: { name: 'renamed' } } }
+    * method post
+    * status 200
+    * match response.data.updateRecipe.name == 'renamed'
+    * request { query: '#(read("graphql/recipe-inspirations-by-id.graphql"))', variables: { id: '#(recipeId)' } }
+    * method post
+    * status 200
+    * match response.data.recipe.inspirations == [{ url: 'https://replacement.example.com' }, { url: 'https://second.example.com' }]
+
   Scenario Outline: should be able to remove inspirations from recipe by sending <value>
     * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'test', inspirations: ['https://example.com'] } } }
     * method post
