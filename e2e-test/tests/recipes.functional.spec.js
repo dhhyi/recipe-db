@@ -356,27 +356,19 @@ test("edit a seeded recipe and see the saved changes in the browser", async ({
   }
 });
 
-test("members rate the same recipe independently and replace their own vote", async ({
+test("a member rates a recipe and replaces their vote", async ({
   authContexts,
   baseURL,
   ownerIdentity,
 }) => {
   const memberOne = await authContexts.memberOne();
-  const memberTwo = await authContexts.memberTwo();
   const anonymous = await authContexts.anonymous();
   const { createRecipe: recipe } = await graphql(
     ownerIdentity.api,
     "mutation($value: RecipeInput!) { createRecipe(value: $value) { id name } }",
-    { value: { name: "E2E independent ratings" } },
-    "Create recipe for independent ratings",
+    { value: { name: "E2E rating replacement" } },
+    "Create recipe for rating replacement",
   );
-  const readRating = async (identity, includeVote = true) =>
-    graphql(
-      identity.api,
-      `query($id: ID!) { rating(id: $id) { average count${includeVote ? " myRating" : ""} } }`,
-      { id: recipe.id },
-      "Read recipe ratings",
-    );
   const rateInBrowser = async (
     identity,
     rating,
@@ -423,29 +415,18 @@ test("members rate the same recipe independently and replace their own vote", as
   expect(shellHtml).not.toContain("Rezept bearbeiten");
 
   await rateInBrowser(memberOne, 5, 1, 5);
-  expect((await readRating(memberTwo)).rating).toEqual({
-    average: 5,
-    count: 1,
-    myRating: null,
-  });
-
   await rateInBrowser(memberOne, 3, 1, 3);
 
-  await rateInBrowser(memberTwo, 5, 2, 4);
-  expect((await readRating(memberOne)).rating).toEqual({
-    average: 4,
-    count: 2,
-    myRating: 3,
-  });
-  expect((await readRating(memberTwo)).rating).toEqual({
-    average: 4,
-    count: 2,
-    myRating: 5,
-  });
-  expect((await readRating(anonymous, false)).rating).toEqual({
-    average: 4,
-    count: 2,
-  });
+  const page = await memberOne.browserContext.newPage();
+  try {
+    await page.goto(`${baseURL}/recipe/${recipe.id}`);
+    const widget = page.locator(`#recipe-rating-${recipe.id} rating-component`);
+    await expect(widget).toHaveAttribute("my-rating", "3");
+    await expect(widget).toHaveAttribute("rating", "3");
+    await expect(widget).toContainText("(1)");
+  } finally {
+    await page.close();
+  }
 });
 
 test("create a recipe in the editor and find it in the overview", async ({

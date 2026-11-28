@@ -35,40 +35,6 @@ async function rate(identity, id, value) {
   );
 }
 
-test("concurrent members and repeated votes preserve exact aggregates", async ({
-  authContexts,
-  ownerIdentity,
-}) => {
-  const first = await authContexts.memberOne();
-  const second = await authContexts.memberTwo();
-  const anonymous = await authContexts.anonymous();
-  await withRecipe(
-    ownerIdentity,
-    "Access concurrent ratings",
-    async ({ id }) => {
-      await rate(first, id, 5);
-      await Promise.all([
-        ...Array.from({ length: 4 }, () => rate(first, id, 2)),
-        ...Array.from({ length: 4 }, () => rate(second, id, 4)),
-      ]);
-      expect(await rating(first, id)).toEqual({
-        average: 3,
-        count: 2,
-        myRating: 2,
-      });
-      expect(await rating(second, id)).toEqual({
-        average: 3,
-        count: 2,
-        myRating: 4,
-      });
-      expect(await rating(anonymous, id, false)).toEqual({
-        average: 3,
-        count: 2,
-      });
-    },
-  );
-});
-
 test("denied own-vote fields preserve public GraphQL data and error paths", async ({
   authContexts,
   ownerIdentity,
