@@ -67,7 +67,7 @@ Feature: images
     * match header Content-Type contains 'image/png'
     * assert responseBytes.length > 0
 
-  Scenario Outline: crop validation errors preserve backend extensions
+  Scenario: crop validation errors preserve backend extensions
     * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'invalid crop' } } }
     * method post
     * status 200
@@ -76,7 +76,7 @@ Feature: images
       """
       {
         "query": "mutation($id: ID!, $file: Upload!, $crop: ImageCropInput) { addImage(recipeId: $id, file: $file, crop: $crop) { url } }",
-        "variables": { "id": "#(recipeId)", "file": null, "crop": { "x": <x>, "y": 0, "width": <width>, "height": <height> } }
+        "variables": { "id": "#(recipeId)", "file": null, "crop": { "x": -1, "y": 0, "width": 400, "height": 300 } }
       }
       """
     * multipart field operations = operations
@@ -87,12 +87,7 @@ Feature: images
     * match response.data == null
     * match response.errors == '#[1]'
     * match response.errors[0].message == '#string'
-    * match response.errors[0].extensions == <extensions>
-
-    Examples:
-      | x   | width | height | extensions                                            |
-      | -1  | 400   | 300    | { code: 'invalid-crop', status: 400, field: 'cropX' } |
-      | 401 | 400   | 300    | { code: 'crop-out-of-bounds', status: 400 }           |
+    * match response.errors[0].extensions == { code: 'invalid-crop', status: 400, field: 'cropX' }
 
   Scenario: explicit crops change the saved composition and failed crops preserve metadata
     * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'crop test' } } }
@@ -136,8 +131,9 @@ Feature: images
     * method post
     * status 200
     * match response.data == null
-    * match response.errors[0].extensions.code == 'crop-out-of-bounds'
-    * match response.errors[0].extensions.status == 400
+    * match response.errors == '#[1]'
+    * match response.errors[0].message == '#string'
+    * match response.errors[0].extensions == { code: 'crop-out-of-bounds', status: 400 }
 
     * request { query: '#(read("graphql/recipe-image-by-id.graphql"))', variables: { id: '#(recipeId)' } }
     * method post

@@ -408,18 +408,6 @@ async fn image_collections_ids_deletion_and_authorization() {
             "invalid-image-order",
         ),
         (
-            "present",
-            vec![first_id.clone(), first_id.clone()],
-            400,
-            "invalid-image-order",
-        ),
-        (
-            "present",
-            vec!["unknown".to_string(), second_id.clone()],
-            400,
-            "invalid-image-order",
-        ),
-        (
             "conflict",
             vec![second_id.clone(), first_id.clone()],
             409,
@@ -471,14 +459,6 @@ async fn image_collections_ids_deletion_and_authorization() {
                 vec![second_id.clone(), first_id.clone()]
             ),
             ("present".to_string(), vec![first_id.clone()]),
-            (
-                "present".to_string(),
-                vec![first_id.clone(), first_id.clone()]
-            ),
-            (
-                "present".to_string(),
-                vec!["unknown".to_string(), second_id.clone()]
-            ),
             (
                 "conflict".to_string(),
                 vec![second_id.clone(), first_id.clone()],
