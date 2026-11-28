@@ -134,7 +134,7 @@ class RecipesTest {
         .body("status", equalTo(400))
         .body("code", equalTo("invalid-json-object"));
 
-    given().header("Connection", "close")
+    var missingName = given().header("Connection", "close")
         .contentType(ContentType.JSON)
         .body("""
             {
@@ -145,11 +145,15 @@ class RecipesTest {
         .post("/recipes")
         .then()
         .statusCode(422)
-        .contentType(startsWith("application/problem+json"))
+        .contentType(matchesPattern("(?i)application/problem\\+json(?:\\s*;[^,]+)?"))
+        .body("type", equalTo("about:blank"))
+        .body("title", equalTo("Unprocessable Content"))
         .body("status", equalTo(422))
         .body("detail", equalTo("Missing field value for name"))
         .body("code", equalTo("required-field"))
-        .body("field", equalTo("name"));
+        .body("field", equalTo("name"))
+        .extract().response();
+    assertEquals(1, missingName.getHeaders().getValues("Content-Type").size());
 
     for (String invalidName : new String[]{"\"  \"", "42"}) {
       given().header("Connection", "close")

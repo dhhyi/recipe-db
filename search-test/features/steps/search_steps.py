@@ -266,7 +266,13 @@ def invalid_search(context):
 @then('the response is HTTP {status:d} with content type "{content_type}"')
 def response_status(context, status, content_type):
     assert context.status == status, (context.status, context.result)
-    assert context.headers["Content-Type"] == content_type, context.headers
+    assert context.headers.get_all("Content-Type") == [content_type], context.headers
+
+
+@then("the response has a nonempty detail")
+def response_detail(context):
+    detail = context.result.get("detail")
+    assert isinstance(detail, str) and detail.strip(), context.result
 
 
 def source_recipes(context):

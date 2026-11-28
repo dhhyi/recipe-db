@@ -11,9 +11,14 @@ class TagHttpContractSpec extends TagsApiSpec {
 
 		then:
 		response.statusCode() == status
-		response.contentType().startsWith('application/problem+json')
+		response.contentType().split(';', 2)[0].trim().equalsIgnoreCase('application/problem+json')
+		response.getHeaders().getValues('Content-Type').size() == 1
 		response.jsonPath().getString('type') == 'about:blank'
+		response.jsonPath().get('title') instanceof String
+		!response.jsonPath().getString('title').isBlank()
 		response.jsonPath().getInt('status') == status
+		response.jsonPath().get('detail') instanceof String
+		!response.jsonPath().getString('detail').isBlank()
 		response.jsonPath().getString('code') == code
 		response.jsonPath().getString('field') == field
 
