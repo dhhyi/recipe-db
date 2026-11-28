@@ -1,6 +1,6 @@
-let fail message = raise (Failure message)
+let fail = Alcotest.fail
 
-let check condition message = if not condition then fail message
+let check condition message = Alcotest.(check bool) message true condition
 
 let expect_database_error action =
   try
@@ -303,10 +303,19 @@ let test_http_errors_and_rollback () =
         "failed HTTP bulk change retains assignments")
 
 let () =
-  test_assignment_atomic_rollback ();
-  test_restart_persistence ();
-  test_reset_is_complete_and_transactional ();
-  test_backup_rejects_missing_tables ();
-  test_backup_rejects_missing_database_paths ();
-  test_runtime_modes_and_http_reset ();
-  test_http_errors_and_rollback ();
+  Alcotest.run "Tags"
+    [
+      ( "storage",
+        [
+          Alcotest.test_case "assignment rollback" `Quick test_assignment_atomic_rollback;
+          Alcotest.test_case "restart persistence" `Quick test_restart_persistence;
+          Alcotest.test_case "transactional reset" `Quick test_reset_is_complete_and_transactional;
+          Alcotest.test_case "backup rejects missing tables" `Quick test_backup_rejects_missing_tables;
+          Alcotest.test_case "backup rejects missing paths" `Quick test_backup_rejects_missing_database_paths;
+        ] );
+      ( "http",
+        [
+          Alcotest.test_case "runtime modes and reset" `Quick test_runtime_modes_and_http_reset;
+          Alcotest.test_case "errors and rollback" `Quick test_http_errors_and_rollback;
+        ] );
+    ]

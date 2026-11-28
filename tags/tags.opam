@@ -17,6 +17,7 @@ depends: [
   "uunf" {= "15.0.0"}
   "uucp" {= "15.0.0"}
   "ocamlformat" {= "0.27.0"}
+  "alcotest" {with-test & = "1.9.1"}
 ]
 build: [
   ["dune" "build" "-p" name "-j" jobs]
