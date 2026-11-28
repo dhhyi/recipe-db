@@ -51,7 +51,7 @@ The Playwright screenshot baselines use Git LFS. Install Git LFS in the environm
 
 Run `mise run sync-devcontainers` to synchronize all projects, or `mise run sync-devcontainer:graphql` for one project. Tasks skip generation when their inputs and declared outputs are unchanged. Use `mise run --force sync-devcontainer:graphql` to regenerate explicitly, including when adopting upstream generator or base-image changes that local file dependencies cannot detect.
 
-When adding, renaming, or removing a project, update its task in [.mise/tasks/devcontainers-sync.toml](.mise/tasks/devcontainers-sync.toml). Each task invokes the generator directly, reads its project's `.project.yaml`, and declares the generated devcontainer JSON, Dockerfile, and update script as outputs. Also declare `.vscode/tasks.json` for projects with editor tasks; editor settings are embedded in the devcontainer JSON. Do not declare entire output directories, which can contain runtime lock files or unrelated editor settings.
+When adding, renaming, or removing a project, update its task in [.mise/tasks/devcontainers-sync.toml](.mise/tasks/devcontainers-sync.toml). Declare the generated devcontainer JSON, Dockerfile, and update script as outputs. Also declare `.vscode/tasks.json` for projects with editor tasks. Do not declare entire output directories, which can contain runtime lock files or unrelated editor settings.
 
 Run `mise run test-scripts .scripts/tests/mise-tasks.bats` to verify project coverage, freshness, and failure handling.
 
