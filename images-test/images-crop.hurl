@@ -7,6 +7,7 @@ Content-Type: image/jpeg
 file,fixtures/landscape.jpg;
 HTTP 201
 [Captures]
+saved: jsonpath "$"
 normal: jsonpath "$.url"
 thumb: jsonpath "$.thumbUrl"
 [Asserts]
@@ -28,38 +29,100 @@ Content-Type: image/jpeg
 file,fixtures/landscape.jpg;
 HTTP 400
 Content-Type: application/problem+json
+Cache-Control: no-store
 [Asserts]
 jsonpath "$.type" == "about:blank"
+jsonpath "$.title" isString
 jsonpath "$.status" == 400
+jsonpath "$.detail" isString
 jsonpath "$.code" == "invalid-crop"
 jsonpath "$.field" == "cropY"
+
+GET {{REST_API}}/images/cropped/meta
+HTTP 200
+[Asserts]
+jsonpath "$[0]" == {{saved}}
+jsonpath "$[1]" not exists
 
 POST {{REST_API}}/images/cropped?cropX=0&cropY=0&cropWidth=400&cropHeight=299
 Content-Type: image/jpeg
 file,fixtures/landscape.jpg;
 HTTP 400
+Content-Type: application/problem+json
+Cache-Control: no-store
 [Asserts]
+jsonpath "$.type" == "about:blank"
+jsonpath "$.title" isString
+jsonpath "$.status" == 400
+jsonpath "$.detail" isString
 jsonpath "$.code" == "invalid-crop-aspect-ratio"
+jsonpath "$.field" not exists
+
+GET {{REST_API}}/images/cropped/meta
+HTTP 200
+[Asserts]
+jsonpath "$[0]" == {{saved}}
+jsonpath "$[1]" not exists
+
+POST {{REST_API}}/images/cropped?cropX=0&cropY=0&cropWidth=301&cropHeight=225
+Content-Type: image/jpeg
+file,fixtures/landscape.jpg;
+HTTP 400
+Content-Type: application/problem+json
+Cache-Control: no-store
+[Asserts]
+jsonpath "$.type" == "about:blank"
+jsonpath "$.title" isString
+jsonpath "$.status" == 400
+jsonpath "$.detail" isString
+jsonpath "$.code" == "invalid-crop-aspect-ratio"
+jsonpath "$.field" not exists
+
+GET {{REST_API}}/images/cropped/meta
+HTTP 200
+[Asserts]
+jsonpath "$[0]" == {{saved}}
+jsonpath "$[1]" not exists
 
 POST {{REST_API}}/images/cropped?cropX=0&cropY=0&cropWidth=296&cropHeight=222
 Content-Type: image/jpeg
 file,fixtures/landscape.jpg;
 HTTP 400
+Content-Type: application/problem+json
+Cache-Control: no-store
 [Asserts]
+jsonpath "$.type" == "about:blank"
+jsonpath "$.title" isString
+jsonpath "$.status" == 400
+jsonpath "$.detail" isString
 jsonpath "$.code" == "crop-too-small"
+jsonpath "$.field" not exists
+
+GET {{REST_API}}/images/cropped/meta
+HTTP 200
+[Asserts]
+jsonpath "$[0]" == {{saved}}
+jsonpath "$[1]" not exists
 
 POST {{REST_API}}/images/cropped?cropX=401&cropY=150&cropWidth=400&cropHeight=300
 Content-Type: image/jpeg
 file,fixtures/landscape.jpg;
 HTTP 400
+Content-Type: application/problem+json
+Cache-Control: no-store
 [Asserts]
+jsonpath "$.type" == "about:blank"
+jsonpath "$.title" isString
+jsonpath "$.status" == 400
+jsonpath "$.detail" isString
 jsonpath "$.code" == "crop-out-of-bounds"
+jsonpath "$.field" not exists
 
 GET {{REST_API}}/images/cropped/meta
 HTTP 200
 [Asserts]
-jsonpath "$[0].url" == "{{normal}}"
-jsonpath "$[0].thumbUrl" == "{{thumb}}"
+jsonpath "$[0]" == {{saved}}
+jsonpath "$[1]" not exists
 
 DELETE {{REST_API}}/images
 HTTP 204
