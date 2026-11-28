@@ -62,3 +62,41 @@ Feature: All Ratings Endpoint
     * method get
     * status 200
     * match response == {rating: null}
+
+  Scenario: replacing a user's vote updates the aggregate without adding a voter
+    * url backend
+    * path 'ratings/1'
+    * form field rating = 5
+    * form field userId = 'token:v1:user1'
+    * method put
+    * status 200
+
+    * path 'ratings/1'
+    * form field rating = 3
+    * form field userId = 'token:v1:user2'
+    * method put
+    * status 200
+
+    * path 'ratings/1'
+    * form field rating = 1
+    * form field userId = 'token:v1:user1'
+    * method put
+    * status 200
+    * match response == {id: "1", rating: 2, count: 2}
+
+    * path 'ratings/1'
+    * method get
+    * status 200
+    * match response == {id: "1", rating: 2, count: 2}
+
+    * path 'ratings/1'
+    * param userId = 'token:v1:user1'
+    * method get
+    * status 200
+    * match response == {rating: 1}
+
+    * path 'ratings/1'
+    * param userId = 'token:v1:user2'
+    * method get
+    * status 200
+    * match response == {rating: 3}

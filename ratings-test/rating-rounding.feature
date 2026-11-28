@@ -39,3 +39,24 @@ Feature: Rounding Ratings
     * method put
     * status 200
     * match response.rating == 3
+
+  Scenario: a non-midpoint average rounds up to the nearest half star
+    * url backend
+    * path 'ratings/1'
+    * form field rating = 2
+    * form field userId = 'token:v1:user1'
+    * method put
+    * status 200
+
+    * path 'ratings/1'
+    * form field rating = 3
+    * form field userId = 'token:v1:user2'
+    * method put
+    * status 200
+
+    * path 'ratings/1'
+    * form field rating = 5
+    * form field userId = 'token:v1:user3'
+    * method put
+    * status 200
+    * match response == {id: "1", rating: 3.5, count: 3}
