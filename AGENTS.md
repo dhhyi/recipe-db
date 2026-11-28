@@ -32,8 +32,6 @@ When developing or changing a service, follow the [backup-participant checklist]
 
 Follow [issue planning and refinement](CONTRIBUTING.md#issue-planning-and-refinement) and [completion rules](CONTRIBUTING.md#hierarchy-dependencies-and-completion).
 
-- Propose refinement changes and wait for confirmation before modifying issues. Plan approval does not authorize implementation; documentation edits count as implementation.
-- Keep PR-backed issues open until merge; use a closing keyword in the PR. Report pending review accurately in umbrellas and dependencies.
 - Create future-work issues only when asked; reuse existing issues and preserve their agreed scope and discussion.
 
 ## Operator shell contexts
