@@ -3,15 +3,19 @@ package recipes;
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.hasKey;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.matchesPattern;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.startsWith;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.restassured.RestAssured;
 import io.restassured.http.ContentType;
+import java.time.Instant;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -49,6 +53,22 @@ class RecipesTest {
         .then()
         .statusCode(204)
         .body(equalTo(""));
+
+    given().header("Connection", "close")
+        .get("/recipes")
+        .then()
+        .statusCode(200)
+        .body("", hasSize(0));
+  }
+
+  @Test
+  void testingResetAcceptsTrailingSlash() {
+    createRecipe("{\"name\":\"Rice Pudding\"}");
+
+    given().header("Connection", "close")
+        .delete("/recipes/")
+        .then()
+        .statusCode(204);
 
     given().header("Connection", "close")
         .get("/recipes")
@@ -123,6 +143,18 @@ class RecipesTest {
         .body("code", equalTo("required-field"))
         .body("field", equalTo("name"));
 
+    for (String invalidName : new String[]{"\"  \"", "42"}) {
+      given().header("Connection", "close")
+          .contentType(ContentType.JSON)
+          .body("{\"name\":" + invalidName + "}")
+          .post("/recipes")
+          .then()
+          .statusCode(422)
+          .contentType(startsWith("application/problem+json"))
+          .body("code", equalTo("required-field"))
+          .body("field", equalTo("name"));
+    }
+
     given().header("Connection", "close")
         .contentType(ContentType.JSON)
         .body("{\"servings\":4}")
@@ -183,27 +215,122 @@ class RecipesTest {
   @Test
   void rejectsClientSuppliedServerOwnedFieldsIncludingNull() {
     for (String field : new String[]{"createdAt", "updatedAt", "nameSortKey"}) {
-      given().header("Connection", "close")
-          .contentType(ContentType.JSON)
-          .body("{\"name\":\"Rice Pudding\",\"" + field + "\":null}")
-          .post("/recipes")
-          .then()
-          .statusCode(422)
-          .contentType(startsWith("application/problem+json"))
-          .body("code", equalTo("reserved-field"))
-          .body("field", equalTo(field));
+      for (String value : new String[]{"null", "\"client value\""}) {
+        given().header("Connection", "close")
+            .contentType(ContentType.JSON)
+            .body("{\"name\":\"Rice Pudding\",\"" + field + "\":" + value + "}")
+            .post("/recipes")
+            .then()
+            .statusCode(422)
+            .contentType(startsWith("application/problem+json"))
+            .body("code", equalTo("reserved-field"))
+            .body("field", equalTo(field));
 
-      String recipeId = createRecipe("{\"name\":\"Rice Pudding\"}");
-      given().header("Connection", "close")
-          .contentType(MERGE_PATCH)
-          .body("{\"" + field + "\":null}")
-          .patch("/recipes/{id}", recipeId)
-          .then()
-          .statusCode(422)
-          .contentType(startsWith("application/problem+json"))
-          .body("code", equalTo("reserved-field"))
-          .body("field", equalTo(field));
+        String recipeId = createRecipe("{\"name\":\"Rice Pudding\"}");
+        var before = given().header("Connection", "close")
+            .get("/recipes/{id}", recipeId)
+            .then().statusCode(200).extract().jsonPath().getMap("$");
+        given().header("Connection", "close")
+            .contentType(MERGE_PATCH)
+            .body("{\"" + field + "\":" + value + "}")
+            .patch("/recipes/{id}", recipeId)
+            .then()
+            .statusCode(422)
+            .contentType(startsWith("application/problem+json"))
+            .body("code", equalTo("reserved-field"))
+            .body("field", equalTo(field));
+        assertEquals(before, given().header("Connection", "close")
+            .get("/recipes/{id}", recipeId)
+            .then().statusCode(200).extract().jsonPath().getMap("$"));
+      }
     }
+  }
+
+  @Test
+  void advancesUpdatedAtOnlyForEffectiveCoreChanges() throws InterruptedException {
+    String recipeId = createRecipe("""
+        {"name":"Rice Pudding","method":"Cook",
+         "ingredients":[{"name":"Rice"},{"name":"Milk"}]}
+        """);
+    var created = given().header("Connection", "close")
+        .get("/recipes/{id}", recipeId)
+        .then().statusCode(200).extract().response();
+    Thread.sleep(2);
+    given().header("Connection", "close")
+        .contentType(MERGE_PATCH)
+        .body("{\"name\":\"Rice Pudding\",\"method\":\"Cook\",\"metadata\":{\"source\":\"family\"}}")
+        .patch("/recipes/{id}", recipeId)
+        .then().statusCode(200)
+        .body("updatedAt", equalTo(created.path("updatedAt")));
+
+    Thread.sleep(2);
+    var reordered = given().header("Connection", "close")
+        .contentType(MERGE_PATCH)
+        .body("{\"ingredients\":[{\"name\":\"Milk\"},{\"name\":\"Rice\"}]}")
+        .patch("/recipes/{id}", recipeId)
+        .then().statusCode(200)
+        .body("createdAt", equalTo(created.path("createdAt")))
+        .extract().response();
+    assertNotEquals(created.jsonPath().getString("updatedAt"),
+        reordered.jsonPath().getString("updatedAt"));
+    assertTrue(Instant.parse(reordered.jsonPath().getString("updatedAt"))
+        .isAfter(Instant.parse(created.jsonPath().getString("updatedAt"))));
+
+    Thread.sleep(2);
+    var changed = given().header("Connection", "close")
+        .contentType(MERGE_PATCH)
+        .body("{\"ingredients\":[{\"name\":\"Milk\",\"optional\":true},{\"name\":\"Rice\"}]}")
+        .patch("/recipes/{id}", recipeId)
+        .then().statusCode(200).extract().response();
+    assertNotEquals(reordered.jsonPath().getString("updatedAt"),
+        changed.jsonPath().getString("updatedAt"));
+
+    Thread.sleep(2);
+    var cleared = given().header("Connection", "close")
+        .contentType(MERGE_PATCH)
+        .body("{\"method\":null}")
+        .patch("/recipes/{id}", recipeId)
+        .then().statusCode(200)
+        .body("$", not(hasKey("method")))
+        .body("createdAt", equalTo(created.path("createdAt")))
+        .extract().response();
+    assertNotEquals(changed.jsonPath().getString("updatedAt"),
+        cleared.jsonPath().getString("updatedAt"));
+  }
+
+  @Test
+  void rejectsUnsupportedWritesAndPreservesTheRecipe() {
+    String recipeId = createRecipe("""
+        {"name":"Rice Pudding","servings":4,"metadata":{"source":"family"}}
+        """);
+    var before = given().header("Connection", "close")
+        .get("/recipes/{id}", recipeId)
+        .then().statusCode(200).extract().jsonPath().getMap("$");
+
+    given().header("Connection", "close")
+        .contentType(ContentType.JSON)
+        .body("{\"name\":\"Updated\"}")
+        .patch("/recipes/{id}", recipeId)
+        .then()
+        .statusCode(415)
+        .contentType(startsWith("application/problem+json"))
+        .body("code", equalTo("unsupported-media-type"));
+    assertEquals(before, given().header("Connection", "close")
+        .get("/recipes/{id}", recipeId)
+        .then().statusCode(200).extract().jsonPath().getMap("$"));
+
+    given().header("Connection", "close")
+        .contentType(ContentType.JSON)
+        .body("{\"name\":\"Updated\"}")
+        .put("/recipes/{id}", recipeId)
+        .then()
+        .statusCode(405)
+        .header("Allow", equalTo("GET, PATCH, DELETE"))
+        .contentType(startsWith("application/problem+json"))
+        .body("code", equalTo("method-not-allowed"));
+    assertEquals(before, given().header("Connection", "close")
+        .get("/recipes/{id}", recipeId)
+        .then().statusCode(200).extract().jsonPath().getMap("$"));
   }
 
   @Test
@@ -264,6 +391,10 @@ class RecipesTest {
         }
         """);
 
+    var before = given().header("Connection", "close")
+        .get("/recipes/{id}", recipeId)
+        .then().statusCode(200).extract().jsonPath().getMap("$");
+
     given().header("Connection", "close")
         .contentType(MERGE_PATCH)
         .body("""
@@ -279,6 +410,9 @@ class RecipesTest {
         .body("status", equalTo(422))
         .body("code", equalTo("reserved-field"))
         .body("field", equalTo("id"));
+    assertEquals(before, given().header("Connection", "close")
+        .get("/recipes/{id}", recipeId)
+        .then().statusCode(200).extract().jsonPath().getMap("$"));
 
     given().header("Connection", "close")
         .contentType(MERGE_PATCH)
@@ -291,6 +425,22 @@ class RecipesTest {
         .body("detail", equalTo("Missing field value for name"))
         .body("code", equalTo("required-field"))
         .body("field", equalTo("name"));
+    assertEquals(before, given().header("Connection", "close")
+        .get("/recipes/{id}", recipeId)
+        .then().statusCode(200).extract().jsonPath().getMap("$"));
+
+    given().header("Connection", "close")
+        .contentType(MERGE_PATCH)
+        .body("{\"name\":null,\"metadata\":{\"source\":\"changed\"}}")
+        .patch("/recipes/{id}", recipeId)
+        .then()
+        .statusCode(422)
+        .contentType(startsWith("application/problem+json"))
+        .body("code", equalTo("required-field"))
+        .body("field", equalTo("name"));
+    assertEquals(before, given().header("Connection", "close")
+        .get("/recipes/{id}", recipeId)
+        .then().statusCode(200).extract().jsonPath().getMap("$"));
 
     given().header("Connection", "close")
         .contentType(MERGE_PATCH)
@@ -311,7 +461,8 @@ class RecipesTest {
           "metadata": {
             "source": "family",
             "season": "winter"
-          }
+          },
+          "steps": ["Original step", "Another step"]
         }
         """);
 
@@ -372,9 +523,12 @@ class RecipesTest {
         .body("createdAt", equalTo(initial.path("createdAt")))
         .body("updatedAt", matchesPattern(RFC3339_MICROSECONDS))
         .body("servings", nullValue())
+        .body("$", not(hasKey("servings")))
         .body("metadata.source", equalTo("family"))
         .body("metadata.season", equalTo("autumn"))
         .body("steps", hasSize(2))
+        .body("steps[0]", equalTo("Make the rice pudding"))
+        .body("steps[1]", equalTo("Add the cinnamon"))
         .extract()
         .response();
     assertNotEquals(initial.jsonPath()
