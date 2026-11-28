@@ -96,7 +96,6 @@ mod tests {
 
         let api = InspirationsApi::new(Default::default());
         let publisher = EventPublisher::from_env().unwrap();
-        assert!(api.get_inspirations("absent").await.unwrap().is_empty());
         assert!(!api
             .set_inspirations("absent", &[], &publisher)
             .await

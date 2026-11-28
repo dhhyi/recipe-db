@@ -98,6 +98,35 @@ testcases:
           statusCode: 200
           json: ["https://other.example.com"]
 
+  - name: Delete one recipe without changing another
+    steps:
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/1234"
+          method: DELETE
+        response:
+          statusCode: 204
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/1234"
+          method: GET
+        response:
+          statusCode: 404
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/5678"
+          method: GET
+        response:
+          statusCode: 200
+          json: ["https://other.example.com"]
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/1234"
+          method: PUT
+          json: ["https://replacement.example.com"]
+        response:
+          statusCode: 201
+
   - name: Clear seeded inspirations
     steps:
       - type: tavern
@@ -112,6 +141,12 @@ testcases:
       - type: tavern
         request:
           url: "{{.REST_API}}/inspirations/1234"
+          method: GET
+        response:
+          statusCode: 404
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/5678"
           method: GET
         response:
           statusCode: 404
