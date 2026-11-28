@@ -110,6 +110,51 @@ for _, mode in ipairs({"production", "testing"}) do
 end
 
 local populated = '{"recipe":["https://example.com"],"second":["https://second.example.com"]}'
+write_data(populated)
+local loaded, default_handlers = start()
+assert(loaded)
+for _, route in ipairs({"DELETE /inspirations", "DELETE /inspirations/"}) do
+    status(default_handlers, route, 404)
+end
+for _, route in ipairs({"HEAD /inspirations", "HEAD /inspirations/"}) do
+    assert(default_handlers[route] == nil, route)
+end
+assert(read_data() == populated)
+status(default_handlers, "DELETE /inspirations/...", 204, {"recipe"})
+assert(json.decode(read_data()).recipe == nil)
+
+for _, operation in ipairs({
+    {
+        mode = "production",
+        route = "PUT /inspirations/...",
+        args = {{"recipe"}, false, false, '["https://changed.example.com"]'}
+    },
+    {mode = "production", route = "DELETE /inspirations/...", args = {{"recipe"}}},
+    {mode = "testing", route = "DELETE /inspirations", args = {}},
+    {
+        mode = "backup",
+        route = "POST /maintenance/recipes/purge",
+        args = {false, false, {["content-type"] = "application/json"},
+                '{"recipeId":"recipe"}'}
+    }
+}) do
+    write_data(populated)
+    local started, handlers = start(operation.mode, {write_error = true})
+    assert(started)
+    local body, headers = handlers[operation.route](table.unpack(operation.args))
+    assert(headers[":status"] == "500" and json.decode(body).code == "storage-error",
+           operation.route)
+    assert(read_data() == populated, operation.route .. " changed storage")
+    for id, url in pairs({
+        recipe = "https://example.com",
+        second = "https://second.example.com"
+    }) do
+        local current = handlers["GET /inspirations/..."]({id})
+        local urls = json.decode(current)
+        assert(#urls == 1 and urls[1] == url, operation.route .. " changed memory")
+    end
+end
+
 for _, mode in ipairs({"production", "testing", "backup"}) do
     write_data(populated)
     ok, _, message = start(mode, {read_error = true})
