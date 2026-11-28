@@ -47,12 +47,6 @@ Documentation consists of two types: **cookbooks**, which help readers complete 
 
 The Playwright screenshot baselines use Git LFS. Install Git LFS in the environment where you run Git, then run `git lfs install` before cloning or updating the repository. If you already have a checkout with pointer files, run `git lfs pull` to download the images before running E2E tests or updating baselines. `git lfs ls-files` marks downloaded files with `*` and pointers with `-`.
 
-The ARM64 CI validation job downloads the baselines; jobs that do not run visual tests leave them as pointers.
-
-The recipe tag dialog uses viewport screenshots so the capture does not extend below the modal backdrop.
-
-E2E fixtures disable View Transitions by default, and the Playwright configuration requests reduced motion. Tests specifically covering View Transitions opt in with `test.extend({ viewTransitions: true })`; tests covering CSS motion also select `reducedMotion: "no-preference"`.
-
 ## Devcontainer synchronization
 
 Run `mise run sync-devcontainers` to synchronize all projects, or `mise run sync-devcontainer:graphql` for one project. Tasks skip generation when their inputs and declared outputs are unchanged. Use `mise run --force sync-devcontainer:graphql` to regenerate explicitly, including when adopting upstream generator or base-image changes that local file dependencies cannot detect.
