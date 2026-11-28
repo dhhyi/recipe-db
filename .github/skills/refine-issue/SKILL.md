@@ -39,8 +39,6 @@ Treat the user as a technical design partner. Refinement is a conversation, not 
 - **`umbrella`:** Define or update the overall outcome, scope, completion criteria, and proposed native sub-issues. New, unresolved child scopes start as `idea`; preserve existing specs and use the splitting rules above for already-settled scope. Capture unresolved problems or wishes without prematurely specifying them. Identify ordering, dependencies, and any existing base-contract decisions.
 - **`decision`:** May stand alone or belong to an umbrella. Record context, chosen approach, alternatives, and consequences. Relate standalone decisions to affected issues with native "Relates to" relationships and link the contract in their descriptions; do not create an umbrella solely to hold a decision. An owning umbrella must reference the decision as part of its base contract. When revisiting an accepted decision, preserve the historical agreement; propose a new, explicitly superseding decision for material contract changes and identify affected specs for review. Do not silently rewrite the accepted contract.
 
-Standalone ideas may become specs, umbrellas, manual tasks, or decisions when recording an agreed contract rather than tracking implementation. Keep unresolved research, exploration, or requirements as `idea` unless direct human involvement makes the task manual; record settled findings and remaining questions without implying readiness.
-
 ## Persist and verify
 
 1. Present the proposed issue content and related changes, then end the turn and wait for confirmation. Announcing a plan is not confirmation; approval to persist refinement is not approval to implement.
