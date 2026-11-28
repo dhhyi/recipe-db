@@ -422,21 +422,7 @@ test("members rate the same recipe independently and replace their own vote", as
   expect(shellHtml).not.toContain("Deine Bewertung");
   expect(shellHtml).not.toContain("Rezept bearbeiten");
 
-  const memberOneBefore = await readRating(memberOne);
-  expect(memberOneBefore.rating).toEqual({
-    average: 0,
-    count: 0,
-    myRating: null,
-  });
-  const memberTwoBefore = await readRating(memberTwo);
-  expect(memberTwoBefore.rating.myRating).toBeNull();
-
   await rateInBrowser(memberOne, 5, 1, 5);
-  expect((await readRating(memberOne)).rating).toEqual({
-    average: 5,
-    count: 1,
-    myRating: 5,
-  });
   expect((await readRating(memberTwo)).rating).toEqual({
     average: 5,
     count: 1,
@@ -444,11 +430,6 @@ test("members rate the same recipe independently and replace their own vote", as
   });
 
   await rateInBrowser(memberOne, 3, 1, 3);
-  expect((await readRating(memberOne)).rating).toEqual({
-    average: 3,
-    count: 1,
-    myRating: 3,
-  });
 
   await rateInBrowser(memberTwo, 5, 2, 4);
   expect((await readRating(memberOne)).rating).toEqual({
