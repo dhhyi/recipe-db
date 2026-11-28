@@ -98,7 +98,7 @@ Checks must not modify checkout files. Prefer a formatter's native non-mutating 
 
 ## Dependency security updates
 
-[Dependabot configuration](.github/dependabot.yml) covers all tracked npm/pnpm, Cargo, Go, pip, Maven, Gradle, and GitHub Actions dependency sources. Every entry sets `open-pull-requests-limit: 0`, disabling routine version-update PRs without disabling security-update PRs. The required `schedule` does not delay security fixes until a nightly window.
+[Dependabot configuration](.github/dependabot.yml) covers npm/pnpm, Cargo, Go, pip, Maven, Gradle, and GitHub Actions dependency sources. The security-only policy disables routine version-update PRs with `open-pull-requests-limit: 0`.
 
 For new supported ecosystems or manifest layouts, extend the [coverage regression suite](.scripts/tests/dependabot.bats) and its [Bazel inputs](.scripts/tests/groups.yaml). Document unsupported sources below.
 
