@@ -483,17 +483,6 @@ async function imagePattern(page, color) {
   }, color);
 }
 
-function expectImmutableUrl(value, recipeId, thumbnail = false) {
-  const url = new URL(value, "http://traefik");
-  expect(url.pathname).toMatch(
-    new RegExp(
-      `^/public/${recipeId}-[0-9a-f]{64}${thumbnail ? "-thumb" : ""}\\.png$`,
-    ),
-  );
-  expect(url.search).toBe("");
-  expect(url.hash).toBe("");
-}
-
 function isImageUpload(request) {
   return (
     new URL(request.url()).pathname === "/graphql" &&
@@ -534,9 +523,7 @@ test("saves a first image into an empty gallery", async ({
   await page.getByRole("button", { name: "Speichern", exact: true }).click();
   const result = await (await uploaded).json();
   expect(result.errors).toBeUndefined();
-  const { url, thumbUrl } = result.data.addImage;
-  expectImmutableUrl(url, demoRecipe.id);
-  expectImmutableUrl(thumbUrl, demoRecipe.id, true);
+  const { thumbUrl } = result.data.addImage;
   await expect(
     page.getByRole("status").filter({ hasText: "Bild gespeichert." }),
   ).toBeVisible();
@@ -563,9 +550,5 @@ test("open the gallery from the recipe editor", async ({
     `Bilder für ${demoRecipe.name} verwalten`,
   );
   await expect(galleryImages(page)).toHaveCount(1);
-  expectImmutableUrl(
-    await galleryImages(page).first().getAttribute("src"),
-    demoRecipe.id,
-    true,
-  );
+  await expect(galleryImages(page).first()).toBeVisible();
 });

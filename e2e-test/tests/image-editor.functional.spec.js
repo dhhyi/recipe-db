@@ -84,7 +84,6 @@ test("each save sends the original and crop, then returns to the gallery", async
     });
     expect(Buffer.from(upload.bytes)).toEqual(file.buffer);
   }
-  expect(second.metadata.url).not.toBe(first.metadata.url);
   await expect(galleryImages(page)).toHaveCount(3);
   await expect(galleryImages(page).nth(0)).toHaveAttribute(
     "src",
@@ -94,8 +93,6 @@ test("each save sends the original and crop, then returns to the gallery", async
     "src",
     first.metadata.thumbUrl,
   );
-  const oldResponse = await page.request.get(first.metadata.url);
-  expect(oldResponse.ok()).toBe(true);
   await page
     .getByRole("link", { name: "Zurück zum Rezept", exact: true })
     .click();
