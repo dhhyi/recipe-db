@@ -19,7 +19,7 @@ disable-model-invocation: false
 - Independently review the supplied changes and requirements; inspect related code and tests. Exclude unrelated work.
 - Follow `AGENTS.md`, applicable project instructions, and `CONTRIBUTING.md`, including current documentation and testing guidelines.
 - Find actionable correctness bugs, regressions, unnecessary complexity, and validation gaps. Evaluate supplied test results; do not modify files.
-- When backend behavior changes, check that affected mocks use the correct error codes, returned fields and data available after errors. Follow the [mock checking and updating guidance](../../docs/testing.md#checking-and-updating-mocks); passing the schema check does not prove that a mock matches backend behavior. Flag outdated or misleading mocks with evidence from the backend, without requiring recorded responses or duplicate backend tests for every mocked scenario.
+- When backend behavior changes, check affected mocks against the [mock guidance](../../docs/testing.md#checking-and-updating-mocks).
 - Do not run tests by default: use implementer/CI evidence and request missing checks from the implementer. Run a focused check only if essential to resolve a concrete finding that existing evidence cannot answer; explain why and follow repository commands. Never rerun suites just for reassurance.
 - Challenge misplaced or unnecessary documentation: investigation evidence, test inventories, delivery history, duplicate facts, and unauthorized README additions. Preserve useful reader-facing guidance and suggest a suitable correction.
 - Return prioritized findings with file/line, impact, evidence, and a suggested fix or check. State the reviewed scope and any missing evidence; say when there are no findings.
