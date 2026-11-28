@@ -6,15 +6,6 @@ import {
   waitForRecipePageHeading,
   waitForRecipePageText,
 } from "./fixtures.js";
-import {
-  chooseSource,
-  fulfillImageUpload,
-  galleryHeading,
-  galleryImages,
-  observeUploads,
-  selection,
-} from "./image-editor.helpers.js";
-
 const test = base.extend({
   context: async ({ ownerIdentity }, use) => {
     await use(ownerIdentity.browserContext);
@@ -356,27 +347,19 @@ test("edit a seeded recipe and see the saved changes in the browser", async ({
   }
 });
 
-test("members rate the same recipe independently and replace their own vote", async ({
+test("a member rates a recipe and replaces their vote", async ({
   authContexts,
   baseURL,
   ownerIdentity,
 }) => {
   const memberOne = await authContexts.memberOne();
-  const memberTwo = await authContexts.memberTwo();
   const anonymous = await authContexts.anonymous();
   const { createRecipe: recipe } = await graphql(
     ownerIdentity.api,
     "mutation($value: RecipeInput!) { createRecipe(value: $value) { id name } }",
-    { value: { name: "E2E independent ratings" } },
-    "Create recipe for independent ratings",
+    { value: { name: "E2E rating replacement" } },
+    "Create recipe for rating replacement",
   );
-  const readRating = async (identity, includeVote = true) =>
-    graphql(
-      identity.api,
-      `query($id: ID!) { rating(id: $id) { average count${includeVote ? " myRating" : ""} } }`,
-      { id: recipe.id },
-      "Read recipe ratings",
-    );
   const rateInBrowser = async (
     identity,
     rating,
@@ -422,49 +405,19 @@ test("members rate the same recipe independently and replace their own vote", as
   expect(shellHtml).not.toContain("Deine Bewertung");
   expect(shellHtml).not.toContain("Rezept bearbeiten");
 
-  const memberOneBefore = await readRating(memberOne);
-  expect(memberOneBefore.rating).toEqual({
-    average: 0,
-    count: 0,
-    myRating: null,
-  });
-  const memberTwoBefore = await readRating(memberTwo);
-  expect(memberTwoBefore.rating.myRating).toBeNull();
-
   await rateInBrowser(memberOne, 5, 1, 5);
-  expect((await readRating(memberOne)).rating).toEqual({
-    average: 5,
-    count: 1,
-    myRating: 5,
-  });
-  expect((await readRating(memberTwo)).rating).toEqual({
-    average: 5,
-    count: 1,
-    myRating: null,
-  });
-
   await rateInBrowser(memberOne, 3, 1, 3);
-  expect((await readRating(memberOne)).rating).toEqual({
-    average: 3,
-    count: 1,
-    myRating: 3,
-  });
 
-  await rateInBrowser(memberTwo, 5, 2, 4);
-  expect((await readRating(memberOne)).rating).toEqual({
-    average: 4,
-    count: 2,
-    myRating: 3,
-  });
-  expect((await readRating(memberTwo)).rating).toEqual({
-    average: 4,
-    count: 2,
-    myRating: 5,
-  });
-  expect((await readRating(anonymous, false)).rating).toEqual({
-    average: 4,
-    count: 2,
-  });
+  const page = await memberOne.browserContext.newPage();
+  try {
+    await page.goto(`${baseURL}/recipe/${recipe.id}`);
+    const widget = page.locator(`#recipe-rating-${recipe.id} rating-component`);
+    await expect(widget).toHaveAttribute("my-rating", "3");
+    await expect(widget).toHaveAttribute("rating", "3");
+    await expect(widget).toContainText("(1)");
+  } finally {
+    await page.close();
+  }
 });
 
 test("create a recipe in the editor and find it in the overview", async ({
@@ -507,83 +460,6 @@ test("create a recipe in the editor and find it in the overview", async ({
   ).toBeVisible();
 });
 
-async function imagePattern(page, color) {
-  return page.evaluate((fill) => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 640;
-    canvas.height = 480;
-    const context = canvas.getContext("2d");
-    context.fillStyle = fill;
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = "#ffffff";
-    context.fillRect(160, 120, 320, 240);
-    return canvas.toDataURL("image/png");
-  }, color);
-}
-
-function expectImmutableUrl(value, recipeId, thumbnail = false) {
-  const url = new URL(value, "http://traefik");
-  expect(url.pathname).toMatch(
-    new RegExp(
-      `^/public/${recipeId}-[0-9a-f]{64}${thumbnail ? "-thumb" : ""}\\.png$`,
-    ),
-  );
-  expect(url.search).toBe("");
-  expect(url.hash).toBe("");
-}
-
-function isImageUpload(request) {
-  return (
-    new URL(request.url()).pathname === "/graphql" &&
-    request.headers()["content-type"]?.includes("multipart/form-data")
-  );
-}
-
-test("saves a first image into an empty gallery", async ({
-  page,
-  request,
-  recipeWithoutImage,
-}) => {
-  const demoRecipe = recipeWithoutImage;
-  await observeUploads(page);
-  await page.route("**/graphql", (route) =>
-    fulfillImageUpload(route, page, request, demoRecipe),
-  );
-  await page.goto(`/images-edit/${demoRecipe.id}`);
-  await expect(galleryHeading(page)).toHaveText(
-    `Bilder für ${demoRecipe.name} verwalten`,
-  );
-  await expect(
-    page.getByText("Kein Bild vorhanden.", { exact: true }),
-  ).toBeVisible();
-  await expect(galleryImages(page)).toHaveCount(0);
-
-  const uploaded = page.waitForResponse((response) =>
-    isImageUpload(response.request()),
-  );
-  await chooseSource(page, {
-    name: "first.png",
-    mimeType: "image/png",
-    buffer: Buffer.from(
-      (await imagePattern(page, "#d02030")).split(",")[1],
-      "base64",
-    ),
-  });
-  await page.getByRole("button", { name: "Speichern", exact: true }).click();
-  const result = await (await uploaded).json();
-  expect(result.errors).toBeUndefined();
-  const { url, thumbUrl } = result.data.addImage;
-  expectImmutableUrl(url, demoRecipe.id);
-  expectImmutableUrl(thumbUrl, demoRecipe.id, true);
-  await expect(
-    page.getByRole("status").filter({ hasText: "Bild gespeichert." }),
-  ).toBeVisible();
-  await expect(selection(page)).toHaveCount(0);
-  await expect(galleryImages(page)).toHaveCount(1);
-  await expect(galleryImages(page).first()).toHaveAttribute("src", thumbUrl);
-  await expect(page.getByText("Standardbild", { exact: true })).toHaveCount(1);
-});
-
 test("open the gallery from the recipe editor", async ({
   page,
   demoRecipe,
@@ -597,13 +473,10 @@ test("open the gallery from the recipe editor", async ({
     .getByRole("link", { name: "Bilder bearbeiten", exact: true })
     .click();
   await expect(page).toHaveURL(`/images-edit/${demoRecipe.id}`);
-  await expect(galleryHeading(page)).toHaveText(
+  await expect(page.locator("#gallery-heading")).toHaveText(
     `Bilder für ${demoRecipe.name} verwalten`,
   );
-  await expect(galleryImages(page)).toHaveCount(1);
-  expectImmutableUrl(
-    await galleryImages(page).first().getAttribute("src"),
-    demoRecipe.id,
-    true,
-  );
+  const image = page.getByRole("img", { name: /^Rezeptbild \d+$/ });
+  await expect(image).toHaveCount(1);
+  await expect(image.first()).toBeVisible();
 });

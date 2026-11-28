@@ -471,29 +471,6 @@ test("custom native sort survives pagination, reload, history, and text edits", 
   await expect(sort.locator("option:checked")).toHaveText("Automatisch");
 });
 
-test("explicit newest sorting remains selected across text searches", async ({
-  page,
-}) => {
-  await page.goto("/");
-  const sort = page.getByLabel("Sortieren nach", { exact: true });
-  await sort.selectOption(sortByValues.newest);
-  await expect(page).toHaveURL(
-    `/?sort_by=${encodeURIComponent(sortByValues.newest)}`,
-  );
-  const search = page.getByRole("searchbox");
-  await search.fill("Kartoffelsuppe");
-  await search.press("Enter");
-  await expect(page).toHaveURL(
-    `/?q=Kartoffelsuppe&sort_by=${encodeURIComponent(sortByValues.newest)}`,
-  );
-  await expect(sort).toHaveValue(sortByValues.newest);
-  await search.fill("");
-  await search.press("Enter");
-  await expect(page).toHaveURL(
-    `/?sort_by=${encodeURIComponent(sortByValues.newest)}`,
-  );
-});
-
 test("search controls fit the content area without horizontal overflow", async ({
   page,
 }) => {

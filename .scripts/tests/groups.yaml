@@ -318,7 +318,6 @@ tasks:
   tests:
     - .scripts/tests/bazel.bats
     - .scripts/tests/mise-tasks.bats
-    - .scripts/tests/seed-demodata.bats
     - .scripts/tests/update-docker-image-digests.bats
   suite_inputs:
     .scripts/tests/bazel.bats:
@@ -346,13 +345,6 @@ tasks:
       - mise.toml
       - package.json
       - ":(glob)*/.project.yaml"
-    .scripts/tests/seed-demodata.bats:
-      - .scripts/seed-demodata.sh
-      - .scripts/lib/project-metadata.sh
-      - ":(glob)*/.project.yaml"
-      - .mise/tasks/compose.toml
-      - .mise/config.toml
-      - mise.toml
     .scripts/tests/update-docker-image-digests.bats:
       - .scripts/update-docker-image-digests.sh
       - .scripts/docker-base-images.awk

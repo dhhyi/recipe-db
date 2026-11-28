@@ -104,7 +104,7 @@ For new supported ecosystems or manifest layouts, extend the [coverage regressio
 
 Enable the dependency graph, Dependabot alerts, and Dependabot security updates in GitHub repository settings. Review security-update PRs and require successful checks before merging.
 
-Dependabot security updates do not cover Docker/Compose images, Hex/Mix, Elm, or devcontainer dependencies, even though Dependabot supports version updates for those ecosystems. Nimble, opam, Mise pins, embedded tool downloads, and OS packages also need separate handling. Do not edit generated devcontainer or Compose files to update their dependencies; change their source configuration instead.
+Dependabot security updates do not cover Docker/Compose images, Hex/Mix, Elm, or devcontainer dependencies, even though Dependabot supports version updates for those ecosystems. LuaRocks, Nimble, opam, Mise pins, embedded tool downloads, and OS packages also need separate handling. Do not edit generated devcontainer or Compose files to update their dependencies; change their source configuration instead.
 
 ## Issue planning and refinement
 

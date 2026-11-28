@@ -84,6 +84,17 @@ class TagAssignmentsSpec extends TagsApiSpec {
 		recipeTags.statusCode() == 200
 		recipeTags.jsonPath().getList('id') == [tag.id]
 		recipeTags.jsonPath().getString('category[0]') == 'other'
+
+		when:
+		assert http('DELETE', "${path}/assignments/${tag.id}").statusCode() == 204
+		def bulkAssigned = http('PATCH', path, [addTagIds: [tag.id]])
+		def bulkRecipeTags = http('GET', path)
+
+		then:
+		bulkAssigned.statusCode() == 200
+		bulkRecipeTags.statusCode() == 200
+		bulkRecipeTags.jsonPath().getList('id') == [tag.id]
+		bulkRecipeTags.jsonPath().getString('category[0]') == 'other'
 	}
 
 	def 'bulk deltas are deduplicated atomic and return the full assignment set'() {
@@ -114,6 +125,7 @@ class TagAssignmentsSpec extends TagsApiSpec {
 		then:
 		conflict.statusCode() == 422
 		conflict.jsonPath().getString('code') == 'conflicting-tag-change'
+		http('GET', path).jsonPath().getList('id').toSet() == [one.id, two.id] as Set
 
 		when:
 		def removed = http('PATCH', path, [removeTagIds: [one.id, one.id, two.id]])

@@ -1,13 +1,6 @@
-let fail message = raise (Failure message)
+let fail = Alcotest.fail
 
-let check condition message = if not condition then fail message
-
-let expect_problem code action =
-  try
-    ignore (action ());
-    fail ("Expected problem: " ^ code)
-  with
-  | Tags.Problem problem when problem.code = code -> ()
+let check condition message = Alcotest.(check bool) message true condition
 
 let expect_database_error action =
   try
@@ -30,68 +23,11 @@ let with_database action =
       cleanup ())
     (fun () -> action database)
 
-let test_identity_and_validation () =
-  check
-    (Tags.identity_key "  Crème brûlée  " = "cremebrulee")
-    "accent folding and Unicode whitespace";
-  check
-    (Tags.identity_key "Straße" = "strasse")
-    "full Unicode case folding";
-  check
-    (Tags.display_name "  Crème brûlée  " = "Crème brûlée")
-    "NFC display normalization";
-  check (Tags.display_name "\194\160Soup\194\160" = "Soup")
-    "Unicode whitespace trimming";
-  List.iter
-    (fun value ->
-      expect_problem "invalid-tag-name" (fun () ->
-          Tags.identity_key value))
-    [ "!!!"; "́"; "ø"; "漢"; "caféø"; "a\nb" ];
-  expect_problem "invalid-tag-name" (fun () ->
-      Tags.display_name (String.make 101 'a'))
-
-let test_creation_and_collisions () =
-  with_database (fun database ->
-      let tag = Tags.create_tag database Tags.Dietary_style "Gluten-free" in
-      check (tag.id = "dietary-style-glutenfree") "stable tag ID";
-      check (tag.name = "Gluten-free") "first spelling retained";
-      expect_problem "tag-collision" (fun () ->
-          Tags.create_tag database Tags.Dietary_style "gluten free");
-      check
-         ((Tags.select_tags database ())
-         |> List.map (fun (tag : Tags.tag) -> tag.name)
-        = [ "Gluten-free" ])
-        "collision must not create or rename an inventory entry";
-      let other_category = Tags.create_tag database Tags.Course "Gluten-free" in
-      check (other_category.id = "course-glutenfree")
-        "same key is allowed in another category";
-      let uncategorized = Tags.create_tag database Tags.Other "Gluten-free" in
-      check (uncategorized.id = "other-glutenfree")
-        "other category uses its own stable ID prefix")
-
-let test_deterministic_ordering () =
-  with_database (fun database ->
-      ignore (Tags.create_tag database Tags.Course "A-y");
-      ignore (Tags.create_tag database Tags.Course "A!z");
-      ignore (Tags.create_tag database Tags.Cuisine "Soup");
-      ignore (Tags.create_tag database Tags.Dietary_style "vegan");
-      ignore (Tags.create_tag database Tags.Other "General");
-      check
-        (Tags.select_tags database ()
-         |> List.map (fun (tag : Tags.tag) -> tag.name)
-        = [ "Soup"; "vegan"; "A!z"; "A-y"; "General" ])
-        "category order and display-name ordering")
-
-let test_assignments_and_atomic_rollback () =
+let test_assignment_atomic_rollback () =
   with_database (fun database ->
       let first = Tags.create_tag database Tags.Course "Starter" in
       let second = Tags.create_tag database Tags.Course "Main" in
       Tags.assign_one database "opaque/recipe id" first.id;
-      Tags.assign_one database "opaque/recipe id" first.id;
-      check
-        (Tags.assigned_tags database "opaque/recipe id"
-         |> List.map (fun (tag : Tags.tag) -> tag.id) = [ first.id ])
-        "single assignment is idempotent";
       ignore
         (Sqlite3.exec database
            "CREATE TRIGGER reject_second BEFORE INSERT ON assignments \
@@ -102,27 +38,7 @@ let test_assignments_and_atomic_rollback () =
       check
         (Tags.assigned_tags database "opaque/recipe id"
          |> List.map (fun (tag : Tags.tag) -> tag.id) = [ first.id ])
-        "failed bulk changes must roll back earlier writes";
-      expect_problem "tag-in-use" (fun () -> Tags.delete_tag database first.id);
-      Tags.remove_one database "opaque/recipe id" first.id;
-      Tags.remove_one database "opaque/recipe id" first.id;
-      Tags.delete_tag database first.id;
-      check (not (Tags.tag_exists database first.id)) "unused tag is deleted")
-
-let test_bulk_validation_and_conflicts () =
-  with_database (fun database ->
-      let tag = Tags.create_tag database Tags.Cuisine "Italian" in
-      expect_problem "unknown-tag" (fun () ->
-          Tags.bulk_change database "recipe" [ "cuisine-missing" ] []);
-      expect_problem "conflicting-tag-change" (fun () ->
-          Tags.bulk_change database "recipe" [ tag.id ] [ tag.id ]);
-      check (Tags.assigned_tags database "recipe" = [])
-        "invalid bulk changes leave assignments unchanged";
-      let result =
-        Tags.bulk_change database "recipe" [ tag.id; tag.id ] []
-      in
-       check (List.map (fun (value : Tags.tag) -> value.id) result = [ tag.id ])
-        "bulk add deduplicates IDs")
+        "failed bulk changes must roll back earlier writes")
 
 let test_restart_persistence () =
   let path = Filename.temp_file "tags" ".sqlite" in
@@ -365,13 +281,6 @@ let test_runtime_modes_and_http_reset () =
 
 let test_http_errors_and_rollback () =
   with_database (fun db ->
-      List.iter
-        (fun path -> assert_problem 422 "invalid-request" (request db path))
-        [ "/tags/recipes/%"; "/tags/recipes/%GG"; "/tags/recipes/%+1" ];
-      assert_problem 422 "invalid-request"
-        (request ~method_:`POST ~body:{|{"category":"course","name":"A","name":"B"}|} db "/tags");
-      assert_problem 400 "invalid-json"
-        (request ~method_:`POST ~body:"{" db "/tags");
       let tag = Tags.create_tag db Tags.Course "Retained" in
       Tags.assign_one db "recipe" tag.id;
       Tags.exec db
@@ -393,62 +302,20 @@ let test_http_errors_and_rollback () =
       check (List.map (fun (t : Tags.tag) -> t.id) (Tags.assigned_tags db "recipe") = [ tag.id ])
         "failed HTTP bulk change retains assignments")
 
-let test_http_other_category_flow () =
-  with_database (fun db ->
-      let created =
-        request ~method_:`POST
-          ~body:{|{"category":"other","name":"General"}|}
-          db "/tags"
-      in
-      assert_status 201 created;
-      let created_json =
-        Lwt_main.run (Dream.body created) |> Yojson.Basic.from_string
-      in
-      let open Yojson.Basic.Util in
-      let tag_id = created_json |> member "id" |> to_string in
-      check (tag_id = "other-general") "OTHER tag ID";
-      check (created_json |> member "category" |> to_string = "other")
-        "OTHER category returned from creation";
-      let filtered = request db "/tags?category=other" in
-      let filtered_json =
-        Lwt_main.run (Dream.body filtered) |> Yojson.Basic.from_string
-      in
-      check
-        (filtered_json |> to_list |> List.length = 1)
-        "OTHER category filter returns the tag";
-      let cuisine = request db "/tags?category=cuisine" in
-      let cuisine_json =
-        Lwt_main.run (Dream.body cuisine) |> Yojson.Basic.from_string
-      in
-      check (cuisine_json |> to_list = []) "category filter excludes OTHER";
-      let changed =
-        request ~method_:`PATCH
-          ~body:(Printf.sprintf {|{"addTagIds":["%s"]}|} tag_id)
-          db "/tags/recipes/recipe"
-      in
-      assert_status 200 changed;
-      let assignments = request db "/tags/recipes/recipe" in
-      let assignments_json =
-        Lwt_main.run (Dream.body assignments) |> Yojson.Basic.from_string
-      in
-      check
-        (assignments_json |> to_list |> List.length = 1)
-        "recipe assignment returns the OTHER tag";
-      check
-        (assignments_json |> to_list |> List.hd |> member "category" |> to_string
-        = "other")
-        "recipe assignment preserves OTHER category")
-
 let () =
-  test_identity_and_validation ();
-  test_creation_and_collisions ();
-  test_deterministic_ordering ();
-  test_assignments_and_atomic_rollback ();
-  test_bulk_validation_and_conflicts ();
-  test_restart_persistence ();
-  test_reset_is_complete_and_transactional ();
-  test_backup_rejects_missing_tables ();
-  test_backup_rejects_missing_database_paths ();
-  test_runtime_modes_and_http_reset ();
-  test_http_errors_and_rollback ();
-  test_http_other_category_flow ();
+  Alcotest.run "Tags"
+    [
+      ( "storage",
+        [
+          Alcotest.test_case "assignment rollback" `Quick test_assignment_atomic_rollback;
+          Alcotest.test_case "restart persistence" `Quick test_restart_persistence;
+          Alcotest.test_case "transactional reset" `Quick test_reset_is_complete_and_transactional;
+          Alcotest.test_case "backup rejects missing tables" `Quick test_backup_rejects_missing_tables;
+          Alcotest.test_case "backup rejects missing paths" `Quick test_backup_rejects_missing_database_paths;
+        ] );
+      ( "http",
+        [
+          Alcotest.test_case "runtime modes and reset" `Quick test_runtime_modes_and_http_reset;
+          Alcotest.test_case "errors and rollback" `Quick test_http_errors_and_rollback;
+        ] );
+    ]

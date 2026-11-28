@@ -52,7 +52,6 @@ graphqlSchema: "."
 check: |
   pnpm check
   pnpm exec playwright test --list --reporter=list
-test: node --test mock-validation.test.js
 integration: pnpm integration
 integrationDependencies:
   - recipes-edit

@@ -269,8 +269,13 @@ async fn denied_mutations_have_no_backend_side_effects() {
         ),
         (
             "member",
-            r#"mutation { updateRecipe(id: "42", value: {inspirations: ["https://example.com"]}) { id } }"#,
+            r#"mutation { updateRecipe(id: "42", value: {name: "Denied", inspirations: ["https://example.com"]}) { id } }"#,
             403,
+        ),
+        (
+            "anonymous",
+            r#"mutation { updateRecipe(id: "42", value: {name: "Denied", inspirations: ["https://example.com"]}) { id } }"#,
+            401,
         ),
         ("member", r#"mutation { deleteRecipe(id: "42") }"#, 403),
         (

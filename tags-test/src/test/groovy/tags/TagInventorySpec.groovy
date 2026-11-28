@@ -115,6 +115,7 @@ class TagInventorySpec extends TagsApiSpec {
 			'!!!',
 			'\u0301',
 			'ø',
+			'漢',
 			'漢字',
 			'caféø',
 			'a\nb'

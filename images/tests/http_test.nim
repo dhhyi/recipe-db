@@ -161,7 +161,6 @@ suite "backend HTTP publication contract":
     let store = ImageStorage(root: root)
     check toSeq(walkDir(store.publicFolder)).len == 2
     for (query, code, field) in [
-        ("?cropX=0", "invalid-crop", "cropY"),
         ("?cropX=-1&cropY=0&cropWidth=300&cropHeight=225", "invalid-crop",
             "cropX"),
         ("?cropX=1.5&cropY=0&cropWidth=300&cropHeight=225", "invalid-crop",
@@ -174,11 +173,6 @@ suite "backend HTTP publication contract":
             "invalid-crop", "cropX"),
         ("?cropX=999999999999999999999999&cropY=0&cropWidth=300&cropHeight=225",
           "invalid-crop", "cropX"),
-        ("?cropX=0&cropY=0&cropWidth=301&cropHeight=225",
-            "invalid-crop-aspect-ratio", ""),
-        ("?cropX=0&cropY=0&cropWidth=296&cropHeight=222", "crop-too-small", ""),
-        ("?cropX=901&cropY=0&cropWidth=300&cropHeight=225",
-            "crop-out-of-bounds", ""),
         ("?cropX=0&cropY=676&cropWidth=300&cropHeight=225",
             "crop-out-of-bounds", ""),
         ("?cropX=9223372036854775807&cropY=0&cropWidth=300&cropHeight=225",

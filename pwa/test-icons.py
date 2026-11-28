@@ -1,37 +1,58 @@
 import json
 import struct
+import unittest
 from pathlib import Path
 
 
-root = Path(__file__).parent
-manifest = json.loads((root / "manifest.webmanifest").read_text())
+ROOT = Path(__file__).parent
 
-assert manifest["id"] == "/"
-assert manifest["start_url"] == "/"
-assert manifest["scope"] == "/"
-assert manifest["display"] == "standalone"
-assert manifest["name"] == manifest["short_name"] == "RezeptDB"
-assert manifest["lang"] == "de"
-assert manifest["theme_color"] == "#014463"
-assert manifest["background_color"] == "#ffffff"
 
-expected_icons = {
-    "/pwa/icons/chef-hat-192.png": (192, "any"),
-    "/pwa/icons/chef-hat-512.png": (512, "any"),
-    "/pwa/icons/chef-hat-maskable-512.png": (512, "maskable"),
-}
-manifest_icons = {icon["src"]: icon for icon in manifest["icons"]}
-assert set(manifest_icons) == set(expected_icons)
+class PwaAssetsTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.manifest = json.loads((ROOT / "manifest.webmanifest").read_text())
 
-for source, (size, purpose) in expected_icons.items():
-    icon = manifest_icons[source]
-    assert icon["sizes"] == f"{size}x{size}"
-    assert icon["type"] == "image/png"
-    assert icon["purpose"] == purpose
-    data = (root / source.removeprefix("/pwa/")).read_bytes()
-    assert data.startswith(b"\x89PNG\r\n\x1a\n")
-    assert struct.unpack(">II", data[16:24]) == (size, size)
+    def test_manifest_fields(self):
+        expected = {
+            "id": "/",
+            "start_url": "/",
+            "scope": "/",
+            "display": "standalone",
+            "name": "RezeptDB",
+            "short_name": "RezeptDB",
+            "lang": "de",
+            "theme_color": "#014463",
+            "background_color": "#ffffff",
+        }
+        for field, value in expected.items():
+            with self.subTest(field=field):
+                self.assertEqual(self.manifest[field], value)
 
-data = (root / "icons/apple-touch-icon.png").read_bytes()
-assert data.startswith(b"\x89PNG\r\n\x1a\n")
-assert struct.unpack(">II", data[16:24]) == (180, 180)
+    def test_manifest_icons(self):
+        expected_icons = {
+            "/pwa/icons/chef-hat-192.png": (192, "any"),
+            "/pwa/icons/chef-hat-512.png": (512, "any"),
+            "/pwa/icons/chef-hat-maskable-512.png": (512, "maskable"),
+        }
+        manifest_icons = {icon["src"]: icon for icon in self.manifest["icons"]}
+        self.assertEqual(set(manifest_icons), set(expected_icons))
+
+        for source, (size, purpose) in expected_icons.items():
+            with self.subTest(source=source):
+                icon = manifest_icons[source]
+                self.assertEqual(icon["sizes"], f"{size}x{size}")
+                self.assertEqual(icon["type"], "image/png")
+                self.assertEqual(icon["purpose"], purpose)
+                self.assert_png(ROOT / source.removeprefix("/pwa/"), size)
+
+    def test_apple_touch_icon(self):
+        self.assert_png(ROOT / "icons/apple-touch-icon.png", 180)
+
+    def assert_png(self, path, size):
+        data = path.read_bytes()
+        self.assertTrue(data.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(struct.unpack(">II", data[16:24]), (size, size))
+
+
+if __name__ == "__main__":
+    unittest.main()

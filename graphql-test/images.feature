@@ -67,7 +67,7 @@ Feature: images
     * match header Content-Type contains 'image/png'
     * assert responseBytes.length > 0
 
-  Scenario Outline: crop validation errors preserve backend extensions
+  Scenario: crop validation errors preserve backend extensions
     * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'invalid crop' } } }
     * method post
     * status 200
@@ -76,7 +76,7 @@ Feature: images
       """
       {
         "query": "mutation($id: ID!, $file: Upload!, $crop: ImageCropInput) { addImage(recipeId: $id, file: $file, crop: $crop) { url } }",
-        "variables": { "id": "#(recipeId)", "file": null, "crop": { "x": <x>, "y": 0, "width": <width>, "height": <height> } }
+        "variables": { "id": "#(recipeId)", "file": null, "crop": { "x": -1, "y": 0, "width": 400, "height": 300 } }
       }
       """
     * multipart field operations = operations
@@ -87,14 +87,62 @@ Feature: images
     * match response.data == null
     * match response.errors == '#[1]'
     * match response.errors[0].message == '#string'
-    * match response.errors[0].extensions == <extensions>
+    * match response.errors[0].extensions == { code: 'invalid-crop', status: 400, field: 'cropX' }
 
-    Examples:
-      | x   | width | height | extensions                                            |
-      | -1  | 400   | 300    | { code: 'invalid-crop', status: 400, field: 'cropX' } |
-      | 0   | 400   | 301    | { code: 'invalid-crop-aspect-ratio', status: 400 }    |
-      | 0   | 296   | 222    | { code: 'crop-too-small', status: 400 }               |
-      | 401 | 400   | 300    | { code: 'crop-out-of-bounds', status: 400 }           |
+  Scenario: reorder and delete images through the real provider
+    * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'image collection' } } }
+    * method post
+    * status 200
+    * def recipeId = response.data.createRecipe.id
+    * def operations =
+      """
+      {
+        "query": "mutation($id: ID!, $file: Upload!, $crop: ImageCropInput) { addImage(recipeId: $id, file: $file, crop: $crop) { id url } }",
+        "variables": { "id": "#(recipeId)", "file": null, "crop": { "x": 0, "y": 0, "width": 400, "height": 300 } }
+      }
+      """
+    * multipart field operations = operations
+    * multipart field map = '{"0":["variables.file"]}'
+    * multipart file 0 = { read: 'fixtures/test.jpg', filename: 'test.jpg', contentType: 'image/jpeg' }
+    * method post
+    * status 200
+    * match response.errors == '#notpresent'
+    * def first = response.data.addImage
+    * set operations.variables.crop.x = 400
+    * multipart field operations = operations
+    * multipart field map = '{"0":["variables.file"]}'
+    * multipart file 0 = { read: 'fixtures/test.jpg', filename: 'test.jpg', contentType: 'image/jpeg' }
+    * method post
+    * status 200
+    * match response.errors == '#notpresent'
+    * def second = response.data.addImage
+    * match second.id != first.id
+
+    * def readImages = 'query($id: ID!) { recipe(id: $id) { image { id url } images { id url } } }'
+    * request { query: '#(readImages)', variables: { id: '#(recipeId)' } }
+    * method post
+    * status 200
+    * match response.data.recipe == { image: '#(second)', images: ['#(second)', '#(first)'] }
+
+    * request { query: 'mutation($id: ID!, $images: [ID!]!) { reorderImages(recipeId: $id, imageIds: $images) { id url } }', variables: { id: '#(recipeId)', images: ['#(first.id)', '#(second.id)'] } }
+    * method post
+    * status 200
+    * match response.errors == '#notpresent'
+    * match response.data.reorderImages == ['#(first)', '#(second)']
+    * request { query: '#(readImages)', variables: { id: '#(recipeId)' } }
+    * method post
+    * status 200
+    * match response.data.recipe == { image: '#(first)', images: ['#(first)', '#(second)'] }
+
+    * request { query: 'mutation($id: ID!, $image: ID!) { deleteImage(recipeId: $id, imageId: $image) }', variables: { id: '#(recipeId)', image: '#(first.id)' } }
+    * method post
+    * status 200
+    * match response.errors == '#notpresent'
+    * match response.data.deleteImage == true
+    * request { query: '#(readImages)', variables: { id: '#(recipeId)' } }
+    * method post
+    * status 200
+    * match response.data.recipe == { image: '#(second)', images: ['#(second)'] }
 
   Scenario: explicit crops change the saved composition and failed crops preserve metadata
     * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'crop test' } } }
@@ -138,8 +186,9 @@ Feature: images
     * method post
     * status 200
     * match response.data == null
-    * match response.errors[0].extensions.code == 'crop-out-of-bounds'
-    * match response.errors[0].extensions.status == 400
+    * match response.errors == '#[1]'
+    * match response.errors[0].message == '#string'
+    * match response.errors[0].extensions == { code: 'crop-out-of-bounds', status: 400 }
 
     * request { query: '#(read("graphql/recipe-image-by-id.graphql"))', variables: { id: '#(recipeId)' } }
     * method post

@@ -6,6 +6,7 @@ Related reading: [Project checks, tests, and formatting](../CONTRIBUTING.md#proj
 
 ## Contents
 
+- [Backend testing](#backend-testing)
 - [Frontend testing](#frontend-testing)
   - [Three testing buckets](#three-testing-buckets)
   - [Choosing where a test belongs](#choosing-where-a-test-belongs)
@@ -15,6 +16,18 @@ Related reading: [Project checks, tests, and formatting](../CONTRIBUTING.md#proj
   - [Checking and updating mocks](#checking-and-updating-mocks)
   - [Revisiting existing tests](#revisiting-existing-tests)
 - [Script testing](#script-testing)
+
+## Backend testing
+
+| Boundary | Responsibility |
+| --- | --- |
+| **Service-local tests** | Verify internal implementation details, such as helper logic or behavior under an injected database failure. |
+| **REST integration tests** | Verify the service's observable API contract, including validation, errors, persistence and edge cases. |
+| **GraphQL tests** | Verify GraphQL's glue and its own behavior, such as mapping, authorization, error translation and integration between services. |
+
+Put service contract cases at the REST boundary rather than repeating them in service-local tests. For example, test tag-name collisions through the REST API, while testing rollback after an injected database failure locally.
+
+GraphQL should not repeat the full REST contract matrix. Keep tests for its distinct responsibilities, including representative real-provider checks for error codes, nullability and partial responses where those are part of the integration. Keep frontend-specific behavior at the frontend boundary and representative cross-service journeys in end-to-end tests.
 
 ## Frontend testing
 

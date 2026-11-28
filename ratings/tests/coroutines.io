@@ -1,24 +1,28 @@
-worker := Object clone do(
-    sum := method(multiplier,
-        total := 0
-        for(i, 1, 100,
-            total = total + (i * multiplier)
-            yield
+RatingsCoroutineTest := UnitTest clone do(
+    testCoroutineSwitching := method(
+        worker := Object clone do(
+            sum := method(multiplier,
+                total := 0
+                for(i, 1, 100,
+                    total = total + (i * multiplier)
+                    yield
+                )
+                total
+            )
         )
-        total
+
+        first := worker clone @sum(1)
+        second := worker clone @sum(2)
+        firstResult := first asNumber
+        secondResult := second asNumber
+        assertEquals(firstResult, 5050)
+        assertEquals(secondResult, 10100)
     )
 )
 
-first := worker clone @sum(1)
-second := worker clone @sum(2)
-firstResult := first asNumber
-secondResult := second asNumber
-if(firstResult != 5050,
-    writeln("First coroutine returned ", firstResult, ", expected 5050")
+failure := try(failures := RatingsCoroutineTest run)
+if(failure,
+    failure showStack
     System exit(1)
 )
-if(secondResult != 10100,
-    writeln("Second coroutine returned ", secondResult, ", expected 10100")
-    System exit(1)
-)
-writeln("Coroutine switching passed")
+System exit(if(failures isEmpty, 0, 1))

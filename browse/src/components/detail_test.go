@@ -98,6 +98,44 @@ func TestRecipeDetailDistinguishesEmptyAndUnavailableImageCollections(t *testing
 	}
 }
 
+func TestInspirationRendersExtractedMetadataOrOriginalURL(t *testing.T) {
+	canonical := "https://example.test/canonical"
+	description := "An inspiration & description"
+	title := "A <recipe>"
+	favicon := "data:image/png;base64,YQ=="
+	extracted := renderTagComponent(t, inspiration(gql.InspirationsLink{
+		Url: "https://example.test/original",
+		Extracted: &gql.InspirationsLinkExtractedExtractedLink{
+			Canonical: &canonical, Description: &description, Title: &title, InlinedFavicon: &favicon,
+		},
+	}))
+	for _, want := range []string{
+		`href="https://example.test/canonical"`,
+		`title="An inspiration &amp; description"`,
+		`src="data:image/png;base64,YQ=="`,
+		`A &lt;recipe&gt;`,
+	} {
+		if !strings.Contains(extracted, want) {
+			t.Errorf("missing extracted metadata %q in %s", want, extracted)
+		}
+	}
+	if strings.Contains(extracted, "https://example.test/original") {
+		t.Errorf("canonical link must replace the original URL: %s", extracted)
+	}
+
+	for _, metadata := range []*gql.InspirationsLinkExtractedExtractedLink{nil, {Title: &title}} {
+		fallback := renderTagComponent(t, inspiration(gql.InspirationsLink{
+			Url: "https://example.test/original", Extracted: metadata,
+		}))
+		if !strings.Contains(fallback, `<a href="https://example.test/original">https://example.test/original</a>`) {
+			t.Fatalf("missing original URL fallback: %s", fallback)
+		}
+	}
+	if empty := renderTagComponent(t, inspiration(gql.InspirationsLink{})); empty != "" {
+		t.Fatalf("an inspiration without a URL should not render a link: %s", empty)
+	}
+}
+
 func TestRecipeRatingsKeepTransitionOutsideLiveWidget(t *testing.T) {
 	ratingName := regexp.MustCompile(`view-transition-name:\s*(recipe-rating-[0-9a-f]+)`)
 	seen := map[string]bool{}

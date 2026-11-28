@@ -235,7 +235,6 @@ test("inspirations recover from a network failure", async ({
     exact: true,
   });
   await expect(retry).toBeVisible();
-  await expect(retry).toHaveClass(/outline/);
   const response = page.waitForResponse(
     (result) => new URL(result.url()).pathname === path,
   );

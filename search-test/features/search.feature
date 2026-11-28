@@ -164,8 +164,9 @@ Feature: Search recipes on the deployed stack
     Then the response is HTTP 400 with content type "application/problem+json"
     And the response contains:
       """
-      {"type": "about:blank", "code": "invalid-search-options", "status": 400}
+      {"type": "about:blank", "title": "Bad Request", "code": "invalid-search-options", "status": 400}
       """
+    And the response has a nonempty detail
 
     Examples:
       | options                              |

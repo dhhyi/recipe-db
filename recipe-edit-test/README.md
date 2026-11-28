@@ -32,7 +32,6 @@ For tests that leave the editor, supply a test-specific `returnDocument` to inte
 
 ```sh
 mise run --raw in-devcontainer recipe-edit-test check
-mise run --raw in-devcontainer recipe-edit-test test
 ```
 
-`check` validates mock operations, variables and selected response data against the distributed schema and lists browser tests. `test` exercises the validator without the stack. Playwright runs isolated cases in parallel; the shared integration runner still executes projects sequentially.
+`check` validates mock operations, variables and selected response data against the distributed schema and lists browser tests. Playwright runs isolated cases in parallel; the shared integration runner still executes projects sequentially.

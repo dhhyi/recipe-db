@@ -20,7 +20,7 @@ devcontainer:
   initialize: |
     opam init --disable-sandboxing --bare --yes
     opam switch list --short | grep -Fxq 5.3.0 || opam switch create 5.3.0 --jobs=2 --yes
-    opam install --switch=5.3.0 --deps-only --yes ./tags.opam
+    opam install --switch=5.3.0 --deps-only --with-test --yes ./tags.opam
   ports:
     - 8900
   environment:
@@ -68,7 +68,7 @@ format:
     files: ["**/*.ml", "**/*.mli", "**/dune"]
 check: |
   opam exec --switch=5.3.0 -- dune build --profile release
-test: opam exec --switch=5.3.0 -- dune runtest
+test: opam install --switch=5.3.0 --deps-only --with-test --yes ./tags.opam && opam exec --switch=5.3.0 -- dune runtest
 prettier:
   ignore:
     - "*.ml"

@@ -14,6 +14,10 @@ Feature: Basic test for setting errornous ratings
     * path 'ratings/1'
     * method put
     * status 400
+    * match header Content-Type == 'application/problem+json'
+    * match response.type == "about:blank"
+    * match response.title == "Bad Request"
+    * match response.status == 400
     * match response.detail == "Missing rating"
     * match response.code == "missing-field"
     * match response.field == "rating"
