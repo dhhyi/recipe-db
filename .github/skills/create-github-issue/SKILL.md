@@ -18,8 +18,6 @@ Before drafting:
 
 Present the proposed title, complete body, and applicable metadata in chat. Then use the `ask_user` tool to ask whether the user approves creating the issue with that proposal. Use a yes/no question. Do not create the issue unless the user answers yes. A request to draft an issue is never authorization to file it.
 
-Do not add, remove, or change native issue relationships (parent/sub-issue, blocked-by, or relates-to) without explicit authorization covering those specific changes.
-
 ## Create and verify
 
 After the user confirms the proposal:
