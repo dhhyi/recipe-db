@@ -442,6 +442,17 @@ Closes #42
   [ "$status" -eq 1 ]
 }
 
+@test "CI validates every manifest script test target before running all suites" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  script=$(yq '.jobs.quality-checks.steps[] | select(.name == "Bazel script test suites") | .run' "$workflow")
+  [[ "$script" == *"tests(//:test_scripts)"* ]]
+  [[ "$script" == *"sed '/^$/d'"* ]]
+  [[ "$script" == *"test_count"* ]]
+  [[ "$script" == *"manifest_count"* ]]
+  [[ "$script" == *"--jobs=4"* ]]
+  [[ "$script" == *"//:test_scripts"* ]]
+}
+
 @test "CI retention is scoped to quality-checks and forwarded by both Bazel builds" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   [ "$(yq '.jobs.quality-checks.env.DEVCONTAINER_KEEP_RUNNING' "$workflow")" = true ]

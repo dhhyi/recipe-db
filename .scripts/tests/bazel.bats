@@ -43,6 +43,18 @@ EOF
   chmod +x bin/mise
 }
 
+@test "Bazel tests pass an explicit stable PATH and opt-in environments" {
+  run env TEST_AUTH_INGRESS=true TEST_AUTH_LIFECYCLE=true PATH="$FIXTURE_ROOT/bin:/usr/bin:/bin" \
+    /bin/bash .scripts/bazel.sh test --test_output=errors //:test_scripts_suite_auth-lifecycle
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--test_env=PATH"* ]]
+  [[ "$output" == *"--action_env=PATH"* ]]
+  [[ "$output" == *"TEST_AUTH_INGRESS=true"* ]]
+  [[ "$output" == *"TEST_AUTH_LIFECYCLE=true"* ]]
+  [[ "$output" == *"--test_output=errors"* ]]
+  [[ "$output" == *"//:test_scripts_suite_auth-lifecycle"* ]]
+}
+
 @test "Bazel uses the same canonical PATH in direct and hook environments" {
   run env PATH="$FIXTURE_ROOT/bin:/usr/bin:/bin" /bin/bash .scripts/bazel.sh build --action_env=PATH //:shellcheck
   [ "$status" -eq 0 ]
