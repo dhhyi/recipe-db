@@ -59,8 +59,6 @@ Keep each instruction page to roughly one screen:
 - Keep verbose diagnostics in private logs as appropriate. Do not ask the operator to paste whole production logs or backups; inspect local files yourself when available.
 - Do not wait indefinitely for unrelated work. If a gate is pending, report what is pending and whether any safe preparation can proceed; do not poll silently for long periods or relax the gate.
 
-For example, after a download succeeds, locate and verify its exact output paths before preparing the next batch. Do not ask the operator to replace example paths or make them repeat information already available locally.
-
 ## Handle failures and aborts
 
 - Stop the release sequence on failure. Say which phase failed, what actually ran, whether production was touched and what remains uncertain. Do not infer safety from a generic error message.
