@@ -61,7 +61,7 @@ Run `mise run sync-ignore-files` to synchronize generated ignore files. Declare 
 
 ## Generated source synchronization
 
-`mise run merge-graphql-schemas` tracks the canonical cached SDL and project metadata, deriving consumer output paths from `graphqlSchema`. Distribution skips unchanged copies and repairs edited or missing copies. The schema-export prerequisite still checks whether the canonical SDL needs rebuilding before distribution can skip.
+Run `mise run merge-graphql-schemas` to distribute the GraphQL schema to projects declaring `graphqlSchema`.
 
 Run `mise run sync-tailwind` to synchronize shared Tailwind sources. See the [Tailwind guidance](design/README.md#tailwind-css) for declaring sources and exclusions.
 
