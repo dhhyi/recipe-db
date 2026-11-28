@@ -22,5 +22,3 @@ description: Implement a GitHub issue or story, validate it, and obtain independ
 - Let reviewers inspect the actual files and derive their own findings. They may review in parallel; keep the snapshot stable. If any required review is unavailable or blocked, report the incomplete review rather than substituting self-review.
 - Address valid findings, rerun affected checks, and request follow-up from affected reviewers. Explain rejected findings and report any unresolved or unverified work.
 - Report the linked issue with its title, changes, validation, review outcomes, and blockers. Keep PR-backed issues open until merge; do not change issue metadata or create follow-up issues without authorization.
-
-Example: "Implement this issue and leave changes uncommitted."
