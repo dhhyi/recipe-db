@@ -57,15 +57,13 @@ Run `mise run test-scripts .scripts/tests/mise-tasks.bats` to verify project cov
 
 ## Ignore-file synchronization
 
-`mise run sync-ignore-files` skips unchanged inputs. It tracks root ignore rules, project metadata, project ignore rules, and Dockerfiles; missing generated ignore files trigger regeneration. Creating an obsolete project `.prettierignore` triggers its removal.
-
-Project-local Docker ignores exclude the Dockerfile by default; Design applies the same default to its repository-root context. Declare additional patterns in the second document of a project's `.project.yaml` under `docker.ignore`. The generator adds them to that project's `.dockerignore` for project-local build contexts. Design's repository-root context also applies its project rules; other repository-root contexts use the root `.dockerignore` instead. Use Docker ignore syntax and preserve files required by the build.
+Run `mise run sync-ignore-files` to synchronize generated ignore files. Declare additional Docker ignore patterns under `docker.ignore` in the second document of a project's `.project.yaml`. Use Docker ignore syntax and preserve files required by the build. Project-local contexts use the generated project `.dockerignore`; Design's root context also applies its project rules, while other root contexts use the root `.dockerignore`.
 
 ## Generated source synchronization
 
 `mise run merge-graphql-schemas` tracks the canonical cached SDL and project metadata, deriving consumer output paths from `graphqlSchema`. Distribution skips unchanged copies and repairs edited or missing copies. The schema-export prerequisite still checks whether the canonical SDL needs rebuilding before distribution can skip.
 
-`mise run sync-tailwind` tracks project metadata, ignore rules and the design Dockerfile, generating the shared stylesheet, Docker COPY block and Dockerfile-specific ignore file only when needed. Declare project-relative files or directories under `tailwind.sources`; optionally exclude project-relative paths or globs using `*`, `**` and `?` under `tailwind.ignore`. Exclusions apply both to Tailwind scanning and the Design Docker context. The ignore file includes Design and the declared Tailwind sources, subject to root rules, common project rules and Design's `docker.ignore` rules. Design's `.gitignore` is not used because it excludes the generated Tailwind stylesheet required by the image build. Its `check-tailwind-sources` prerequisite always validates declared paths with one metadata read. Editing source contents does not regenerate the path lists; removing a declared file or directory still fails validation, even on a generation cache hit.
+Run `mise run sync-tailwind` to synchronize shared Tailwind sources. See the [Tailwind guidance](design/README.md#tailwind-css) for declaring sources and exclusions.
 
 ## Bazel rule freshness
 
