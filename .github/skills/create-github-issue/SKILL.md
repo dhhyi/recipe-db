@@ -11,7 +11,7 @@ This skill covers new issues; to revise or refine an existing issue, use the `re
 
 Before drafting:
 
-1. Read and follow the repository's [issue planning and refinement process](../../../CONTRIBUTING.md#issue-planning-and-refinement).
+1. Read and follow the repository's [issue planning and refinement process](../../../CONTRIBUTING.md#issue-planning-and-refinement) and [relationship rules](../../../CONTRIBUTING.md#hierarchy-dependencies-and-completion).
 2. Use repository context and the user's description to write a clear, scoped issue. Do not invent reproduction details or settled requirements.
 
 ## Confirm before filing
