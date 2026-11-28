@@ -62,25 +62,27 @@ class RecipesTest {
   }
 
   @Test
-  void collectionCreateAndTestingResetAcceptTrailingSlash() {
-    given().header("Connection", "close")
-        .contentType(ContentType.JSON)
-        .body("{\"name\":\"Rice Pudding\"}")
-        .post("/recipes/")
-        .then()
-        .statusCode(201)
-        .body("name", equalTo("Rice Pudding"));
+  void collectionCreateAndTestingResetSupportBothRoutes() {
+    for (String resetPath : new String[]{"/recipes", "/recipes/"}) {
+      given().header("Connection", "close")
+          .contentType(ContentType.JSON)
+          .body("{\"name\":\"Rice Pudding\"}")
+          .post("/recipes/")
+          .then()
+          .statusCode(201)
+          .body("name", equalTo("Rice Pudding"));
 
-    given().header("Connection", "close")
-        .delete("/recipes/")
-        .then()
-        .statusCode(204);
+      given().header("Connection", "close")
+          .delete(resetPath)
+          .then()
+          .statusCode(204);
 
-    given().header("Connection", "close")
-        .get("/recipes")
-        .then()
-        .statusCode(200)
-        .body("", hasSize(0));
+      given().header("Connection", "close")
+          .get("/recipes")
+          .then()
+          .statusCode(200)
+          .body("", hasSize(0));
+    }
   }
 
   private static String createRecipe(String body) {
@@ -553,6 +555,14 @@ class RecipesTest {
         .body("createdAt", equalTo(initial.path("createdAt")))
         .body("updatedAt", equalTo(changed.path("updatedAt")))
         .body("steps", hasSize(2));
+
+    var listed = given().header("Connection", "close")
+        .get("/recipes")
+        .then()
+        .statusCode(200)
+        .body("", hasSize(1))
+        .extract().response();
+    assertEquals(changed.jsonPath().getMap("$"), listed.jsonPath().getMap("[0]"));
   }
 
   @Test

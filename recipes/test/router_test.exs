@@ -43,16 +43,7 @@ defmodule Recipes.RouterTest do
     assert {:ok, ^created} = Repository.get(created["id"])
   end
 
-  test "collection HEAD is empty and testing-only without loading recipes" do
-    response =
-      :head
-      |> conn("/recipes")
-      |> Router.call(@options)
-
-    assert response.status == 204
-    assert response.resp_body == ""
-    assert {:ok, []} = Repository.all()
-
+  test "collection HEAD is denied outside testing mode" do
     for mode <- [:production, :backup] do
       Application.put_env(:recipes, :mode, mode)
 

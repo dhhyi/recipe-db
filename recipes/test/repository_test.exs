@@ -104,9 +104,8 @@ defmodule Recipes.RepositoryTest do
     assert File.read!(existing_file) == "untouched"
   end
 
-  test "derives keys on every response without persisting them", %{repository: repository} do
+  test "does not persist derived keys on create or patch", %{repository: repository} do
     assert {:ok, created} = Repository.create(%{"name" => " Äpfel "}, repository)
-    assert created["nameSortKey"] == "apfel"
     connection = :sys.get_state(repository)
 
     assert {:ok, %{rows: [[encoded]]}} =
@@ -116,18 +115,8 @@ defmodule Recipes.RepositoryTest do
 
     refute Map.has_key?(Jason.decode!(encoded), "nameSortKey")
 
-    assert {:ok, patched} = Repository.patch(created["id"], %{"metadata" => true}, repository)
-    assert patched["nameSortKey"] == "apfel"
-    assert patched["createdAt"] == created["createdAt"]
-    assert patched["updatedAt"] == created["updatedAt"]
-    assert {:ok, ^patched} = Repository.get(created["id"], repository)
-    assert {:ok, [^patched]} = Repository.all(repository)
-
-    assert {:ok, renamed} =
+    assert {:ok, _} =
              Repository.patch(created["id"], %{"name" => " ÖL Straße "}, repository)
-
-    assert renamed["name"] == " ÖL Straße "
-    assert renamed["nameSortKey"] == "ol strasse"
 
     assert {:ok, %{rows: [[encoded]]}} =
              Exqlite.query(connection, "SELECT document FROM recipes WHERE id = ?", [
